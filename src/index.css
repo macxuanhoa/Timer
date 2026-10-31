@@ -150,12 +150,15 @@
   padding: 13px 12px;
 }
 
+/* The stage is the one block that grows with the screen, but only up to a fifth
+   of the height: the clock keeps breathing room, and the rest of the spare
+   height is shared by the whole column instead of pooling in one band. */
 .hero-block {
-  min-height: 176px;
+  max-height: clamp(120px, 20vh, 180px);
 }
 
-/* A halo in the clock's own colour, so the tall middle of the phone reads as a
-   stage around the digits instead of leftover space. */
+/* A halo in the clock's own colour, so the digits sit on a lit stage rather
+   than on flat background. */
 .hero-aura {
   position: absolute;
   inset: 0;
@@ -175,10 +178,6 @@
 @media (max-height: 700px) {
   .tm-card {
     padding: 10px 12px;
-  }
-
-  .hero-block {
-    min-height: 96px;
   }
 
   .team-digits {

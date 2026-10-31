@@ -241,7 +241,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
 
       <ReturnHome onLogout={onLogout} />
 
-      <main className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-2">
+      <main className="flex min-h-0 flex-1 flex-col justify-evenly gap-2.5 overflow-y-auto px-3 pb-2">
         {/* --------------------------------------------------------- team card */}
         <section className="card tm-card" data-testid="active-team">
           <div className="flex items-center justify-between gap-2">
@@ -316,8 +316,8 @@ export function Dashboard({ store, account, onLogout }: Props) {
         </section>
 
         {/* --------------------------------------------------------------- hero */}
-        {/* The clock is the one block that grows with the screen: the halo keeps the
-            middle of a tall phone from reading as leftover space. */}
+        {/* The clock grows into the spare height, but only up to its cap: the rest
+            is shared by every gap, so no band turns into a dead hole around it. */}
         <section className="hero-block relative isolate flex flex-1 flex-col items-center justify-center py-2" data-testid="hero">
           <span
             className="hero-aura -z-10"
@@ -379,18 +379,20 @@ export function Dashboard({ store, account, onLogout }: Props) {
           </p>
         )}
 
-        <PrimaryZone
-          store={store}
-          account={account}
-          primary={primary}
-          pending={state.pending}
-          verifying={state.verifying}
-          draftName={teamName}
-        />
+        <div className="flex flex-col gap-2.5">
+          <PrimaryZone
+            store={store}
+            account={account}
+            primary={primary}
+            pending={state.pending}
+            verifying={state.verifying}
+            draftName={teamName}
+          />
 
-        {round && round.game_started_at !== null && round.game_stopped_at === null && (account.role === 'GATE' || account.role === 'SUPERVISOR') && (
-          <ClockControls store={store} round={round} pending={state.pending} />
-        )}
+          {round && round.game_started_at !== null && round.game_stopped_at === null && (account.role === 'GATE' || account.role === 'SUPERVISOR') && (
+            <ClockControls store={store} round={round} pending={state.pending} />
+          )}
+        </div>
       </main>
 
       {/* -------------------------------------------------------------- footer */}
@@ -454,9 +456,9 @@ function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
     catch { setError(true); }
     finally { setBusy(false); }
   };
-  return <div className="px-3 pb-2 text-center">
+  return <div className="px-3 pb-1.5 text-center">
     <button type="button" onClick={() => void leave()} disabled={busy}
-      className="min-h-10 w-full rounded-[10px] border border-hair bg-panel px-3 py-2 text-[11px] font-semibold text-snow disabled:opacity-50"
+      className="min-h-9 w-full rounded-[9px] border border-hair bg-panel px-3 py-1.5 text-[10.5px] font-semibold tracking-[0.02em] text-snow/90 disabled:opacity-50"
       data-testid="return-home">{busy ? 'ĐANG NHẢ VỊ TRÍ…' : 'VỀ HOME SCREAM ROOM'}</button>
     {error ? <p role="alert" className="mt-1 text-[11px] text-ember" data-testid="release-error">
       Chưa nhả được vị trí. Kiểm tra kết nối và bấm lại.

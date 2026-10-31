@@ -421,6 +421,13 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await expect(page.getByTestId('passcode')).toHaveCount(0);
     await expect(page.getByTestId('role-LOBBY')).toHaveCount(0);
 
+    // The gate paints the five-seat board before any link is opened.
+    await expect(page.getByTestId('station-board')).toBeVisible();
+    await expect(page.getByTestId('station-board').locator('li')).toHaveCount(5);
+    await expect(page.getByTestId('station-count')).toHaveText('0/5');
+    await expect(page.getByTestId('station-GATE')).toHaveAttribute('data-occupied', 'false');
+    await expect(page.getByTestId('station-lock')).toHaveCount(0);
+
     // The self-hosted build still exposes its five stations to the suite.
     await expect(page.getByTestId('dev-station-LOBBY')).toBeVisible();
     await page.getByTestId('dev-station-SUPERVISOR').click();

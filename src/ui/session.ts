@@ -165,6 +165,13 @@ export async function enterStation(): Promise<StoredSession | null> {
   clearInviteFromUrl();
   try {
     return await redeemInvite(token);
+  } catch (err) {
+    // A phone already on duty that re-opens a spent link — or another station's
+    // link — stays on its own station: the server-side binding is the authority,
+    // never the URL.
+    const current = await refreshSession().catch(() => null);
+    if (current) return current;
+    throw err;
   } finally {
     if (pendingToken === token && loadSession()) pendingToken = null;
   }
@@ -176,8 +183,9 @@ export async function gatewayFor(session: StoredSession): Promise<Gateway> {
 
 /**
  * "Đổi máy": the station is released server-side before the anonymous identity
- * is dropped, so the replacement phone can open the same link. If the release
- * fails (offline), the error propagates and the station stays live.
+ * is dropped, so the role becomes free. Links are one-shot, so the replacement
+ * phone is issued a new link by the organizer. If the release fails (offline)
+ * the error propagates and this phone keeps its station instead of losing it.
  */
 export async function logout(): Promise<void> {
   if (USING_SUPABASE) {

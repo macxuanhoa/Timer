@@ -266,6 +266,28 @@ export interface Snapshot {
   log: LogEntry[];
 }
 
+/* ------------------------------------------------------------- station board */
+
+/** One of the five seats, as the invitation gate sees it. */
+export interface StationSlot {
+  role: Role;
+  /** A live binding holds this seat; the gate paints it red and closes it. */
+  occupied: boolean;
+}
+
+/**
+ * Public five-seat board. It carries station roles only — never an operator
+ * name, a device id or an invitation token — so an unbound phone may read it
+ * before it opens a link.
+ */
+export interface StationBoard {
+  capacity: number;
+  occupied: number;
+  /** All five seats are on duty: invitation links refuse new phones. */
+  locked: boolean;
+  stations: StationSlot[];
+}
+
 /* ------------------------------------------------------------------ commands */
 
 export interface CommandMeta {

@@ -4,8 +4,14 @@
  *
  *   npm run invite:mint -- --base https://timer-smoky-seven.vercel.app
  *   npm run invite:mint -- --role GATE --reassign --base https://…
+ *   npm run invite:mint -- --release GATE
  *   npm run invite:mint -- --list
  *   npm run invite:mint -- --revoke GATE
+ *
+ * Redemption never evicts a phone that is on duty (0006), so freeing a station
+ * is an organiser-side action: `--release` drops the live binding, and
+ * `--role X --reassign` releases then mints, which is the one supported way to
+ * move a station onto a replacement phone.
  *
  * A token is 256 bits from the OS entropy pool. Only its SHA-256 is stored, so
  * the database can verify a link but never reproduce one. The links are written
@@ -22,10 +28,12 @@ import path from 'node:path';
 import { connect } from './lib/pooler.mjs';
 
 const ROLES = ['LOBBY', 'GATE', 'CORRIDOR', 'ROOM305', 'SUPERVISOR'];
+/** How the station is addressed on the floor; stored as the invitation label. */
+const STATION_LABEL = { LOBBY: 'LOBBY', GATE: 'NPC 1', CORRIDOR: 'NPC 2', ROOM305: 'NPC 3', SUPERVISOR: 'SUPERVISOR' };
 const DEFAULT_BASE = process.env.SCREAM_BASE_URL ?? 'https://timer-smoky-seven.vercel.app';
 
 function parseArgs(argv) {
-  const out = { roles: [], labels: new Map(), revoke: [], base: DEFAULT_BASE, expires: 30, mode: 'claim' };
+  const out = { roles: [], labels: new Map(), revoke: [], release: [], base: DEFAULT_BASE, expires: 30, mode: 'claim' };
   for (let i = 0; i < argv.length; i++) {
     const raw = argv[i];
     if (!raw.startsWith('--')) continue;
@@ -42,6 +50,7 @@ function parseArgs(argv) {
       case 'stdout': out.stdout = true; break;
       case 'list': out.list = true; break;
       case 'revoke': out.revoke.push(value().toUpperCase()); break;
+      case 'release': out.release.push(value().toUpperCase()); break;
       case 'label': {
         const [role, ...rest] = String(value()).split('=');
         out.labels.set(role.toUpperCase(), rest.join('='));
@@ -55,11 +64,36 @@ function parseArgs(argv) {
 }
 
 const STATE = (row) => {
-  if (row.revoked_at) return 'revoked';
+  if (row.revoked_at) return row.claimed_at ? 'used' : 'revoked';
   if (row.expires_at && new Date(row.expires_at) <= new Date()) return 'expired';
-  if (row.claimed_at) return 'bound';
-  return 'unused';
+  return 'open';
 };
+
+/** Which station each live binding holds, so re-issuing can be advised correctly. */
+async function liveBindings(client) {
+  const { rows } = await client.query(
+    'select role, display_name, device_id, bound_at from sc.operators where revoked_at is null order by role');
+  return rows;
+}
+
+/**
+ * Frees one station by retiring its live binding, exactly as ĐỔI MÁY does from
+ * the phone itself. This is the only path that releases a station the phone
+ * cannot or will not release: no invitation link can do it.
+ */
+async function releaseBinding(client, role) {
+  const { rows } = await client.query(
+    `update sc.operators set revoked_at = now()
+      where role = $1 and revoked_at is null
+      returning display_name, device_id, bound_at`,
+    [role],
+  );
+  for (const row of rows) {
+    console.log(`released ${role} from ${row.display_name} (device ${String(row.device_id).slice(0, 8)}…, since ${row.bound_at.toISOString()})`);
+  }
+  if (rows.length === 0) console.log(`${role}: no live binding to release`);
+  return rows.length;
+}
 
 async function listInvitations(client) {
   const { rows } = await client.query(`
@@ -77,7 +111,9 @@ async function listInvitations(client) {
     const expires = row.expires_at ? new Date(row.expires_at).toISOString().slice(0, 16).replace('T', ' ') : 'never';
     console.log(`${row.role.padEnd(10)}  ${row.mode.padEnd(8)}  ${STATE(row).padEnd(8)}  ${expires}`);
   }
-  console.log('\nLinks are not stored: only their SHA-256 is, so a lost link is re-minted, never recovered.');
+  const bindings = await liveBindings(client);
+  console.log(`\nlive bindings: ${bindings.length === 0 ? '(none)' : bindings.map((b) => `${b.role}=${b.display_name}`).join(', ')}`);
+  console.log('\nLinks are not stored: only their SHA-256 is, so a lost or used link is re-minted, never recovered.');
 }
 
 async function main() {
@@ -107,12 +143,30 @@ async function main() {
       return;
     }
 
+    if (args.release.length > 0) {
+      for (const role of args.release) {
+        if (!ROLES.includes(role)) throw new Error(`unknown role ${role}`);
+        await releaseBinding(client, role);
+      }
+      // `--release` on its own is a complete action; it only mints when the
+      // caller also named the stations to issue links for.
+      if (args.roles.length === 0) return;
+    }
+
     const roles = args.roles.length > 0 ? args.roles : ROLES;
     for (const role of roles) {
       if (!ROLES.includes(role)) throw new Error(`unknown role ${role}`);
     }
     if (args.mode === 'reassign' && roles.length !== 1) {
       throw new Error('--reassign mints one replacement link at a time: add --role GATE');
+    }
+    if (args.mode === 'reassign') {
+      // The whole point of a replacement: the old phone is off the station
+      // before the new link exists. A link can never do this itself.
+      await releaseBinding(client, roles[0]);
+      // The freed seat takes an ordinary claim link; 'reassign' is no longer a
+      // bypass, so the row records what actually happened.
+      args.mode = 'claim';
     }
 
     if (!args.keep) {
@@ -124,9 +178,19 @@ async function main() {
     }
 
     const links = [];
+    const bindings = await liveBindings(client);
+    if (args.mode === 'claim') {
+      for (const role of roles.filter((r) => bindings.some((b) => b.role === r))) {
+        const held = bindings.find((b) => b.role === role);
+        console.warn(`\n! ${role} is already live on another phone (${held.display_name}).`);
+        console.warn('  No link can evict it. Either have that phone tap ĐỔI MÁY,');
+        console.warn(`  or release and re-issue:  --role ${role} --reassign`);
+      }
+    }
+
     for (const role of roles) {
       const token = randomBytes(32).toString('base64url');
-      const label = args.labels.get(role) ?? '';
+      const label = args.labels.get(role) ?? STATION_LABEL[role];
       await client.query(
         `insert into sc.invitations (role, mode, token_hash, label, expires_at)
          values ($1, $2, extensions.digest($3, 'sha256'), $4,
@@ -145,8 +209,10 @@ async function main() {
       `${links.length} invitation link(s), minted ${new Date().toISOString()}`,
       `mode: ${args.mode} · expires in ${args.expires} day(s)`,
       '',
-      'Each link binds ONE phone to ONE station. Send it to that phone only, and',
-      'open it there: the app signs in silently and lands on the station dashboard.',
+      'Each link binds ONE phone to ONE station and is spent the moment it is',
+      'opened — it cannot be handed on, replayed or reused after a release.',
+      'Send it to that phone only, through a channel you control. Re-issue a new',
+      'link for a swapped phone or a lost session.',
       'Do not commit this file, and delete it once the five phones are set up.',
       '',
       ...links.flatMap((link) => [link.role, link.url, '']),

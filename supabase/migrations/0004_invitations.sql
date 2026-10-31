@@ -5,8 +5,10 @@
 -- phone in anonymously (Supabase Anonymous Sign-ins) and exchanges the token
 -- for one row in sc.operators — the same row every RPC already authorises on.
 --
--- One role is bound to one device at a time. A replacement phone uses a
--- 'reassign' link, or the old phone releases itself from the dashboard.
+-- One role is bound to one device at a time, and every link is one-shot: a
+-- token is spent the moment it binds. 0006 finalises the rules — no link can
+-- ever evict a phone that is on duty, so a replaced phone is freed by its own
+-- ĐỔI MÁY or by the organiser (mint-invites --release / --reassign).
 
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;
@@ -135,12 +137,13 @@ begin
    where token_hash = extensions.digest(p_token, 'sha256')
    for update;
 
-  if v_inv.id is null or v_inv.revoked_at is not null
-     or (v_inv.expires_at is not null and v_inv.expires_at <= now()) then
+  if v_inv.id is null then
     return jsonb_build_object('ok', false, 'code', 'INVITATION_INVALID',
-                              'message', 'LIÊN KẾT ĐÃ HẾT HIỆU LỰC');
+                              'message', 'LIÊN KẾT KHÔNG HỢP LỆ');
   end if;
 
+  -- A phone that is already on duty keeps its station whatever this link says:
+  -- reopening an old (spent) link must not error, and must never switch roles.
   select * into v_bound from sc.operators where user_id = v_uid and revoked_at is null;
   if v_bound.user_id is not null then
     if v_bound.role <> v_inv.role then
@@ -148,12 +151,17 @@ begin
       return jsonb_build_object('ok', false, 'code', 'ALREADY_BOUND_OTHER_ROLE',
                                 'message', 'MÁY NÀY ĐANG TRỰC ' || v_bound.role);
     end if;
-    update sc.invitations
-       set claimed_by = coalesce(claimed_by, v_uid), claimed_at = coalesce(claimed_at, now())
-     where id = v_inv.id;
     v_event := sc._ensure_event();
     return jsonb_build_object('ok', true, 'code', 'ALREADY_BOUND', 'role', v_bound.role,
                               'display_name', v_bound.display_name, 'event_id', v_event);
+  end if;
+
+  -- A spent link is indistinguishable from a revoked one to a new device: this
+  -- is what makes the token single-use and re-issuing the only way forward.
+  if v_inv.revoked_at is not null
+     or (v_inv.expires_at is not null and v_inv.expires_at <= now()) then
+    return jsonb_build_object('ok', false, 'code', 'INVITATION_INVALID',
+                              'message', 'LIÊN KẾT ĐÃ DÙNG HOẶC HẾT HIỆU LỰC');
   end if;
 
   select * into v_holder from sc.operators
@@ -185,11 +193,9 @@ begin
      set claimed_by = v_uid, claimed_at = now()
    where id = v_inv.id;
 
-  -- A replacement link is one-shot: it must not be able to bounce the role
-  -- between two phones after the hand-over has happened.
-  if v_inv.mode = 'reassign' then
-    update sc.invitations set revoked_at = now() where id = v_inv.id;
-  end if;
+  -- Every link is one-shot, in both modes: once it has bound a device it is
+  -- revoked, so it cannot be handed on, replayed or re-bound by a stranger.
+  update sc.invitations set revoked_at = now() where id = v_inv.id;
 
   v_event := sc._ensure_event();
 

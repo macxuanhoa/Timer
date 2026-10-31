@@ -10,6 +10,7 @@
     powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1
     powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1 --base https://your-app.vercel.app
     powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1 --role GATE --reassign
+    powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1 --release GATE
     powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1 --list
     powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1 --revoke GATE
 #>

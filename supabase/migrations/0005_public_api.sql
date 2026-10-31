@@ -2,9 +2,10 @@
 --
 -- PostgREST resolves unqualified calls in an exposed schema. Rather than adding
 -- `sc` to the exposed schema list (which would also publish every table), the
--- eight callable entry points are wrapped in `public`. Each wrapper is SECURITY
--- DEFINER and delegates straight to the sc implementation, which does its own
--- role check — so the wrappers add no authority of their own.
+-- nine callable entry points are wrapped in `public` (eight here, plus
+-- `station_board` in 0006). Each wrapper is SECURITY DEFINER and delegates
+-- straight to the sc implementation, which does its own role check — so the
+-- wrappers add no authority of their own.
 --
 -- `sc` therefore stays unexposed: no table, no view and no internal helper is
 -- reachable from a browser, only these functions.

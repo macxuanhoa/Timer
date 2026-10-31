@@ -69,7 +69,7 @@ function CtaIcon({ action }: { action: ActionType }) {
 interface Props {
   store: LiveStore;
   account: StoredSession['account'];
-  onLogout(): void;
+  onLogout(): Promise<void>;
 }
 
 export function Dashboard({ store, account, onLogout }: Props) {
@@ -128,6 +128,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
         <div className="text-center">
           <p className="text-lg font-extrabold tracking-[0.18em] text-blood">SCREAM CONTROL</p>
           <p className="mt-3 text-sm">{state.status === 'OFFLINE' ? 'ĐANG THỬ LẠI KẾT NỐI…' : 'ĐANG ĐỒNG BỘ TRẠNG THÁI…'}</p>
+          <ReturnHome onLogout={onLogout} />
         </div>
       </div>
     );
@@ -170,14 +171,15 @@ export function Dashboard({ store, account, onLogout }: Props) {
     <div
       className="flex h-[100dvh] flex-col bg-ink"
       data-testid="dashboard"
+      data-revision={snap.revision}
       data-phase={phase}
       onPointerDown={() => alarms.unlock()}
     >
       {/* ------------------------------------------------------------ header */}
-      <header className="safe-top flex items-start justify-between gap-2 px-3 pt-2 pb-2">
+      <header className="safe-top flex items-start justify-between gap-2 px-3 pt-3 pb-2.5">
         <div className="min-w-0">
           <p className="text-[15px] font-extrabold leading-none tracking-[0.01em] text-blood">SCREAM CONTROL</p>
-          <p className="mt-1 flex items-center gap-1 text-[8.5px] font-semibold tracking-[0.1em] text-mute">
+          <p className="mt-1.5 flex items-center gap-1.5 text-[8.5px] font-semibold tracking-[0.1em] text-mute">
             <span className="text-snow/55">EVENT 305</span>
             <span className="text-hair">•</span>
             <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-blood' : 'bg-ember breathe'}`} aria-hidden />
@@ -210,7 +212,9 @@ export function Dashboard({ store, account, onLogout }: Props) {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-2">
+      <ReturnHome onLogout={onLogout} />
+
+      <main className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-2">
         {/* ------------------------------------------------------- event card */}
         <section className="event-card ev-card" data-testid="event-bar">
           <div className="flex items-center justify-between gap-2">
@@ -380,7 +384,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
           setBigAuto(false);
           setBigOpen(true);
         }}
-        onLogout={onLogout}
       />
       {journeyOpen && <JourneyBoard journey={journey} onClose={() => setJourneyOpen(false)} />}
       {bigOpen && (
@@ -396,6 +399,26 @@ export function Dashboard({ store, account, onLogout }: Props) {
       )}
     </div>
   );
+}
+
+function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const leave = async () => {
+    if (busy) return;
+    setBusy(true); setError(false);
+    try { await onLogout(); }
+    catch { setError(true); }
+    finally { setBusy(false); }
+  };
+  return <div className="px-3 pb-2 text-center">
+    <button type="button" onClick={() => void leave()} disabled={busy}
+      className="min-h-10 w-full rounded-[10px] border border-hair bg-panel px-3 py-2 text-[11px] font-semibold text-snow disabled:opacity-50"
+      data-testid="return-home">{busy ? 'ĐANG NHẢ VỊ TRÍ…' : 'VỀ HOME SCREAM ROOM'}</button>
+    {error ? <p role="alert" className="mt-1 text-[11px] text-ember" data-testid="release-error">
+      Chưa nhả được vị trí. Kiểm tra kết nối và bấm lại.
+    </p> : null}
+  </div>;
 }
 
 /* ---------------------------------------------------------------- primitives */
@@ -438,9 +461,24 @@ function PrimaryZone({ store, account, primary, pending, verifying }: ZoneProps)
   };
 
   if (primary.action === null && !primary.overrideOnly) {
+    // Not this phone's step: the same shape as the action, visibly off, with the
+    // one-line reason the server state implies. Disabling here is courtesy — the
+    // RPC refuses the same call outright if anyone forces it.
     return (
-      <div className="cta cta-neutral" data-testid="waiting-state">
-        {primary.label}
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          disabled
+          aria-disabled="true"
+          title={primary.hint ?? undefined}
+          className="cta cta-neutral opacity-45 saturate-50"
+          data-testid="waiting-state"
+        >
+          {primary.label}
+        </button>
+        {primary.hint ? (
+          <p className="px-1 text-center text-[0.62rem] leading-snug text-mute">{primary.hint}</p>
+        ) : null}
       </div>
     );
   }

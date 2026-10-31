@@ -1,113 +1,40 @@
-# SCREAM CONTROL — Room 305 · V2
+# SCREAM CONTROL — Room 305
 
-Single-screen, mobile-first PWA for running a 90-minute Halloween Scream Room event from
-five phones. One fixed 90-minute timeline, one flexible 5-minute game window, five synchronised
-operators, automatic round-by-round timing, team ranking, audited overrides and one obvious
-next action per phone.
+One production root URL for all staff: **https://timer-smoky-seven.vercel.app**.
+The existing Vercel project is timer; timer.vercel.app is not assigned to this project.
 
-```
-npm install
-npm run dev          # http://localhost:5173  (authoritative engine runs in-process)
-```
+## Staff access
 
-Then open the app from five devices (or five browser profiles), each on its own station link — see
-below.
+Open the root URL → choose an available station → dashboard → **VỀ HOME SCREAM ROOM**.
+No account registration, email, invitation token or second confirmation for NPC roles.
 
-## Operator access
-
-Production has no accounts and no login screen. There are exactly **five permanent station links**
-— one per role — built from 256-bit tokens of which only the SHA-256 is stored. A link never expires
-and is never spent; what is exclusive is the **seat**: at most one live device per role — with one
-deliberate exception, **SUPERVISOR may be staffed by two devices** (organiser + assistant) opening
-the same link. Every other station still accepts exactly one phone.
-
-1. The organizer mints the five links once: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`.
-   They are written to `%USERPROFILE%\.scream-305\invites-<date>.txt` (never into git, never into the
-   terminal log) and are sent to the five phones.
-2. Opening `https://<app>/i/<token>` signs the phone in anonymously — Supabase Anonymous Sign-ins,
-   invisible to the operator — and binds it to that station. The app lands straight on the station's
-   dashboard: no password, no role picker.
-3. The session survives refresh and PWA restart: Supabase persists the anonymous session and the app
-   re-reads its role with `whoami()` on every boot. Locking the screen or losing the network for a
-   while does not touch the binding.
-4. The link is reusable for ever, but only while its station is **free**. With a phone already on duty,
-   another phone opening the same link is refused with `VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG`, and no link —
-   a second one, a forgotten bookmark, an edited URL — can evict, replace or kick the phone on duty.
-   SUPERVISOR is the only double-staffed station: the same link admits a second supervisor into the
-   second seat, and a third device is still refused with the same sentence.
-5. The gate paints the five-seat board — **red** for a station that already has a phone, **green** for
-   a free one — straight from the database, before the phone holds any session.
-6. Replacing a phone: `ĐỔI MÁY` releases the binding on the server, then the new phone opens the
-   **same** link. Lost phone: the organizer runs `...mint-invites.ps1 --release GATE`, and the same link
-   is usable again — no new link is minted.
-7. Refresh, screen lock, PWA cold start and temporary network loss never free a seat. The only release
-   paths are `release_device` (the ĐỔI MÁY button) and the organizer's `--release`; there is no TTL and
-   no heartbeat that could drop a working phone.
-8. The token is removed from the address bar as soon as it has been read, and it is never written to
-   storage: only the Supabase session is kept on the phone.
-
-| Station | Owns |
-| --- | --- |
-| LOBBY | call/dispatch a team — the first call starts the 90:00 |
-| GATE · NPC 1 | **start** and **stop** the 5:00, pause/restart it, final readiness |
-| CORRIDOR · NPC 2 | hallway progress, hidden objects + hallway reset |
-| ROOM 305 · NPC 3 | arrival, puzzle completion, room reset |
-| SUPERVISOR | close event, config, overrides, abort, corrections, CSV |
-
-Only GATE can finalise readiness, only GATE stops the 5:00 (and only GATE or the supervisor may
-pause or restart it), and only SUPERVISOR may override admission or correct a record — all enforced
-inside Postgres by `sc.role_permissions`, not merely hidden in the UI. The right to *be* SUPERVISOR
-is the SUPERVISOR link itself: no client can ask for a role, and a bound phone that opens another
-station's link is refused.
-
-**Why the PostgreSQL role is never the authority.** An anonymous session and a password session are
-granted the *same* database role — `authenticated` — so a grant to `authenticated` can only ever mean
-"this function is callable", never "this caller may act". Every operator-facing function therefore
-resolves `auth.uid()` against the live `sc.operators` binding before it reads `sc.role_permissions`, and
-the RLS policies on the seven readable tables go through `sc.is_operator()` (self-only for
-`sc.operators`). An anonymous phone that holds no valid link is `authenticated` and still gets zero rows
-and `PERMISSION_DENIED` on every write — asserted by SQL scenario 030, and re-checked against the live
-catalog with `npm run test:sql`.
-
-### Handing over the five links
-
-`mint-invites.ps1` prints nothing to the terminal: the five links (labelled `LOBBY`, `NPC 1`, `NPC 2`,
-`NPC 3`, `SUPERVISOR`) land in `%USERPROFILE%\.scream-305\invites-<date>.txt`. Hand them over like
-you would hand over a house key:
-
-| Link | Send to | Channel |
+| Station | Label | Device capacity |
 | --- | --- | --- |
-| `LOBBY` | the lobby desk phone | one-to-one message to that person, or open the link on the phone in front of them |
-| `GATE` (`NPC 1`) | the third-floor entrance phone | as above |
-| `CORRIDOR` (`NPC 2`) | the hallway phone | as above |
-| `ROOM305` (`NPC 3`) | the room phone | as above |
-| `SUPERVISOR` | the organizer's own phone only | never in a group chat — this link grants corrections, overrides and closure |
+| LOBBY | SẢNH TẦNG 1 | 1 |
+| GATE | NPC 1 / CỬA VÀO | 1 |
+| CORRIDOR | NPC 2 / HÀNH LANG | 1 |
+| ROOM305 | NPC 3 / PHÒNG 305 | 1 |
+| SUPERVISOR | GIÁM SÁT | 2 |
 
-- Five links in total, permanent and reusable. Open one while its station is free and that phone takes
-  the seat; open it while the station is on duty and the answer is `VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG`.
-- A leaked link that is **not** bound is a station key: burn it with
-  `...mint-invites.ps1 --revoke GATE` and mint a replacement for that station only (`--role GATE`).
-  A leaked link that **is** bound is worse: `--release GATE` first, then replace the link.
-- Do not photograph the list, do not paste links into a group, do not print them on a QR at the desk,
-  and do not commit the file (it lives outside the repository by design). Keep it — it is the only
-  copy, because the database stores hashes only.
-- Moving a station to another phone: `ĐỔI MÁY` on the old one (or `--release GATE` when the phone is
-  lost), then open the **same** link on the new one. Nothing is re-minted, nothing is re-registered.
-- All five stations on duty: a new phone is refused on every link (at most six devices in total:
-  four single-staffed stations plus two supervisors), while the live dashboards keep their seat,
-  their session and every command. Freeing any seat makes its link usable again at once.
-- SUPERVISOR alone may be staffed twice on the same link. Both devices get the real supervisor
-  rights, and the audit log tells them apart by `actor_id`; a third device is refused.
-  To give the seat to someone else, either supervisor releases its own phone (or the organiser runs
-  `--release SUPERVISOR`, which frees both).
-- Nothing expires (`--expires` is ignored and warned about). Re-mint only for a leak or a lost file;
-  that revokes the station's previous link and nothing else.
-- Staff never register anything: no email, no phone number, no password, no PIN.
+Home reads actual server occupancy. Available stations are green; full stations are grey
+and disabled. SUPERVISOR shows 0/2, 1/2 or 2/2 and requires the administrator PIN once
+when claiming. Unknown, stale or offline occupancy is neutral and disabled. A PostgreSQL
+Realtime subscription refetches the public board on updates; a 3-second poll and foreground/
+online refetch recover missed hints. The server always rechecks capacity at claim time.
 
-The self-hosted engine (`npm run dev`) has no Supabase to redeem against, so `/?station=GATE` stands
-in for a link: it signs in with that station's `SC_PASSCODE_*` value (default `3110`; override the
-client side with `VITE_DEV_PASSCODE`). It is a development harness and is never part of a production
-build.
+Supabase Anonymous Auth runs in the background on selection and persists across refresh,
+screen lock, network loss and PWA restart. Every boot resolves authority with whoami;
+active dashboards recheck it every 5 seconds and on foreground/reconnect. Local storage,
+URL parameters and caller-supplied device identifiers never grant production permissions.
+
+Returning Home releases only auth.uid()'s binding and waits for an affirmative server result.
+A failure keeps the dashboard and shows a short retry instruction. A committed release with a
+lost reply is safely repeatable. Closing a tab, refreshing, going offline or hiding the page
+never releases a seat. One identity has one role; switching roles requires releasing first.
+
+Legacy /i/<token> and ?i=<token> URLs are scrubbed to the root and never redeemed. Existing
+bindings still restore. Old cached clients cannot redeem invitations after migration 0010.
+The historical mint tool refuses operation on the new access model.
 
 ## How the rules are implemented
 
@@ -206,179 +133,113 @@ build.
    clock by itself. If it is a TV or tablet, open the LOBBY link on it: the display is read-only and
    changes no score, so it is safe to aim at the players.
 
-## Final rehearsal (never on the official event)
+## Security and administration
 
-The official event must still be frozen when the doors open: `event_started_at IS NULL`, no rounds,
-no action-log rows, an empty leaderboard and five free seats. A rehearsal cannot be run there —
-one `CALL_TEAM` anchors the 90-minute clock, every press writes the append-only history, and the five
-rehearsal devices would take the five seats the event needs. Two isolated environments are supported.
+Migration **0010_single_url_roles.sql** follows existing 0008_supervisor_pair.sql and
+0009_board_capacity.sql. Applied migration files 0001–0008 are unchanged. All active bindings,
+events, rounds, reset tasks and action logs survive the upgrade. The migration ledger decides
+which forward files remain pending; never reset bindings for this upgrade.
 
-**Option A — a second Supabase project (closest to production).** Create an empty project, enable
-Anonymous sign-ins, apply the migrations, mint rehearsal links, then drive five devices:
+Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
+The user primary key, partial unique index on (role, seat_slot) and slot CHECK constraints
+provide additional enforcement: four single slots plus two supervisor slots, never seven devices.
+Every command still resolves its live binding, role permission, state, revision and actor-scoped
+idempotency key on the server. Claim/release do not call _ensure_event, tick, START or RESET.
+Access changes have a separate private audit table and do not alter the scoring history.
 
-```powershell
-powershell -File .\scripts\db-push.ps1        # 0001–0008 against the rehearsal database
-powershell -File .\scripts\mint-invites.ps1 --base https://<rehearsal-app-url>
-node scripts/rehearsal.mjs --url https://<rehearsal-ref>.supabase.co --key <rehearsal-publishable-key> --links ~\.scream-305\invites-<date>.txt
-```
+PIN hashes use pgcrypto bcrypt with cost 10. No plaintext PIN is stored in Postgres, frontend,
+logs or local storage. There are at most 5 PIN attempts per identity and 30 globally in a
+15-minute window. The global limit resists rotating anonymous identities but permits a public
+attacker to temporarily deny new supervisor claims. Existing supervisors remain operational.
+Use a unique randomly chosen 10–12 digit PIN and share it privately with supervisors.
 
-`scripts/rehearsal.mjs` signs in five anonymous devices, redeems the five links, runs
-`CALL_TEAM → TEAM_UPSTAIRS → START_GAME → HALLWAY_PROGRESS → ROOM_REACHED → PUZZLE_COMPLETE →
-RETURN_START → GAME_STOP → RESET_DONE ×3 → GATE_FINALIZE`, then runs a second round that forces
-`TIMEOUT` (it shortens `game_limit_ms` through supervisor `CONFIGURE`, so `allow_test_clock` stays
-false everywhere), and prints one PASS/FAIL row per check, including cross-role refusals and
-measured realtime push lag. Safety: it refuses the official project ref with no override flag, and
-aborts if the target event already has an active round or an anchored clock. Tokens are read from
-the mint file and never printed. Add `--keep-bound` to leave the five seats live for the manual
-phone walk-through, and `--game-limit-ms` to control how long the timeout takes.
+Rotate through the hidden prompt:
 
-**Option B — the self-hosted engine on the venue Wi-Fi (fastest, zero Supabase exposure).** Delete
-`.scream-data/event.json`, run `npm run dev` on a laptop plugged into the same access point, and
-have the five phones open `http://<laptop-ip>:5173/?station=LOBBY` … `?station=SUPERVISOR`. Same
-rule engine, same SSE realtime, same alarms. Plain `http://` on a LAN IP is not a secure context,
-so service-worker install and Wake Lock are unavailable: this rehearses timing, hand-offs and
-audio, not the PWA shell. Never use `?station=` links on event day — they are a development harness.
+~~~powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -ConfigureSupervisorPin
+~~~
 
-Then walk the manual checklist, one tick per line, with five real phones on the venue Wi-Fi:
+The database-owner-only sc.configure_station_access(pin, revoke_supervisors) function supports
+rotation, disabling new claims with NULL, and explicit revocation with the second parameter true.
+Rotation defaults to preserving on-duty devices. It is not granted to anon/authenticated or
+exposed through PostgREST. If a phone is lost, an administrator may revoke only that user_id in
+sc.operators from a trusted SQL session; do not clear all staff bindings. No expiry or heartbeat
+can silently free a working phone.
 
-| # | Do on | Must see on all five phones |
-| --- | --- | --- |
-| 1 | LOBBY `CHO ĐỘI … LÊN` | 90:00 starts running; others show `ĐÃ GỌI ĐỘI`; GATE shows the wait line |
-| 2 | LOBBY `ĐÃ LÊN TẦNG 3` | rail moves to CỬA VÀO with `Đội đã lên tới cửa vào tầng 3` |
-| 3 | GATE `BẮT ĐẦU` | hero `05:00.000` counting in GAME mode; LOBBY phone becomes the wall display |
-| 4 | CORRIDOR `ĐÃ SETUP XONG`, ROOM305 `ĐÃ ĐẾN 305` | rail lights in order, no phone disagrees |
-| 5 | ROOM305 `XÁC NHẬN HOÀN THÀNH` | clock **keeps running**, `Trận đồ đã hoàn thành` |
-| 6 | (rehearsal only) let 5:00 expire | `HẾT GIỜ` flash, alarm audible, vibrate on Android — still no automatic clear |
-| 7 | GATE `KHÁCH ĐÃ RA — CHỐT GIỜ` | one `official_duration_ms`, identical on all five, outcome `WON`/`TIMEOUT` |
-| 8 | GATE `XÁC NHẬN SẴN SÀNG` too early | refused: `Chưa xác nhận reset: còn N tác vụ` |
-| 9 | CORRIDOR + ROOM305 (+ GATE if it owns the objects) `ĐÃ RESET XONG` | checklist fills, then GATE may finalize → `SẴN SÀNG` |
-| 10 | LOBBY calls the next team | only allowed now; rail restarts at SẢNH |
-| 11 | `Xem thêm → Kết nối & cảnh báo` on each phone | sane RTT and data age; write down the worst p95 (target < 500 ms) |
-| 12 | drop Wi-Fi on one phone during STOP | `ĐANG XÁC MINH…` then the truth; no score is invented |
-| 13 | `Xem thêm → Bảng xếp hạng` | finished rounds ranked, disputed ones withheld with a reason |
-| 14 | lock and unlock a phone mid-game | on reopening it rejoins the live round from the server |
+Public station_occupancy contains only five role/capacity/device counters. RLS permits SELECT
+for anon/authenticated and no client writes. Operator identities, access audit, PIN hashes and
+rate-limit counters stay private; internal helpers and retired invitation RPC grants are revoked.
 
-Afterwards reset the rehearsal state. Rehearsal links stay bound to the rehearsal project, so the
-official five must be minted from the official project — and only after the rehearsal passes.
+**NPC access trade-off:** the root URL intentionally allows anyone to request an available NPC
+station. Capacity prevents a duplicate claim; it does not prove staff membership. One-time crew
+codes, hashed server-side and atomically consumed with the claim, would prevent casual outsiders
+from occupying NPC roles. They require distributing a fresh code per new device and add one
+entry step. They are not enabled in this release to preserve immediate station selection; for a
+publicly advertised event URL, enable such codes in a future forward migration or limit network
+access. A supervisor PIN does not protect NPC slots.
 
-One gotcha worth writing down: a `.env.local` containing `VITE_BACKEND=supabase` (created by
-`vercel env pull`) makes `npm run dev` skip the in-process engine, so Option B and
-`npm run test:e2e` both need that file absent.
+## Validation
 
-## Commands
+~~~powershell
+npm ci
+npm run typecheck
+npm test
+npm run test:sql
+npm run test:e2e
+npm run test:access
+npm run build
+~~~
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | App + in-process authoritative engine (HTTP + SSE at `/api/*`), state persisted to `.scream-data/event.json` so a restart restores the live session |
-| `npm run build` / `npm run preview` | Production PWA build (service worker, installable, standalone) |
-| `npm test` | Vitest: domain rules, engine, five-client reconciliation, real HTTP+SSE transport |
-| `npm run test:sql` | Runs `supabase/migrations/*` plus the operator, hardening and invitation scenarios against a throwaway Postgres 16 container (Docker required) |
-| `npm run test:e2e` | Playwright: five phone profiles, one real round, 360 px layout, cutoff, overtime, the invitation gate |
-| `npm run typecheck` | `tsc --noEmit` over app, server, migrations-facing client code and tests |
-| `powershell -File .\scripts\db-push.ps1` | Applies pending migrations to the hosted Supabase project; prompts for the database password with no echo |
-| `powershell -File .\scripts\mint-invites.ps1` | Mints/replaces the five permanent station links (`--list` shows ACTIVE/REVOKED + OCCUPIED/available + NEVER EXPIRES; `--release GATE` frees a lost phone's seat; `--revoke GATE` burns a leaked link; `--role GATE` replaces one station's link) |
+SQL validation uses a disposable local PostgreSQL 16 Docker container. Historical access
+scenarios run before 0010; scenario 033 then checks the new capacity, binding, preservation,
+PIN and RLS contract. Never run the local auth stub against hosted Supabase.
 
-The browser suite is serial: run the whole file (`npm run test:e2e`) rather than a single case.
+The workflow browser suite uses the local authoritative engine and covers full rounds, ranking,
+timeout, admission cutoff, offline commands, the wall display and 360px layouts. The access suite
+runs the production Supabase client against real local PostgreSQL RPCs, with only Auth/HTTP
+transport adapted by the test harness. It checks all six slots, release/replacement, PWA session
+reuse, revoked permissions, stale/offline boards, concurrent database transactions and workflow
+cycles after the migration. Its fallback polling tests deliberately run without Realtime delivery.
+Hosted GoTrue, live Realtime and physical PWA behavior require separate production/read-only or
+venue checks; local tests do not certify physical phones or venue Wi-Fi.
 
-## Production deployment (Supabase)
+On 2026-10-31 the hosted access smoke passed anonymous auth, final-NPC-slot contention,
+whoami, identity exclusivity, revoked legacy access, release/reclaim and actual PostgreSQL
+Realtime delivery for claim and release. All test bindings were released; the three on-duty
+bindings remained. Database fingerprints before/after the upgrade matched for events, rounds,
+action logs, reset tasks, state and the active roster. The live supervisor PIN was entered only
+in the hidden administrator terminal; the two-supervisor live-device test remains unverified.
+Run the access-only production smoke without event actions:
 
-1. Create a Supabase project (Postgres, Auth, Realtime enabled).
-2. **Turn on anonymous sign-ins**: Authentication → Sign In / Providers → *Anonymous sign-ins* →
-   Enable → Save. Without this the phone cannot obtain the anonymous identity that the station link
-   is bound to, and the gate reports `SUPABASE CHƯA BẬT ĐĂNG NHẬP ẨN DANH`. Nothing else about Auth
-   needs configuring: there are no users to create, no email templates and no passwords.
-3. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
-   the database password without echoing it and applies `0001`–`0008` in order, recording each file in
-   `public._sc_migrations` so a re-run is a no-op. It connects through the Supavisor pooler because the
-   direct host `db.<ref>.supabase.co` only publishes an AAAA record and cannot be reached from an
-   IPv4-only network. The same files can be pasted into the SQL editor instead; add `-Baseline` if the
-   `sc.*` schema was created that way before. Do **not** run `supabase/tests/000_local_auth_stub.sql`;
-   it exists only so plain Postgres can execute the migrations locally. **Never re-run 0004**: it renames
-   a live function and now that it is recorded, `db-push` skips it — if a ledger ever lost it, record it
-   by hand instead of applying it again.
-4. Mint the five station links: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`
-   (add `--base https://your-app.vercel.app` if the default origin is wrong). The links are written to
-   a file outside the repository; only their SHA-256 is ever stored in the database.
-5. Set `.env`: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, then
-   `npm run build` and host `dist/` on HTTPS (any static host; the PWA needs a service-worker-capable
-   origin). On Vercel, `vercel.json` pins `npm run build` and `dist/`, so the same values only need to
-   exist in Project → Settings → Environment Variables before the first deploy. No schema needs to be
-   exposed to PostgREST: the browser talks to nine `public` functions (0005–0006) and never to a table.
-6. The event session and its single state row are created by the first phone that redeems a link
-   (`sc._ensure_event()`), using the column defaults from `0001`; a project that already has an event
-   keeps it. Realtime revision hints come from Postgres changes on `sc.state` (added to
-   `supabase_realtime` by the migration); clients reconcile by calling `snapshot()`, so a lost hint
-   only delays a refresh, it never corrupts state.
-7. Keep the `*.txt` invitation file: the links are permanent, and the database stores hashes only, so
-   the file is the **only** copy. Treat it like the key cabinet. A lost file means minting new links for
-   that station (`--role GATE`), which revokes the old one — never a re-registration by staff.
+~~~powershell
+node --env-file=.env.local scripts/verify-production-access.mjs
+~~~
 
-Server-side rights live in `sc.role_permissions`; clients hold no write grants and cannot execute the
-internal `sc` helpers. There is no separate backend service to deploy.
+For local development, set VITE_BACKEND=local explicitly. Its ?station= links and shared test
+passcodes are development-only; its picker does not simulate production slot ownership.
+Both browser suites set their backend and use separate ports, databases and output folders.
+Run destructive workflow rehearsals only locally or against a separate rehearsal database.
+The legacy invitation rehearsal driver is for pre-0010 installations and cannot grant new access.
 
-## Verification evidence
+## Production rollout
 
-Executed locally on Node 22 / Windows, October 2026. Statuses are per requirement §10 of the
-hardening brief: only `PASS` means the check was executed and its output supports the result.
+Use the existing Supabase project and Vercel project; do not create replacements.
+Run the protected database upgrade before pushing main (GitHub pushes trigger Vercel):
 
-| Gate | How it is checked | Status |
-| --- | --- | --- |
-| R01 zero duplicate committed START/STOP | `test/engine.test.ts` #12/#13, `test/hardening.test.ts` H13, `test/transport.test.ts` G02, SQL 010 §4/§6 | PASS |
-| R02 zero simultaneous active rounds | engine CAS + partial unique index `rounds_single_active`, SQL 020 §20, H7 | PASS |
-| R03 zero invalid READY transitions | `GATE_FINALIZE` cycle-aware checks: engine tests #8/#8b, H3/H4, SQL 010 §5, 020 §15 | PASS |
-| R04 zero unauthorized committed actions | permission table in `machine.ts` + `sc.role_permissions`; unit “gives every role…”, SQL 010 §1, 020 §13a/§15e, 030 §8 | PASS |
-| Operator entry: permanent reusable links, one seat per role (SUPERVISOR ×2) | SQL 030 §1–§7, §8w–§8ae (bind, idempotent re-open, refusal, no takeover, full board, live phones untouched) + SQL 031 P1–P13/Q1–Q16 (first join, second phone refused with the official sentence, a second link cannot take over, release, same link reused, three reuse cycles, simultaneous redeem, past expiry ignored, revoked link refused, session revocation, 5/5 capacity, no function but `release_device` retires a binding) + SQL 032 S1–S9/T1–T8 (two supervisors on ONE link, third refused, slots 1/2, catalog constraints, every other station still single, six devices max, board still five stations) | PASS |
-| Operators hold no write grants | SQL 030 §10 (table privileges, `anon` cannot redeem, no internal `sc` helper is callable) | PASS |
-| R05 no lost acknowledged records | file/JSON persistence + snapshot reconciliation, SQL 010 §8 (history completeness), e2e reload cases | PASS |
-| R06 consistent official scores | `test/transport.test.ts` convergence asserts equal `official_duration_ms` on all five clients | PASS |
-| R07 authoritative restore after reconnect | `test/clients.test.ts` #15, `test/transport.test.ts` #15b, e2e “Xem thêm”/reload cases | PASS |
-| R08 no fabricated success for uncertain requests | `reconcileUnknown` + `/api/operation`: transport G02, hardening H6, clients “network failure…”, e2e G03 | PASS |
-| R09 300-second boundary | unit (300 000 win / 300 001 timeout), hardening H2/H8 (before, exactly at, after) | PASS |
-| R10 90-minute admission and closure | engine #1/#9/#9b/11b/19d/20, SQL 010 §10–§12, e2e #9 | PASS |
-| R11 five-device workflow | Playwright `test/e2e/five-phones.spec.ts` (9 cases, five browser contexts over HTTP+SSE, station links) | PASS |
-| R12 real-device rehearsal | needs five physical phones on the event Wi-Fi against a deployed build | **NOT TESTED** — release readiness is not established until this is done |
-| Supabase deployment (migrations applied to a live project, anonymous sign-ins on) | needs the project password, the dashboard switch, and five real phones | **NOT TESTED** — SQL is validated against Postgres 16 locally, not against a Supabase host |
-| Real background execution / alarm audibility on iOS+Android | outside browser automation | **NOT TESTED** — the UI reports audio readiness and degrades to visual alarms |
+~~~powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -SingleUrl -ConfigureSupervisorPin
+~~~
 
-Commands and what they produced:
+The terminal asks for the PostgreSQL password and supervisor PIN using hidden prompts.
+Secrets exist only in process memory. No DATABASE_URL or password file is needed.
+The runner refuses missing 0001–0007 history, locks access changes, fingerprints the event
+and active roster before/after, and commits all pending migrations plus PIN configuration in
+one transaction. It rolls back on changed fingerprints or unsafe grants. A non-secret report is
+written to .git/production-migration.json. An 8-second lock timeout avoids an indefinite wait.
+No on-duty binding is revoked and no event command is sent.
 
-- `npm run typecheck` — clean.
-- `npm test` — **88 passing** cases (engine rules and every derived duration, five-client
-  reconciliation, offline/lost-response handling, disputes, reopen, layout, concurrency races,
-  leaderboard eligibility, wall-display countdown, controlled-clock event replay, invitation-link
-  parsing, and the boot path: a forged `localStorage` or `?role=` never becomes a role).
-- `npm run test:sql` — migrations 0001–0008 apply to Postgres 16 and **all five** scenarios pass:
-  010 (§1–§12), 020 (§13–§20), 030 (bindings, board, privilege boundary), 031 (permanent links:
-  reuse after release, exclusive seat, no takeover, no auto-release, catalog-level proof that
-  redemption holds neither consumption nor expiry logic) and 032 (SUPERVISOR double staffing on the
-  same link, third device refused, other stations still single). 030 is what caught `handle_command`
-  resolving the operator row without honouring a released binding; it now goes through a guarded
-  wrapper.
-- `npm run test:e2e` — **9 passing** browser cases, including a real offline STOP (`context.setOffline`)
-  that proves no score is invented, the wall display auto-opening on `BẮT ĐẦU`, 360 px layout checks
-  for all five roles, a phone that only sees the invitation gate unless it holds a link, and a
-  station that survives reopening without the link.
-- `npm run build` — clean PWA build; app bundle 358 kB / **110 kB gzip**, Supabase client split into
-  lazy chunks the self-hosted build never loads.
-- `npm audit --omit=dev` — 0 vulnerabilities.
-
-**Measured synchronisation (loopback HTTP + SSE, five live clients, one full round = 44 observations)**:
-p50 **7–13 ms**, p95 **15–21 ms**, p99 **15–21 ms**, max **21 ms**. Those are single-machine numbers on
-an idle network and are *not* an event-Wi-Fi guarantee; the p95 < 500 ms target must be re-measured on
-the venue network, and each phone displays its own current RTT and estimated display error in
-`Xem thêm → Kết nối & cảnh báo`.
-
-### Known limits, stated plainly
-
-- Timestamp resolution is not physical input accuracy: the recorded STOP is when the server received the
-  press, and the gap is stored (`stop_transport_ms`) and disputed when it exceeds the review threshold.
-- Network latency means phones can render different digits for tens of milliseconds; only the server's
-  stored durations are authoritative.
-- Mobile browsers may suspend or freeze background tabs; alarms cannot be guaranteed while the app is
-  backgrounded, and a PWA cannot promise continuous execution. On reopening, the app recalibrates and
-  restores the live round from the server — the paper backup timer in the runbook is the fallback.
-- Zero-millisecond display divergence between devices cannot be guaranteed, and no claim is made here.
-
-Needs your project (cannot be executed here): Anonymous sign-ins enabled, `db-push.ps1` run against the
-hosted database, the five links minted with `mint-invites.ps1`, `VITE_BACKEND=supabase` build hosted on
-HTTPS, and the real five-device rehearsal on the venue network.
+After successful checks and migration, commit and push GitHub main, deploy to the already-linked
+Vercel project, and verify the root URL, old deep links, whoami, occupancy and Realtime. Keep the
+existing working production domain unless timer.vercel.app is confirmed assigned to this project.
+Do not CALL_TEAM or START_GAME on production during validation. A release requires physical
+phone/PWA/venue rehearsal separately; keep unverified items explicit in the delivery report.

@@ -2,6 +2,8 @@ node_modules
 dist
 dev-dist
 test-results
+test-results-access
+shots/single-url-home.png
 playwright-report
 .scream-data
 .env

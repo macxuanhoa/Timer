@@ -100,6 +100,20 @@ begin
   if (v_board->'stations'->4->>'devices')::int <> 2 or (v_board->'stations'->4->>'occupied')::boolean is not true then
     raise exception 'ASSERT S5d failed: supervisor seat %', v_board->'stations'->4;
   end if;
+  -- The board itself declares the capacity, so no client can guess it.
+  if (v_board->'stations'->4->>'capacity')::int <> 2 then
+    raise exception 'ASSERT S5e failed: SUPERVISOR capacity %', v_board->'stations'->4->>'capacity';
+  end if;
+  if exists (select 1 from jsonb_array_elements(v_board->'stations') s
+              where s->>'role' <> 'SUPERVISOR' and (s->>'capacity')::int <> 1) then
+    raise exception 'ASSERT S5f failed: a single-staffed station reports the wrong capacity: %', v_board->'stations';
+  end if;
+  if (v_board->>'device_capacity')::int <> 6 then
+    raise exception 'ASSERT S5g failed: total device capacity %', v_board->>'device_capacity';
+  end if;
+  if (v_board->>'devices')::int <> 2 then
+    raise exception 'ASSERT S5h failed: live devices %', v_board->>'devices';
+  end if;
 
   -- == S6. every other station stays single ==============================
   v := sc.test_redeem(v_d, v_tok_lobby, 'lob-D');
@@ -159,6 +173,9 @@ begin
   end if;
   if (v_board->'stations'->4->>'devices')::int <> 2 then
     raise exception 'ASSERT S9f failed: supervisor devices %', v_board->'stations'->4;
+  end if;
+  if (v_board->>'devices')::int <> 6 then
+    raise exception 'ASSERT S9f2 failed: board device count %', v_board->>'devices';
   end if;
 
   -- a seventh device is refused on a single-staffed station...

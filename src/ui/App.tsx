@@ -1,107 +1,101 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Dashboard } from './Dashboard';
-import { Invitation } from './Invitation';
-import { enterStation, gatewayFor, logout, type StoredSession } from './session';
+import { Home } from './Home';
+import { enterStation, gatewayFor, logout, refreshSession, saveSession, type StoredSession } from './session';
+import { USING_SUPABASE } from '../client/gateway';
 import { LiveStore } from '../client/liveStore';
 import { PwaUpdate } from './PwaUpdate';
 
 export default function App() {
-  const booted = useRef(false);
   const [checking, setChecking] = useState(true);
+  const [verified, setVerified] = useState(false);
   const [session, setSession] = useState<StoredSession | null>(null);
-  const [gateError, setGateError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [liveStore, setLiveStore] = useState<LiveStore | null>(null);
+  const releasing = useRef(false);
+  const generation = useRef(0);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
-  /** One boot path: invitation link, restored session, or the invitation gate. */
-  const boot = async () => {
-    setChecking(true);
-    setGateError(null);
-    try {
-      setSession(await enterStation());
-    } catch (err) {
-      setSession(null);
-      setGateError(err instanceof Error ? err.message : 'KHÔNG MỞ ĐƯỢC PHIÊN TRỰC');
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  // StrictMode mounts effects twice; the anonymous sign-in must happen once.
-  useEffect(() => {
-    if (booted.current) return;
-    booted.current = true;
-    void boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const acceptSession = useCallback((next: StoredSession) => {
+    generation.current++;
+    setError(null); setVerified(true); setSession(next);
   }, []);
 
-  // One store per signed-in operator: calibrate clock, load snapshot, subscribe.
+  useEffect(() => {
+    let disposed = false;
+    let busy = false;
+    const verify = async (boot = false) => {
+      if (busy || releasing.current) return;
+      busy = true;
+      const version = generation.current;
+      try {
+        const next = boot ? await enterStation() : USING_SUPABASE ? await refreshSession() : sessionRef.current;
+        if (disposed || version !== generation.current) return;
+        setVerified(true); setError(null);
+        setSession(current => current?.account.id === next?.account.id && current?.account.role === next?.account.role ? current : next);
+      } catch {
+        if (!disposed && version === generation.current) {
+          setVerified(false);
+          setError('CHƯA XÁC MINH ĐƯỢC PHIÊN — ĐANG KẾT NỐI LẠI…');
+        }
+      } finally { busy = false; if (!disposed) setChecking(false); }
+    };
+    void verify(true);
+    const timer = window.setInterval(() => void verify(), 5_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') void verify(); };
+    window.addEventListener('online', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      disposed = true; window.clearInterval(timer);
+      window.removeEventListener('online', onVisible); document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let created: LiveStore | null = null;
     setLiveStore(null);
     if (!session) return;
     void (async () => {
-      const gateway = await gatewayFor(session);
-      if (disposed) return;
-      created = new LiveStore({ gateway, account: session.account });
-      await created.start();
-      if (disposed) {
-        created.stop();
-        return;
+      try {
+        const gateway = await gatewayFor(session);
+        if (disposed) return;
+        created = new LiveStore({ gateway, account: session.account });
+        await created.start();
+        if (disposed) { created.stop(); return; }
+        setLiveStore(created);
+      } catch {
+        if (!disposed) {
+          setError('CHƯA KẾT NỐI ĐƯỢC VỊ TRÍ — ĐANG KẾT NỐI LẠI…');
+          // Recheck authority before allowing another selection.
+          setVerified(false); setSession(null);
+        }
       }
-      setLiveStore(created);
     })();
-    return () => {
-      disposed = true;
-      created?.stop();
-    };
+    return () => { disposed = true; created?.stop(); };
   }, [session]);
 
-  const signOut = () => {
-    void (async () => {
-      try {
-        // Releasing the station on the server comes first: if it fails (offline)
-        // the phone keeps its role instead of being stranded without one.
-        await logout();
-        setLiveStore(null);
-        setSession(null);
-        setGateError(null);
-      } catch {
-        /* keep the live station and let the operator try again */
-      }
-    })();
+  const release = async () => {
+    if (releasing.current) return;
+    releasing.current = true;
+    generation.current++;
+    try {
+      await logout();
+      liveStore?.stop(); setLiveStore(null); setSession(null); setError(null); setVerified(true);
+      saveSession(null);
+    } finally { releasing.current = false; }
   };
 
   if (checking) return <Splash text="ĐANG KIỂM TRA PHIÊN…" />;
-  if (!session) {
-    return (
-      <Invitation
-        error={gateError}
-        onEnter={(next) => {
-          setGateError(null);
-          setSession(next);
-        }}
-        onRetryBoot={() => void boot()}
-      />
-    );
-  }
-  if (!liveStore) return <Splash text="ĐANG KẾT NỐI MÁY CHỦ…" />;
-
-  return (
-    <>
-      <Dashboard store={liveStore} account={session.account} onLogout={signOut} />
-      <PwaUpdate />
-    </>
-  );
+  if (!session) return <><Home error={error} canSelect={verified} onEnter={acceptSession} /><PwaUpdate /></>;
+  if (!liveStore) return <Splash text={error ?? 'ĐANG KẾT NỐI MÁY CHỦ…'} />;
+  return <><Dashboard store={liveStore} account={session.account} onLogout={release} /><PwaUpdate /></>;
 }
 
 function Splash({ text }: { text: string }) {
-  return (
-    <div className="flex h-[100dvh] items-center justify-center bg-ink">
-      <div className="text-center">
-        <p className="digital text-[0.9rem] tracking-[0.3em] text-blood">SCREAM CONTROL</p>
-        <p className="mt-3 text-[0.75rem] text-mute" data-testid="splash">{text}</p>
-      </div>
-    </div>
-  );
+  return <div className="flex h-[100dvh] items-center justify-center bg-ink"><div className="text-center">
+    <p className="digital text-[0.9rem] tracking-[0.3em] text-blood">SCREAM CONTROL</p>
+    <p className="mt-3 text-[0.75rem] text-mute" data-testid="splash">{text}</p>
+  </div></div>;
 }

@@ -5,10 +5,8 @@ import type { StationBoard } from '../shared/types';
 /**
  * Passwordless operator access.
  *
- * The phone signs in anonymously (Supabase Anonymous Sign-ins) and an invitation
- * link exchanges that anonymous identity for one operator role. Nothing here
- * handles an email, a password, a service key or a secret key: the browser only
- * ever holds the publishable key and the station token it was given.
+ * The browser keeps its anonymous session and publishable key. The supervisor
+ * PIN is sent once per claim, never saved; privileged keys stay outside this app.
  */
 
 const URL_KEY = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -30,7 +28,7 @@ export interface OperatorProfile {
   display_name: string;
 }
 
-export interface RedeemResult {
+export interface ClaimResult {
   ok: boolean;
   code: string;
   message?: string;
@@ -40,20 +38,18 @@ export interface RedeemResult {
 }
 
 /** What the person holding the phone needs to read, not the RPC code. */
-// Links are permanent (0007): the seat is what can be busy, so the wording tells
-// the operator to wait for the phone on duty or to use ĐỔI MÁY — never to ask
-// for a new link.
-const INVITE_ERROR: Record<string, string> = {
-  INVITATION_INVALID: 'LIÊN KẾT KHÔNG HỢP LỆ HOẶC ĐÃ BỊ THU HỒI — LIÊN HỆ BAN TỔ CHỨC',
-  ROLE_TAKEN: 'VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG',
-  STATIONS_LOCKED: 'ĐÃ ĐỦ 5 VỊ TRÍ — KHÔNG CÒN VỊ TRÍ TRỐNG',
-  ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG TRỰC MỘT VỊ TRÍ KHÁC — DÙNG ĐÚNG LINK CỦA VỊ TRÍ ĐÓ',
+const CLAIM_ERROR: Record<string, string> = {
+  ROLE_TAKEN: 'VỊ TRÍ ĐANG CÓ NGƯỜI TRỰC',
+  ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG GIỮ VỊ TRÍ KHÁC — VỀ HOME TRƯỚC KHI CHUYỂN',
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
+  PIN_INVALID: 'PIN KHÔNG ĐÚNG',
+  PIN_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
+  PIN_NOT_CONFIGURED: 'SUPERVISOR CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
+  INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
 };
 
-export function inviteErrorMessage(result: RedeemResult | null): string {
-  if (!result) return 'KHÔNG MỞ ĐƯỢC LIÊN KẾT';
-  return INVITE_ERROR[result.code] ?? result.message ?? 'KHÔNG MỞ ĐƯỢC LIÊN KẾT';
+export function claimErrorMessage(result: ClaimResult | null): string {
+  return CLAIM_ERROR[result?.code ?? ''] ?? 'CHƯA VÀO ĐƯỢC VỊ TRÍ — KIỂM TRA KẾT NỐI';
 }
 
 /**
@@ -64,7 +60,7 @@ export function inviteErrorMessage(result: RedeemResult | null): string {
  */
 export async function stationBoard(): Promise<StationBoard | null> {
   try {
-    const { data, error } = await supabase().rpc('station_board');
+    const { data, error } = await supabase().rpc('station_board').abortSignal(AbortSignal.timeout(8_000));
     if (error || !data) return null;
     return data as StationBoard;
   } catch {
@@ -90,15 +86,15 @@ export async function ensureAnonymousSession(): Promise<void> {
   throw new Error(raw || 'KHÔNG TẠO ĐƯỢC PHIÊN ẨN DANH');
 }
 
-/** Exchanges one invitation token for a device-bound binding. */
-export async function redeemInvitation(token: string, deviceId: string): Promise<RedeemResult> {
+/** The server derives identity from auth.uid(), never a caller-supplied device. */
+export async function claimStation(role: Role, pin?: string): Promise<ClaimResult> {
   await ensureAnonymousSession();
-  const { data, error } = await supabase().rpc('redeem_invitation', {
-    p_token: token,
-    p_device_id: deviceId,
+  const { data, error } = await supabase().rpc('claim_station', {
+    p_role: role,
+    p_pin: pin ?? null,
   });
   if (error) throw new Error(error.message);
-  return data as RedeemResult;
+  return data as ClaimResult;
 }
 
 /** The role this device currently holds, or null when it holds none. */
@@ -118,13 +114,20 @@ export async function currentProfile(): Promise<OperatorProfile | null> {
 }
 
 /**
- * Gives the station up and forgets the anonymous identity, so the replacement
- * phone can open the same link with a fresh one. Both steps are required: a
- * release without sign-out would let this phone claim the role again.
+ * Release only the caller's station. Keep anonymous auth for the next selection.
  */
 export async function leaveStation(): Promise<void> {
   const sb = supabase();
-  const { error } = await sb.rpc('release_device');
+  const { data, error } = await sb.rpc('release_device');
   if (error) throw new Error(error.message);
-  await sb.auth.signOut();
+  if (!(data as { ok?: boolean } | null)?.ok) throw new Error('CHƯA NHẢ ĐƯỢC VỊ TRÍ');
+}
+
+/** Realtime carries no authority; its hints trigger a fresh occupancy RPC. */
+export function watchStationBoard(onChange: () => void): () => void {
+  const sb = supabase();
+  const channel = sb.channel('station-occupancy')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'station_occupancy' }, onChange)
+    .subscribe(status => { if (status === 'SUBSCRIBED') onChange(); });
+  return () => { void sb.removeChannel(channel); };
 }

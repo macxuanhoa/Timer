@@ -14,7 +14,7 @@
  *
  * Env overrides: SUPABASE_PROJECT_REF, SUPABASE_REGION.
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect } from './lib/pooler.mjs';
@@ -22,6 +22,24 @@ import { connect } from './lib/pooler.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = path.join(root, 'supabase', 'migrations');
 const baseline = process.argv.includes('--baseline');
+const singleUrl = process.argv.includes('--single-url');
+const configurePin = process.argv.includes('--configure-supervisor-pin');
+const reportPath = path.join(root, '.git', 'production-migration.json');
+
+async function fingerprint(client) {
+  const out = {};
+  for (const table of ['events', 'rounds', 'action_log', 'reset_tasks', 'state']) {
+    const { rows } = await client.query(`select count(*)::int as count,
+      md5(coalesce(string_agg(row_hash, ',' order by row_hash), '')) as hash
+      from (select md5(to_jsonb(t)::text) as row_hash from sc.${table} t) q`);
+    out[table] = rows[0];
+  }
+  const { rows } = await client.query(`select count(*)::int as count,
+    md5(coalesce(string_agg(user_id::text || role || display_name || bound_at::text || coalesce(device_id,''), ',' order by user_id),'')) as hash
+    from sc.operators where revoked_at is null`);
+  out.active_bindings = rows[0];
+  return out;
+}
 
 async function main() {
   const files = (await readdir(migrationsDir))
@@ -60,27 +78,55 @@ async function main() {
       console.log(`baseline: ${files[0]} recorded as already applied`);
     }
 
-    for (const name of files) {
-      if (applied.has(name)) {
-        console.log(`skip    ${name}`);
-        continue;
+    const pending = files.filter(name => !applied.has(name));
+    if (singleUrl && (!schemaExists || files.filter(f => /^000[1-7]_/.test(f)).some(f => !applied.has(f)))) {
+      throw new Error('Single-URL deployment requires the existing 0001–0007 ledger. Refusing to replay historical migrations.');
+    }
+    const allowed = new Set(['0008_supervisor_pair.sql', '0009_board_capacity.sql', '0010_single_url_roles.sql']);
+    if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
+    const pin = configurePin ? process.env.SC_SUPERVISOR_PIN : null;
+    delete process.env.SC_SUPERVISOR_PIN;
+    if (configurePin && !/^\d{8,12}$/.test(pin ?? '')) throw new Error('An 8–12 digit PIN is required through the hidden prompt.');
+    const report = { status: 'pending', at: new Date().toISOString(), pending };
+    await client.query('begin');
+    try {
+      await client.query("set local lock_timeout = '8s'; set local statement_timeout = '120s'");
+      await client.query('select pg_advisory_xact_lock(30501)');
+      if (singleUrl) {
+        const { rows: flags } = await client.query('select allow_test_clock from sc.runtime_flags where id');
+        if (flags[0]?.allow_test_clock !== false) throw new Error('Production test clock is enabled; review required.');
+        await client.query('lock table sc.operators in share row exclusive mode');
+        await client.query('lock table sc.events, sc.rounds, sc.action_log, sc.reset_tasks, sc.state in share mode');
+        report.before = await fingerprint(client);
+        console.log('Production baseline:', JSON.stringify(report.before));
       }
-      const sql = await readFile(path.join(migrationsDir, name), 'utf8');
-      await client.query('begin');
-      try {
+      // All pending files commit together. Old invitation grants are disabled
+      // in the same transaction that enables role selection and the second seat.
+      for (const name of pending) {
+        const sql = await readFile(path.join(migrationsDir, name), 'utf8');
         await client.query(sql);
         await client.query('insert into public._sc_migrations (name) values ($1)', [name]);
-        await client.query('commit');
-        console.log(`applied ${name}`);
-      } catch (error) {
-        await client.query('rollback').catch(() => undefined);
-        console.error(`\nfailed  ${name}`);
-        console.error(`  ${error.message}`);
-        if (error.detail) console.error(`  detail: ${error.detail}`);
-        if (error.hint) console.error(`  hint:   ${error.hint}`);
-        process.exitCode = 1;
-        return;
+        console.log(`staged ${name}`);
       }
+      if (configurePin) await client.query('select sc.configure_station_access($1, false)', [pin]);
+      if (singleUrl) {
+        report.after = await fingerprint(client);
+        if (JSON.stringify(report.before) !== JSON.stringify(report.after)) throw new Error('Event data or duty bindings changed; rolling back.');
+        report.occupancy = (await client.query('select sc.station_board() as board')).rows[0].board;
+        const { rows } = await client.query(`select
+          has_function_privilege('authenticated','public.redeem_invitation(text,text)','EXECUTE') as legacy,
+          has_function_privilege('authenticated','sc.configure_station_access(text,boolean)','EXECUTE') as pin_exposed`);
+        if (rows[0].legacy || rows[0].pin_exposed) throw new Error('Unsafe access grants; rolling back.');
+      }
+      await client.query('commit');
+      report.status = 'applied';
+      if (singleUrl) await writeFile(reportPath, JSON.stringify(report, null, 2));
+      console.log(`Committed ${pending.length} migration(s). Existing event data and duty devices preserved.`);
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined);
+      report.status = 'failed'; report.error = error.message;
+      if (singleUrl) await writeFile(reportPath, JSON.stringify(report, null, 2));
+      throw error;
     }
 
     const { rows: tables } = await client.query(
@@ -99,5 +145,6 @@ async function main() {
 
 main().catch((error) => {
   console.error(`\n${error.message}`);
-  process.exit(1);
+  if (singleUrl) void writeFile(reportPath, JSON.stringify({ status: 'failed', at: new Date().toISOString(), error: error.message }, null, 2));
+  process.exitCode = 1;
 });

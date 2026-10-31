@@ -62,11 +62,14 @@ try {
   run('006 station board + lock', ['supabase/migrations/0006_station_board.sql']);
   run('007 permanent links', ['supabase/migrations/0007_permanent_links.sql']);
   run('008 supervisor pair', ['supabase/migrations/0008_supervisor_pair.sql']);
+  run('009 board capacity', ['supabase/migrations/0009_board_capacity.sql']);
   run('010 five-operator scenario', ['supabase/tests/010_scenario.sql']);
   run('020 hardening scenario', ['supabase/tests/020_hardening.sql']);
   run('030 invitation scenario', ['supabase/tests/030_invitations.sql']);
   run('031 permanent links', ['supabase/tests/031_permanent_links.sql']);
   run('032 supervisor pair', ['supabase/tests/032_supervisor_pair.sql']);
+  run('010 single root URL', ['supabase/migrations/0010_single_url_roles.sql']);
+  run('033 role access + PIN + RLS', ['supabase/tests/033_single_url_roles.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

@@ -13,7 +13,7 @@
   SQL editor before this script existed: it records 0001_init.sql as applied
   instead of running it a second time.
 #>
-param([switch]$Baseline)
+param([switch]$Baseline, [switch]$SingleUrl, [switch]$ConfigureSupervisorPin)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -25,10 +25,26 @@ try {
   $env:PGPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
   $nodeArgs = @('scripts/db-push.mjs')
   if ($Baseline) { $nodeArgs += '--baseline' }
+  if ($SingleUrl) { $nodeArgs += '--single-url' }
+  if ($ConfigureSupervisorPin) {
+    $pinSecure = Read-Host -AsSecureString 'New SUPERVISOR PIN (8-12 digits, hidden)'
+    $confirmSecure = Read-Host -AsSecureString 'Confirm SUPERVISOR PIN (hidden)'
+    $pinBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pinSecure)
+    $confirmBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmSecure)
+    try {
+      $env:SC_SUPERVISOR_PIN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pinBstr)
+      if ($env:SC_SUPERVISOR_PIN -cne [Runtime.InteropServices.Marshal]::PtrToStringBSTR($confirmBstr)) { throw 'PIN confirmation does not match.' }
+    } finally {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pinBstr)
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($confirmBstr)
+    }
+    $nodeArgs += '--configure-supervisor-pin'
+  }
   & node @nodeArgs
   exit $LASTEXITCODE
 }
 finally {
   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
+  Remove-Item Env:\SC_SUPERVISOR_PIN -ErrorAction SilentlyContinue
 }

@@ -268,28 +268,32 @@ export interface Snapshot {
 
 /* ------------------------------------------------------------- station board */
 
-/** One of the five seats, as the invitation gate sees it. */
+/** Public occupancy for one role; no operator identity is disclosed. */
 export interface StationSlot {
   role: Role;
-  /** A live binding holds this seat; the gate paints it red and closes it. */
+  /** All slots for this role are full. */
   occupied: boolean;
-  /**
-   * Devices on that seat: 1 everywhere, 2 when SUPERVISOR is double staffed
-   * (0008). Additive and optional so older snapshots keep parsing.
-   */
+  /** Server-declared limit; Home refuses incomplete legacy board payloads. */
+  capacity?: number;
+  /** Devices currently holding this seat (0, 1 or 2). */
   devices?: number;
 }
 
 /**
- * Public five-seat board. It carries station roles only — never an operator
- * name, a device id or an invitation token — so an unbound phone may read it
- * before it opens a link.
+ * Public five-seat board. It carries station roles and counters only — never an
+ * operator name or device id, so an unbound phone may read it at the root URL.
  */
 export interface StationBoard {
   capacity: number;
   occupied: number;
-  /** All five seats are on duty: invitation links refuse new phones. */
+  /** All six device slots are full. */
   locked: boolean;
+  /** Total device slots across the five seats (6 since 0008). */
+  device_capacity?: number;
+  /** Devices currently bound (up to device_capacity). */
+  devices?: number;
+  /** No seat has room left: every new phone will be turned away. */
+  full?: boolean;
   stations: StationSlot[];
 }
 

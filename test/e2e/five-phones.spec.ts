@@ -308,6 +308,9 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await primary(gate.page).click();
     await expect(primary(corridor.page)).toHaveText('ĐÃ RESET XONG');
     await primary(corridor.page).click();
+    await expect(primary(corridor.page)).toHaveCount(0);
+    await expect(room.page.getByTestId('dashboard')).toHaveAttribute('data-revision',
+      (await corridor.page.getByTestId('dashboard').getAttribute('data-revision'))!);
     await primary(room.page).click();
     await expect(primary(gate.page)).toHaveText('XÁC NHẬN SẴN SÀNG');
     await primary(gate.page).click();
@@ -324,6 +327,11 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
       headers,
     });
     expect(pushed.ok()).toBe(true);
+
+    // A synthetic 84-minute jump must discard the display clock's smoothing
+    // window; real server time advances continuously in production.
+    await lobby.page.reload();
+    await sup.page.reload();
 
     await expect(lobby.page.getByTestId('override-zone')).toContainText('SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI');
     await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
@@ -412,9 +420,9 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     for (const { context } of [sup, lobby, gate]) await context.close();
   });
 
-  test('19. no login form: a phone without a link only sees the invitation gate', async ({ page }) => {
+  test('19. root Home offers five stations and supervisor PIN', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByTestId('invite-gate')).toBeVisible();
+    await expect(page.getByTestId('scream-home')).toBeVisible();
 
     // Nothing that looks like a login screen is offered any more.
     await expect(page.locator('input')).toHaveCount(0);
@@ -422,15 +430,22 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await expect(page.getByTestId('role-LOBBY')).toHaveCount(0);
 
     // The gate paints the five-seat board before any link is opened.
-    await expect(page.getByTestId('station-board')).toBeVisible();
-    await expect(page.getByTestId('station-board').locator('li')).toHaveCount(5);
-    await expect(page.getByTestId('station-count')).toHaveText('0/5');
-    await expect(page.getByTestId('station-GATE')).toHaveAttribute('data-occupied', 'false');
+    await expect(page.locator('.home-station')).toHaveCount(5);
+    await expect(page.getByTestId('station-count')).toHaveText('0/6');
+    await expect(page.getByTestId('station-GATE')).toHaveAttribute('data-state', 'available');
     await expect(page.getByTestId('station-lock')).toHaveCount(0);
 
+    // The double-staffed seat announces its own capacity instead of being guessed.
+    await expect(page.getByTestId('station-SUPERVISOR')).toContainText('0/2');
+
+    // Minimal by design: no essay, no retry button, one short instruction line.
+    await expect(page.getByTestId('invite-retry')).toHaveCount(0);
+    await expect(page.getByText(/Máy này chưa được cấp vị trí/)).toHaveCount(0);
+
     // The self-hosted build still exposes its five stations to the suite.
-    await expect(page.getByTestId('dev-station-LOBBY')).toBeVisible();
-    await page.getByTestId('dev-station-SUPERVISOR').click();
+    await page.getByTestId('station-SUPERVISOR').click();
+    await page.getByLabel('PIN quản trị', { exact: true }).fill('12345678');
+    await page.getByRole('button', { name: 'VÀO GIÁM SÁT' }).click();
     await expect(page.getByTestId('dashboard')).toBeVisible();
     await expect(page.getByTestId('role-tag')).toHaveText('SUP');
   });

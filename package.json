@@ -14,6 +14,7 @@
     "invite:mint": "node scripts/mint-invites.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:access": "playwright test --config playwright.access.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

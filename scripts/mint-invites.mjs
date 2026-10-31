@@ -5,6 +5,7 @@
  *   npm run invite:mint -- --base https://timer-smoky-seven.vercel.app
  *   npm run invite:mint -- --list
  *   npm run invite:mint -- --release GATE      # lost phone: free the seat
+ *   npm run invite:mint -- --release-all       # free every seat, links untouched
  *   npm run invite:mint -- --revoke GATE       # burn the link itself
  *   npm run invite:mint -- --role GATE         # replace ONLY GATE's link
  *
@@ -51,6 +52,7 @@ function parseArgs(argv) {
       case 'list': out.list = true; break;
       case 'revoke': out.revoke.push(value().toUpperCase()); break;
       case 'release': out.release.push(value().toUpperCase()); break;
+      case 'release-all': out.releaseAll = true; break;
       case 'label': {
         const [role, ...rest] = String(value()).split('=');
         out.labels.set(role.toUpperCase(), rest.join('='));
@@ -99,6 +101,22 @@ async function releaseBinding(client, role) {
   return rows.length;
 }
 
+/**
+ * Frees every station by retiring its live bindings — the reset the organizer
+ * asks for before a rehearsal or a new crew. Links are not touched: they are
+ * permanent, so each station simply becomes available again.
+ */
+async function releaseAllBindings(client) {
+  const { rows } = await client.query(
+    `update sc.operators set revoked_at = now()
+      where revoked_at is null
+      returning role, display_name, device_id`,
+  );
+  for (const row of rows) console.log(`released ${row.role} from ${row.display_name} (device ${String(row.device_id).slice(0, 8)}…)`);
+  if (rows.length === 0) console.log('no live bindings: every station is already available');
+  return rows.length;
+}
+
 async function listInvitations(client) {
   const { rows: links } = await client.query(`
     select role, label, claimed_at, expires_at, revoked_at, created_at
@@ -144,6 +162,8 @@ async function main() {
   const client = await connect();
 
   try {
+    const { rows: model } = await client.query("select to_regprocedure('sc.claim_station(text,text)') as claim");
+    if (model[0].claim) throw new Error('Invitation administration is retired (0010). Share the root URL; use db-push.ps1 -ConfigureSupervisorPin for PIN rotation.');
     const { rows: exists } = await client.query("select to_regclass('sc.invitations') as t");
     if (!exists[0].t) {
       throw new Error('sc.invitations is missing — run scripts/db-push.ps1 first');
@@ -163,6 +183,13 @@ async function main() {
         );
         console.log(`revoked ${rowCount} live invitation(s) for ${role}`);
       }
+      return;
+    }
+
+    if (args.releaseAll) {
+      // Links, event rows and history are deliberately untouched here.
+      const freed = await releaseAllBindings(client);
+      console.log(`\n${freed} device slot(s) freed · the five permanent links are unchanged`);
       return;
     }
 

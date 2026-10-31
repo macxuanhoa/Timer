@@ -1,5 +1,38 @@
 @import 'tailwindcss';
 
+.home-shell { min-height: 100dvh; background: radial-gradient(ellipse at 85% 0%, #3d191a55, transparent 55%), #131316; padding-inline: 22px; }
+.home-content { max-width: 560px; margin: auto; padding-top: clamp(24px, 6vh, 58px); }
+.home-header { padding-bottom: 30px; }
+.home-eyebrow { display: flex; align-items: center; gap: 9px; color: #a6a0a0; font-size: 10px; font-weight: 600; letter-spacing: .18em; }
+.home-signal { width: 6px; height: 6px; background: #e1362c; box-shadow: 0 0 15px #e1362c99; border-radius: 50%; }
+.home-header h1 { font-size: clamp(46px, 11vw, 70px); line-height: .95; font-weight: 900; letter-spacing: -.055em; margin: 24px 0 20px; }
+.home-header h1 span { color: #e1362c; }
+.home-header p { color: #a6a0a0; font-size: 13px; }
+.home-board-heading { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: .14em; color: #a6a0a0; padding-bottom: 12px; }
+.home-stations { display: grid; gap: 10px; }
+.home-station { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 80px; padding: 15px; border: 1px solid #323238; border-radius: 13px; background: #1c1c20aa; color: #8b8b94; text-align: left; transition: background .15s, border-color .15s; }
+.home-station.is-available { border-color: #1fb96e66; background: #1fb96e09; color: #1fb96e; cursor: pointer; }
+.home-station.is-available:hover { background: #1fb96e15; border-color: #1fb96eaa; }
+.home-station:focus-visible, .home-pin button:focus-visible { outline: 2px solid #f2f2f4; outline-offset: 4px; }
+.home-station-number { align-self: flex-start; font-size: 10px; padding-top: 3px; opacity: .7; }
+.home-station-label { display: grid; gap: 6px; flex: 1; }
+.home-station-label strong { font-size: 14px; letter-spacing: .04em; color: #d1d1d6; }
+.is-available .home-station-label strong { color: #f2f2f4; }
+.home-station-label small { font-size: 9px; letter-spacing: .05em; color: #8b8b94; }
+.home-station-status { display: grid; justify-items: end; gap: 7px; }
+.home-station-status > span { font-size: 12px; }
+.home-station-status small { font-size: 8px; font-weight: 600; letter-spacing: .04em; }
+.home-station-arrow { font-size: 19px; margin-left: 2px; }
+.home-station:disabled { cursor: default; }
+.home-feedback { min-height: 40px; padding-top: 13px; font-size: 11px; color: #f0a12a; line-height: 1.6; }
+.home-footer { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid #2c2c33; padding: 18px 0 12px; color: #8b8b94; font-size: 8px; letter-spacing: .08em; }
+.home-pin-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 22px; background: #08080be6; }
+.home-pin { width: 100%; max-width: 360px; padding: 26px; border: 1px solid #3c3333; border-radius: 18px; background: #1c1c20; }
+.home-pin h2 { font-size: 21px; font-weight: 700; margin: 14px 0 22px; }
+.home-pin input { width: 100%; padding: 13px; margin-bottom: 16px; border: 1px solid #4c4c55; border-radius: 9px; font-size: 22px; letter-spacing: .3em; background: #131316; }
+.home-pin [role=alert] { font-size: 12px; color: #f0a12a; margin-bottom: 16px; }
+.home-pin-cancel { width: 100%; min-height: 44px; color: #aaaab2; margin-top: 10px; font-size: 11px; }
+
 @theme {
   --color-ink: #131316;
   --color-panel: #1c1c20;

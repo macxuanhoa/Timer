@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:sql": "node scripts/validate-sql.mjs",
+    "db:push": "node scripts/db-push.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
@@ -27,6 +28,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "pg": "^8.23.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
     "vite": "^8.3.5",

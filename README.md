@@ -143,10 +143,13 @@ The browser suite is serial: run the whole file (`npm run test:e2e`) rather than
 ## Production deployment (Supabase)
 
 1. Create a Supabase project (Postgres, Auth, Realtime enabled).
-2. Apply the migrations: copy `supabase/migrations/0001_init.sql` and `0002_rpc.sql` into
-   `supabase/migrations/` of a linked project and run `supabase db push` — or paste them into the
-   SQL editor. Do **not** run `supabase/tests/000_local_auth_stub.sql`; it exists only so plain
-   Postgres can execute the migrations locally.
+2. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
+   the database password without echoing it and applies `0001`–`0003` in order, recording each file in
+   `public._sc_migrations` so a re-run is a no-op. It connects through the Supavisor pooler because the
+   direct host `db.<ref>.supabase.co` only publishes an AAAA record and cannot be reached from an
+   IPv4-only network. The same files can be pasted into the SQL editor instead; add `-Baseline` if the
+   `sc.*` schema was created that way before. Do **not** run `supabase/tests/000_local_auth_stub.sql`;
+   it exists only so plain Postgres can execute the migrations locally.
 3. Create the five operator accounts (Authentication → Users): `lobby`, `gate`, `corridor`,
    `room305`, `supervisor` at your `VITE_OPERATOR_DOMAIN` (for example
    `gate@scream305.local`), each with its own password, then map them:
@@ -165,7 +168,9 @@ The browser suite is serial: run the whole file (`npm run test:e2e`) rather than
    ```
 5. Set `.env`: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
    `VITE_OPERATOR_DOMAIN`, then `npm run build` and host `dist/` on HTTPS (any static host; the
-   PWA needs a service-worker-capable origin).
+   PWA needs a service-worker-capable origin). On Vercel, `vercel.json` pins `npm run build` and
+   `dist/`, so the same three `VITE_*` values only need to exist in
+   Project → Settings → Environment Variables before the first deploy.
 6. Realtime revision hints come from Postgres changes on `sc.state` (already added to
    `supabase_realtime` by the migration); clients reconcile by calling `sc.snapshot()`, so a lost
    hint only delays a refresh, it never corrupts state.

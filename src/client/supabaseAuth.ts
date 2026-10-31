@@ -40,13 +40,14 @@ export interface RedeemResult {
 }
 
 /** What the person holding the phone needs to read, not the RPC code. */
-// Every link is one-shot, so none of these ever tells the operator to reuse a
-// link they already opened — the organizer re-issues instead.
+// Links are permanent (0007): the seat is what can be busy, so the wording tells
+// the operator to wait for the phone on duty or to use ĐỔI MÁY — never to ask
+// for a new link.
 const INVITE_ERROR: Record<string, string> = {
-  INVITATION_INVALID: 'LIÊN KẾT KHÔNG HỢP LỆ, ĐÃ DÙNG HOẶC HẾT HIỆU LỰC — XIN BAN TỔ CHỨC CẤP LINK MỚI',
-  ROLE_TAKEN: 'VỊ TRÍ NÀY ĐANG TRỰC Ở MÁY KHÁC — XIN BAN TỔ CHỨC CẤP LINK MỚI CHO MÁY NÀY',
-  STATIONS_LOCKED: 'ĐÃ ĐỦ 5 VỊ TRÍ — LIÊN KẾT MỚI TẠM KHÓA, NĂM MÁY ĐANG TRỰC VẪN GIỮ NGUYÊN VỊ TRÍ',
-  ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG TRỰC MỘT VỊ TRÍ KHÁC — DÙNG ĐÚNG LINK CỦA MÁY, HOẶC BẤM ĐỔI MÁY RỒI XIN LINK MỚI',
+  INVITATION_INVALID: 'LIÊN KẾT KHÔNG HỢP LỆ HOẶC ĐÃ BỊ THU HỒI — LIÊN HỆ BAN TỔ CHỨC',
+  ROLE_TAKEN: 'VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG',
+  STATIONS_LOCKED: 'ĐÃ ĐỦ 5 VỊ TRÍ — KHÔNG CÒN VỊ TRÍ TRỐNG',
+  ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG TRỰC MỘT VỊ TRÍ KHÁC — DÙNG ĐÚNG LINK CỦA VỊ TRÍ ĐÓ',
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
 };
 

@@ -113,6 +113,30 @@ async function main() {
   verdict('R0 five rehearsal links available (tokens not printed)', missing.length === 0,
     missing.length ? `${file}: missing ${missing.join(', ')}` : `${file}: all five`);
 
+  // --------------------- two phones redeem the same permanent link at once
+  // Exactly one may win the seat; the loser must get the official sentence.
+  // Nothing is consumed: the link stays reusable, so the run continues below.
+  const raceA = mk(), raceB = mk();
+  await raceA.auth.signInAnonymously();
+  await raceB.auth.signInAnonymously();
+  const [ra, rb] = await Promise.all([
+    raceA.rpc('redeem_invitation', { p_token: tokens.get('LOBBY'), p_device_id: 'race-A' }),
+    raceB.rpc('redeem_invitation', { p_token: tokens.get('LOBBY'), p_device_id: 'race-B' }),
+  ]);
+  const racers = [{ sb: raceA, r: ra }, { sb: raceB, r: rb }];
+  const winners = racers.filter((x) => x.r.data?.code === 'BOUND');
+  const losers = racers.filter((x) => x.r.data?.code === 'ROLE_TAKEN');
+  verdict('C1 simultaneous redeem: exactly one winner', winners.length === 1 && losers.length === 1,
+    `${ra.data?.code} / ${rb.data?.code}`);
+  verdict('C2 the loser gets "VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG"', losers[0]?.r.data?.message === 'VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG',
+    losers[0]?.r.data?.message ?? '(none)');
+  const racedWho = await losers[0]?.sb.rpc('whoami');
+  verdict('C3 the loser holds no role', racedWho?.data == null, JSON.stringify(racedWho?.data ?? null));
+  if (winners[0]) {
+    const rel = await winners[0].sb.rpc('release_device');
+    verdict('C4 the winner releases, so the same link is free again', rel.data?.code === 'RELEASED', JSON.stringify(rel.data));
+  }
+
   for (const role of ROLES) {
     const sb = mk();
     const { data, error } = await sb.auth.signInAnonymously();

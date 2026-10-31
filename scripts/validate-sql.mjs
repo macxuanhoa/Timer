@@ -60,9 +60,11 @@ try {
   run('004 invitations + binding', ['supabase/migrations/0004_invitations.sql']);
   run('005 public API surface', ['supabase/migrations/0005_public_api.sql']);
   run('006 station board + lock', ['supabase/migrations/0006_station_board.sql']);
+  run('007 permanent links', ['supabase/migrations/0007_permanent_links.sql']);
   run('010 five-operator scenario', ['supabase/tests/010_scenario.sql']);
   run('020 hardening scenario', ['supabase/tests/020_hardening.sql']);
   run('030 invitation scenario', ['supabase/tests/030_invitations.sql']);
+  run('031 permanent links', ['supabase/tests/031_permanent_links.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

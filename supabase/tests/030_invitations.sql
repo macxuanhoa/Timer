@@ -40,7 +40,9 @@ insert into sc.invitations (role, mode, token_hash, label, expires_at) values
   ('ROOM305',    'claim',    extensions.digest('room305-spare-6e9c2a5f8b1d4f7a0c3e6b9d2f5a8c1e04b7', 'sha256'), 'Tuan B', now() + interval '30 days');
 
 insert into sc.invitations (role, mode, token_hash, label, expires_at, revoked_at) values
-  ('ROOM305', 'claim', extensions.digest('expired-111111111111111111111111111111111111', 'sha256'), 'Old', now() - interval '1 day', null),
+  -- Two links burned by the organizer: 0007 ignores expiry, so a legacy date
+  -- alone must not be the reason a link is refused — revocation is.
+  ('ROOM305', 'claim', extensions.digest('expired-111111111111111111111111111111111111', 'sha256'), 'Burned legacy', null, now()),
   ('ROOM305', 'claim', extensions.digest('revoked-222222222222222222222222222222222222', 'sha256'), 'Gone', now() + interval '30 days', now());
 
 -- Test-only: act as one anonymous device with a given token.
@@ -152,7 +154,7 @@ begin
     raise exception 'ASSERT 4d failed: role changed to %', sc.my_role();
   end if;
 
-  -- == 5. unknown, expired and revoked links are all refused =============
+  -- == 5. unknown and revoked links are refused ============================
   v := sc.test_redeem(v_rep, 'not-a-real-token-0000000000000000000000000000', 'pixel-rep');
   if v->>'code' <> 'INVITATION_INVALID' then
     raise exception 'ASSERT 5a failed: %', v;
@@ -170,10 +172,10 @@ begin
     raise exception 'ASSERT 5d failed: empty token accepted: %', v;
   end if;
 
-  -- == 5e. a spent link is single use: another device gets nothing =========
+  -- == 5e. permanent link, exclusive seat: the second phone is refused =====
   v := sc.test_redeem(v_rep, v_tok_lobby, 'pixel-rep');
-  if v->>'code' <> 'INVITATION_INVALID' then
-    raise exception 'ASSERT 5e (replayed link) failed: %', v;
+  if v->>'code' <> 'ROLE_TAKEN' or v->>'message' <> 'VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG' then
+    raise exception 'ASSERT 5e (occupied seat) failed: %', v;
   end if;
   select count(*) into v_rows from sc.operators where user_id = v_rep;
   if v_rows <> 0 then
@@ -224,14 +226,19 @@ begin
   if sc.my_role() is not null then
     raise exception 'ASSERT 7d failed: a released device still resolves a role';
   end if;
-  -- a spent link is still spent; a freshly minted one binds the freed seat
+  -- == 7e. the same link binds again once its phone releases (0007) =======
   v := sc.test_redeem(v_gat, v_tok_gate, 'pixel-gate');
-  if v->>'code' <> 'INVITATION_INVALID' then
-    raise exception 'ASSERT 7e failed: a spent claim link re-bound a phone: %', v;
+  if v->>'code' <> 'BOUND' or v->>'role' <> 'GATE' then
+    raise exception 'ASSERT 7e failed: the same link did not work after release: %', v;
+  end if;
+  perform sc.test_as(v_gat);
+  v := sc.release_device();
+  if v->>'code' <> 'RELEASED' then
+    raise exception 'ASSERT 7f failed: %', v;
   end if;
   v := sc.test_redeem(v_gat, v_tok_gate_spare, 'pixel-gate');
   if v->>'code' <> 'BOUND' or v->>'role' <> 'GATE' then
-    raise exception 'ASSERT 7f failed: a freed seat refused a fresh link: %', v;
+    raise exception 'ASSERT 7g failed: a second link for the same station did not bind: %', v;
   end if;
 
   -- == 8. SUPERVISOR is reachable only through its own link ==============
@@ -318,9 +325,9 @@ begin
     raise exception 'ASSERT 8y failed: a full board still shows a free station: %', v_board;
   end if;
 
-  -- == 8z. a sixth phone is locked out, even holding a live link ==========
+  -- == 8z. a sixth phone is refused while all five seats are held =========
   v := sc.test_redeem(v_rep, v_tok_gate_new, 'pixel-rep');
-  if v->>'code' <> 'STATIONS_LOCKED' then
+  if v->>'code' <> 'ROLE_TAKEN' or v->>'message' <> 'VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG' then
     raise exception 'ASSERT 8z failed: a sixth phone joined a full board: %', v;
   end if;
   select count(*) into v_rows from sc.operators where user_id = v_rep;

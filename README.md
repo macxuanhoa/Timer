@@ -15,32 +15,30 @@ below.
 
 ## Operator access
 
-Production has no accounts and no login screen. A phone is bound to exactly one station by an
-invitation link:
+Production has no accounts and no login screen. There are exactly **five permanent station links**
+— one per role — built from 256-bit tokens of which only the SHA-256 is stored. A link never expires
+and is never spent; what is exclusive is the **seat**: at most one live device per role.
 
-1. The organizer mints one link per station — 256-bit tokens, of which only the SHA-256 is stored:
-   `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`
-   The five links are written to `%USERPROFILE%\.scream-305\invites-<date>.txt` (never into git, and
-   never into the terminal log) and are sent to the five phones.
+1. The organizer mints the five links once: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`.
+   They are written to `%USERPROFILE%\.scream-305\invites-<date>.txt` (never into git, never into the
+   terminal log) and are sent to the five phones.
 2. Opening `https://<app>/i/<token>` signs the phone in anonymously — Supabase Anonymous Sign-ins,
-   invisible to the operator — and exchanges the token for one device-bound `sc.operators` row. The
-   app lands straight on that station's dashboard: no password, no role picker.
+   invisible to the operator — and binds it to that station. The app lands straight on the station's
+   dashboard: no password, no role picker.
 3. The session survives refresh and PWA restart: Supabase persists the anonymous session and the app
-   re-reads its role with `whoami()` on every boot.
-4. One role, one phone, one link: a unique index over the live binding keeps a second phone off a
-   station that is already on duty. The invitation gate paints the five-seat board — **red** for a
-   station that already has a phone, **green** for a free one — and no link (claim or replacement) can
-   evict a phone that is on duty: opening it answers `VỊ TRÍ NÀY ĐANG TRỰC Ở MÁY KHÁC`.
-5. When all five stations are on duty the links **lock** for new phones (`STATIONS_LOCKED`). The lock
-   only refuses new devices: the five live bindings keep their role, their session and every command
-   they had. Re-opening a link from a phone that is already on duty resolves to its own station.
-6. Replacing a phone: `ĐỔI MÁY` on the old phone releases the binding and forgets its anonymous
-   identity, and the new phone is issued a fresh link. If the old phone is lost, the organizer frees
-   the seat explicitly — `...mint-invites.ps1 --release GATE` — or does both in one step:
-   `...mint-invites.ps1 --role GATE --reassign` releases the seat, then mints the replacement link.
-   The old phone is cut off at that moment, never later by whoever opens a link.
-7. A phone that is already on duty and re-opens a spent or foreign link stays on its own station:
-   the server-side binding, never the URL, is the authority.
+   re-reads its role with `whoami()` on every boot. Locking the screen or losing the network for a
+   while does not touch the binding.
+4. The link is reusable for ever, but only while its station is **free**. With a phone already on duty,
+   another phone opening the same link is refused with `VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG`, and no link —
+   a second one, a forgotten bookmark, an edited URL — can evict, replace or kick the phone on duty.
+5. The gate paints the five-seat board — **red** for a station that already has a phone, **green** for
+   a free one — straight from the database, before the phone holds any session.
+6. Replacing a phone: `ĐỔI MÁY` releases the binding on the server, then the new phone opens the
+   **same** link. Lost phone: the organizer runs `...mint-invites.ps1 --release GATE`, and the same link
+   is usable again — no new link is minted.
+7. Refresh, screen lock, PWA cold start and temporary network loss never free a seat. The only release
+   paths are `release_device` (the ĐỔI MÁY button) and the organizer's `--release`; there is no TTL and
+   no heartbeat that could drop a working phone.
 8. The token is removed from the address bar as soon as it has been read, and it is never written to
    storage: only the Supabase session is kept on the phone.
 
@@ -81,18 +79,21 @@ you would hand over a house key:
 | `ROOM305` (`NPC 3`) | the room phone | as above |
 | `SUPERVISOR` | the organizer's own phone only | never in a group chat — this link grants corrections, overrides and closure |
 
-- One link → one phone, once. After it binds, the link is dead, so a leaked *used* link is worthless;
-  a leaked *unused* link is burned with `...mint-invites.ps1 --revoke GATE` and re-minted.
+- Five links in total, permanent and reusable. Open one while its station is free and that phone takes
+  the seat; open it while the station is on duty and the answer is `VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG`.
+- A leaked link that is **not** bound is a station key: burn it with
+  `...mint-invites.ps1 --revoke GATE` and mint a replacement for that station only (`--role GATE`).
+  A leaked link that **is** bound is worse: `--release GATE` first, then replace the link.
 - Do not photograph the list, do not paste links into a group, do not print them on a QR at the desk,
-  and do not commit the file (it lives outside the repository by design). Delete it after setup.
-- A link can never take a station over from a phone that is on duty. Once a station is red on the
-  gate, only that phone (`ĐỔI MÁY`) or the organizer (`--release GATE`, or `--role GATE --reassign`)
-  frees it — and `--reassign` cuts the old phone off immediately, then mints the replacement link.
-- When the fifth station binds, every link locks for new phones. This is not an incident: the five
-  dashboards keep working, and a seat that is released turns green again and accepts a fresh link.
-- Links expire (`--expires <days>`, default 30). Re-mint rather than extending.
-- Staff never register anything: no email, no phone number, no password, no PIN. A new phone simply
-  gets a new link.
+  and do not commit the file (it lives outside the repository by design). Keep it — it is the only
+  copy, because the database stores hashes only.
+- Moving a station to another phone: `ĐỔI MÁY` on the old one (or `--release GATE` when the phone is
+  lost), then open the **same** link on the new one. Nothing is re-minted, nothing is re-registered.
+- All five on duty: a sixth phone is refused on every link, while the five dashboards keep their seat,
+  their session and every command. Freeing any seat makes its link usable again at once.
+- Nothing expires (`--expires` is ignored and warned about). Re-mint only for a leak or a lost file;
+  that revokes the station's previous link and nothing else.
+- Staff never register anything: no email, no phone number, no password, no PIN.
 
 The self-hosted engine (`npm run dev`) has no Supabase to redeem against, so `/?station=GATE` stands
 in for a link: it signs in with that station's `SC_PASSCODE_*` value (default `3110`; override the
@@ -199,15 +200,15 @@ build.
 ## Final rehearsal (never on the official event)
 
 The official event must still be frozen when the doors open: `event_started_at IS NULL`, no rounds,
-no action-log rows, an empty leaderboard and five unspent links. A rehearsal cannot be run there —
-one `CALL_TEAM` anchors the 90-minute clock, every press writes the append-only history, and each
-invitation link is spent the moment it binds. Two isolated environments are supported.
+no action-log rows, an empty leaderboard and five free seats. A rehearsal cannot be run there —
+one `CALL_TEAM` anchors the 90-minute clock, every press writes the append-only history, and the five
+rehearsal devices would take the five seats the event needs. Two isolated environments are supported.
 
 **Option A — a second Supabase project (closest to production).** Create an empty project, enable
 Anonymous sign-ins, apply the migrations, mint rehearsal links, then drive five devices:
 
 ```powershell
-powershell -File .\scripts\db-push.ps1        # 0001–0006 against the rehearsal database
+powershell -File .\scripts\db-push.ps1        # 0001–0007 against the rehearsal database
 powershell -File .\scripts\mint-invites.ps1 --base https://<rehearsal-app-url>
 node scripts/rehearsal.mjs --url https://<rehearsal-ref>.supabase.co --key <rehearsal-publishable-key> --links ~\.scream-305\invites-<date>.txt
 ```
@@ -248,8 +249,8 @@ Then walk the manual checklist, one tick per line, with five real phones on the 
 | 13 | `Xem thêm → Bảng xếp hạng` | finished rounds ranked, disputed ones withheld with a reason |
 | 14 | lock and unlock a phone mid-game | on reopening it rejoins the live round from the server |
 
-Afterwards reset the rehearsal state, and mint the **distribution** set from the official project
-only — rehearsal links are spent and worthless at the venue.
+Afterwards reset the rehearsal state. Rehearsal links stay bound to the rehearsal project, so the
+official five must be minted from the official project — and only after the rehearsal passes.
 
 One gotcha worth writing down: a `.env.local` containing `VITE_BACKEND=supabase` (created by
 `vercel env pull`) makes `npm run dev` skip the in-process engine, so Option B and
@@ -266,7 +267,7 @@ One gotcha worth writing down: a `.env.local` containing `VITE_BACKEND=supabase`
 | `npm run test:e2e` | Playwright: five phone profiles, one real round, 360 px layout, cutoff, overtime, the invitation gate |
 | `npm run typecheck` | `tsc --noEmit` over app, server, migrations-facing client code and tests |
 | `powershell -File .\scripts\db-push.ps1` | Applies pending migrations to the hosted Supabase project; prompts for the database password with no echo |
-| `powershell -File .\scripts\mint-invites.ps1` | Mints/burns station invitation links; writes them to `%USERPROFILE%\.scream-305\invites-<date>.txt` (`--list`, `--revoke GATE`, `--release GATE`, `--role GATE --reassign`) |
+| `powershell -File .\scripts\mint-invites.ps1` | Mints/replaces the five permanent station links (`--list` shows ACTIVE/REVOKED + OCCUPIED/available + NEVER EXPIRES; `--release GATE` frees a lost phone's seat; `--revoke GATE` burns a leaked link; `--role GATE` replaces one station's link) |
 
 The browser suite is serial: run the whole file (`npm run test:e2e`) rather than a single case.
 
@@ -278,12 +279,14 @@ The browser suite is serial: run the whole file (`npm run test:e2e`) rather than
    is bound to, and the gate reports `SUPABASE CHƯA BẬT ĐĂNG NHẬP ẨN DANH`. Nothing else about Auth
    needs configuring: there are no users to create, no email templates and no passwords.
 3. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
-   the database password without echoing it and applies `0001`–`0006` in order, recording each file in
+   the database password without echoing it and applies `0001`–`0007` in order, recording each file in
    `public._sc_migrations` so a re-run is a no-op. It connects through the Supavisor pooler because the
    direct host `db.<ref>.supabase.co` only publishes an AAAA record and cannot be reached from an
    IPv4-only network. The same files can be pasted into the SQL editor instead; add `-Baseline` if the
    `sc.*` schema was created that way before. Do **not** run `supabase/tests/000_local_auth_stub.sql`;
-   it exists only so plain Postgres can execute the migrations locally.
+   it exists only so plain Postgres can execute the migrations locally. **Never re-run 0004**: it renames
+   a live function and now that it is recorded, `db-push` skips it — if a ledger ever lost it, record it
+   by hand instead of applying it again.
 4. Mint the five station links: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`
    (add `--base https://your-app.vercel.app` if the default origin is wrong). The links are written to
    a file outside the repository; only their SHA-256 is ever stored in the database.
@@ -297,8 +300,9 @@ The browser suite is serial: run the whole file (`npm run test:e2e`) rather than
    keeps it. Realtime revision hints come from Postgres changes on `sc.state` (added to
    `supabase_realtime` by the migration); clients reconcile by calling `snapshot()`, so a lost hint
    only delays a refresh, it never corrupts state.
-7. Optional: delete the `*.txt` invitation file once the five phones are set up — the links in it are
-   spent anyway. A phone keeps its binding; a used or lost link is re-minted, never recovered.
+7. Keep the `*.txt` invitation file: the links are permanent, and the database stores hashes only, so
+   the file is the **only** copy. Treat it like the key cabinet. A lost file means minting new links for
+   that station (`--role GATE`), which revokes the old one — never a re-registration by staff.
 
 Server-side rights live in `sc.role_permissions`; clients hold no write grants and cannot execute the
 internal `sc` helpers. There is no separate backend service to deploy.
@@ -314,7 +318,7 @@ hardening brief: only `PASS` means the check was executed and its output support
 | R02 zero simultaneous active rounds | engine CAS + partial unique index `rounds_single_active`, SQL 020 §20, H7 | PASS |
 | R03 zero invalid READY transitions | `GATE_FINALIZE` cycle-aware checks: engine tests #8/#8b, H3/H4, SQL 010 §5, 020 §15 | PASS |
 | R04 zero unauthorized committed actions | permission table in `machine.ts` + `sc.role_permissions`; unit “gives every role…”, SQL 010 §1, 020 §13a/§15e, 030 §8 | PASS |
-| Operator entry: one role per phone, one-shot links | SQL 030 §1–§7, §8w–§8ae (bind, idempotent re-open, refusal, replay of a spent link, no takeover, full board locks, live phones untouched; refusals are proved caller-side with `my_role()`/`whoami()` so RLS cannot hide a stray binding) | PASS |
+| Operator entry: permanent reusable links, one seat per role | SQL 030 §1–§7, §8w–§8ae (bind, idempotent re-open, refusal, no takeover, full board, live phones untouched) + SQL 031 P1–P13/Q1–Q16 (first join, second phone refused with the official sentence, a second link cannot take over, release, same link reused, three reuse cycles, simultaneous redeem, past expiry ignored, revoked link refused, session revocation, 5/5 capacity, no function but `release_device` retires a binding) | PASS |
 | Operators hold no write grants | SQL 030 §10 (table privileges, `anon` cannot redeem, no internal `sc` helper is callable) | PASS |
 | R05 no lost acknowledged records | file/JSON persistence + snapshot reconciliation, SQL 010 §8 (history completeness), e2e reload cases | PASS |
 | R06 consistent official scores | `test/transport.test.ts` convergence asserts equal `official_duration_ms` on all five clients | PASS |
@@ -334,10 +338,12 @@ Commands and what they produced:
   reconciliation, offline/lost-response handling, disputes, reopen, layout, concurrency races,
   leaderboard eligibility, wall-display countdown, controlled-clock event replay, invitation-link
   parsing, and the boot path: a forged `localStorage` or `?role=` never becomes a role).
-- `npm run test:sql` — migrations 0001–0006 apply to Postgres 16 and **all three** scenarios pass:
-  010 (§1–§12), 020 (§13–§20) and 030 (invitations, the five-seat board and its link lock). 030 is what
-  caught `handle_command` resolving the operator row without honouring a released binding; it now goes
-  through a guarded wrapper.
+- `npm run test:sql` — migrations 0001–0007 apply to Postgres 16 and **all four** scenarios pass:
+  010 (§1–§12), 020 (§13–§20), 030 (bindings, board, privilege boundary) and 031 (permanent links:
+  reuse after release, exclusive seat, no takeover, no auto-release, catalog-level proof that
+  redemption holds neither consumption nor expiry logic). 030 is what caught `handle_command`
+  resolving the operator row without honouring a released binding; it now goes through a guarded
+  wrapper.
 - `npm run test:e2e` — **9 passing** browser cases, including a real offline STOP (`context.setOffline`)
   that proves no score is invented, the wall display auto-opening on `BẮT ĐẦU`, 360 px layout checks
   for all five roles, a phone that only sees the invitation gate unless it holds a link, and a

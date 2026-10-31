@@ -196,6 +196,65 @@ build.
    clock by itself. If it is a TV or tablet, open the LOBBY link on it: the display is read-only and
    changes no score, so it is safe to aim at the players.
 
+## Final rehearsal (never on the official event)
+
+The official event must still be frozen when the doors open: `event_started_at IS NULL`, no rounds,
+no action-log rows, an empty leaderboard and five unspent links. A rehearsal cannot be run there —
+one `CALL_TEAM` anchors the 90-minute clock, every press writes the append-only history, and each
+invitation link is spent the moment it binds. Two isolated environments are supported.
+
+**Option A — a second Supabase project (closest to production).** Create an empty project, enable
+Anonymous sign-ins, apply the migrations, mint rehearsal links, then drive five devices:
+
+```powershell
+powershell -File .\scripts\db-push.ps1        # 0001–0006 against the rehearsal database
+powershell -File .\scripts\mint-invites.ps1 --base https://<rehearsal-app-url>
+node scripts/rehearsal.mjs --url https://<rehearsal-ref>.supabase.co --key <rehearsal-publishable-key> --links ~\.scream-305\invites-<date>.txt
+```
+
+`scripts/rehearsal.mjs` signs in five anonymous devices, redeems the five links, runs
+`CALL_TEAM → TEAM_UPSTAIRS → START_GAME → HALLWAY_PROGRESS → ROOM_REACHED → PUZZLE_COMPLETE →
+RETURN_START → GAME_STOP → RESET_DONE ×3 → GATE_FINALIZE`, then runs a second round that forces
+`TIMEOUT` (it shortens `game_limit_ms` through supervisor `CONFIGURE`, so `allow_test_clock` stays
+false everywhere), and prints one PASS/FAIL row per check, including cross-role refusals and
+measured realtime push lag. Safety: it refuses the official project ref with no override flag, and
+aborts if the target event already has an active round or an anchored clock. Tokens are read from
+the mint file and never printed. Add `--keep-bound` to leave the five seats live for the manual
+phone walk-through, and `--game-limit-ms` to control how long the timeout takes.
+
+**Option B — the self-hosted engine on the venue Wi-Fi (fastest, zero Supabase exposure).** Delete
+`.scream-data/event.json`, run `npm run dev` on a laptop plugged into the same access point, and
+have the five phones open `http://<laptop-ip>:5173/?station=LOBBY` … `?station=SUPERVISOR`. Same
+rule engine, same SSE realtime, same alarms. Plain `http://` on a LAN IP is not a secure context,
+so service-worker install and Wake Lock are unavailable: this rehearses timing, hand-offs and
+audio, not the PWA shell. Never use `?station=` links on event day — they are a development harness.
+
+Then walk the manual checklist, one tick per line, with five real phones on the venue Wi-Fi:
+
+| # | Do on | Must see on all five phones |
+| --- | --- | --- |
+| 1 | LOBBY `CHO ĐỘI … LÊN` | 90:00 starts running; others show `ĐÃ GỌI ĐỘI`; GATE shows the wait line |
+| 2 | LOBBY `ĐÃ LÊN TẦNG 3` | rail moves to CỬA VÀO with `Đội đã lên tới cửa vào tầng 3` |
+| 3 | GATE `BẮT ĐẦU` | hero `05:00.000` counting in GAME mode; LOBBY phone becomes the wall display |
+| 4 | CORRIDOR `ĐÃ SETUP XONG`, ROOM305 `ĐÃ ĐẾN 305` | rail lights in order, no phone disagrees |
+| 5 | ROOM305 `XÁC NHẬN HOÀN THÀNH` | clock **keeps running**, `Trận đồ đã hoàn thành` |
+| 6 | (rehearsal only) let 5:00 expire | `HẾT GIỜ` flash, alarm audible, vibrate on Android — still no automatic clear |
+| 7 | GATE `KHÁCH ĐÃ RA — CHỐT GIỜ` | one `official_duration_ms`, identical on all five, outcome `WON`/`TIMEOUT` |
+| 8 | GATE `XÁC NHẬN SẴN SÀNG` too early | refused: `Chưa xác nhận reset: còn N tác vụ` |
+| 9 | CORRIDOR + ROOM305 (+ GATE if it owns the objects) `ĐÃ RESET XONG` | checklist fills, then GATE may finalize → `SẴN SÀNG` |
+| 10 | LOBBY calls the next team | only allowed now; rail restarts at SẢNH |
+| 11 | `Xem thêm → Kết nối & cảnh báo` on each phone | sane RTT and data age; write down the worst p95 (target < 500 ms) |
+| 12 | drop Wi-Fi on one phone during STOP | `ĐANG XÁC MINH…` then the truth; no score is invented |
+| 13 | `Xem thêm → Bảng xếp hạng` | finished rounds ranked, disputed ones withheld with a reason |
+| 14 | lock and unlock a phone mid-game | on reopening it rejoins the live round from the server |
+
+Afterwards reset the rehearsal state, and mint the **distribution** set from the official project
+only — rehearsal links are spent and worthless at the venue.
+
+One gotcha worth writing down: a `.env.local` containing `VITE_BACKEND=supabase` (created by
+`vercel env pull`) makes `npm run dev` skip the in-process engine, so Option B and
+`npm run test:e2e` both need that file absent.
+
 ## Commands
 
 | Command | What it does |

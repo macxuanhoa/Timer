@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIN, SEC, TestHub, entries, latest, playRound } from './helpers/harness';
 import { analytics, leaderboard, roundMetrics } from '../src/shared/metrics';
-import { eventRemainingMs } from '../src/shared/machine';
+import { evaluateDispatch } from '../src/shared/machine';
 import { resolveAlerts, resolveHero } from '../src/client/selectors';
 import type { CommandRequest } from '../src/shared/types';
 
@@ -292,7 +292,7 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(hub2.snapshot().active_round!.game_stopped_at).toBeNull();
   });
 
-  it('H9. the event clock survives every other action and never restarts (P0-07)', () => {
+  it('H9. first-dispatch history survives later actions without imposing a deadline (P0-07)', () => {
     const hub = new TestHub();
     const startedAt = hub.now();
     for (let i = 0; i < 3; i++) playRound(hub, { prepMs: 50 * SEC, gameMs: 100 * SEC, resetMs: 30 * SEC });
@@ -301,11 +301,12 @@ describe('hardening — disputes, recovery and concurrency', () => {
     hub.command('corridor', 'SET_LAYOUT', { layout: 'A' });
     expect(hub.snapshot().event.event_started_at).toBe(startedAt);
     expect(hub.snapshot().event.config.event_duration_ms).toBe(90 * MIN);
-    // the timeline keeps running negative; closing it stays a supervisor decision
-    hub.advance(90 * MIN);
+    // No event cutoff occurs; closing it stays a supervisor decision.
+    hub.advance(91 * MIN);
     expect(hub.snapshot().event.event_ended_at).toBeNull();
-    expect(eventRemainingMs(hub.snapshot().event, hub.now())!).toBeLessThan(0);
-    expect(analytics(hub.snapshot(), hub.now()).total_overtime_ms).toBeGreaterThanOrEqual(0);
+    expect(hub.snapshot().event_status).toBe('LIVE');
+    expect(evaluateDispatch(hub.snapshot().event, hub.now()).allowed).toBe(true);
+    expect(hub.command('lobby', 'CALL_TEAM').ok).toBe(true);
   });
   it('H10. a silent realtime channel is detected and repaired by verification (P0-02)', async () => {
     const hub = new TestHub();

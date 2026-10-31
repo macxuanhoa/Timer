@@ -1,21 +1,10 @@
-/**
- * Protected defaults for the 90-minute Halloween Scream Room event.
- * All values are milliseconds unless the name says otherwise.
- *
- * Two clocks only. The 90-minute event clock is a fixed timeline anchored by the
- * first LOBBY dispatch and never pauses; the 5-minute game clock is the flexible
- * window inside it, which GATE may pause or restart for the players.
- */
+/** Protected operational defaults. All values are milliseconds unless noted. */
 
 export const ROLES = ['LOBBY', 'GATE', 'CORRIDOR', 'ROOM305', 'SUPERVISOR'] as const;
 
 export const EVENT_DURATION_MS = 90 * 60_000;
 export const GAME_LIMIT_MS = 5 * 60_000;
 export const PREP_ALLOWANCE_MS = 90_000;
-
-/** Warning thresholds for the event clock. */
-export const EVENT_WARN_CLOSE_MS = 15 * 60_000;
-export const EVENT_WARN_END_MS = 5 * 60_000;
 
 /** The big wall display switches to its pre-expiry alarm look this late in the 5-minute game. */
 export const BIG_SCREEN_WARN_MS = 60_000;
@@ -29,6 +18,9 @@ export const STALL_WARN_MS = 60_000;
 
 export const LAYOUTS = ['A', 'B', 'C'] as const;
 export type HidingLayout = (typeof LAYOUTS)[number];
+
+/** Optional team label. The database enforces the same limit (migration 0013). */
+export const TEAM_NAME_MAX = 40;
 
 /** Client clock freshness bounds (P0-02). */
 export const VERIFY_INTERVAL_MS = 10_000;

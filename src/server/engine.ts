@@ -1,12 +1,11 @@
 import {
   EVENT_DURATION_MS,
-  EVENT_WARN_CLOSE_MS,
-  EVENT_WARN_END_MS,
   GAME_LIMIT_MS,
   PREP_ALLOWANCE_MS,
   RESET_TARGET_MS,
   REVIEW_THRESHOLD_MS,
   STALL_WARN_MS,
+  TEAM_NAME_MAX,
   type HidingLayout,
   type ResetTaskKey,
   type Role,
@@ -17,8 +16,6 @@ import {
   derivePhase,
   evaluateDispatch,
   evaluateGameStart,
-  eventDeadline,
-  eventRemainingMs,
   finalizeSnapshot,
   gameElapsedMs,
   isAllowed,
@@ -146,7 +143,7 @@ export class ScreamEngine {
 
   /** Latest committed state plus the authoritative server instant. */
   snapshot(nowMs = this.clock.nowMs()): Snapshot {
-    this.tick(nowMs);
+
     return finalizeSnapshot({
       revision: this.state.event.revision,
       server_now_ms: nowMs,
@@ -231,6 +228,7 @@ export class ScreamEngine {
       RESET_DONE: this.onResetDone,
       GATE_FINALIZE: this.onGateFinalize,
       SET_LAYOUT: this.onSetLayout,
+      SET_TEAM_NAME: this.onSetTeamName,
       REOPEN_RESET: this.onReopenReset,
       REVIEW_RESOLVE: this.onReviewResolve,
       END_EVENT: this.onEndEvent,
@@ -332,7 +330,7 @@ export class ScreamEngine {
     if (active) {
       return this.result(false, 'INVALID_STATE', 'Vẫn còn đội chưa hoàn tất', this.revision, now);
     }
-    // The first team to go upstairs is what starts the fixed 90-minute timeline.
+    // Record the first dispatch for history, without starting an event countdown.
     const firstTeam = this.state.event.event_started_at === null;
     if (firstTeam) this.state.event.event_started_at = now;
     const decision = evaluateDispatch(this.state.event, now);
@@ -344,13 +342,16 @@ export class ScreamEngine {
         });
       }
     }
-    const meta = (req.meta ?? {}) as { team_name?: string };
+    const name = teamNameOf(req.meta);
+    if (name !== null && name.length > TEAM_NAME_MAX) {
+      return this.result(false, 'INVALID_STATE', `Tên đội tối đa ${TEAM_NAME_MAX} ký tự`, this.revision, now);
+    }
     const round: Round = {
       id: `rnd_${this.state.event.next_team_number}_${now.toString(36)}`,
       event_id: this.state.event.id,
       round_number: this.state.rounds.length + 1,
       team_number: this.state.event.next_team_number,
-      team_name: meta.team_name?.trim() || null,
+      team_name: name,
       status: 'LOBBY_CALL',
       stage: 1,
       called_at: now,
@@ -396,12 +397,11 @@ export class ScreamEngine {
         revision: 0,
       });
     }
-    this.commit(req, now, round, 'LOBBY_CALL', firstTeam ? `Đã gọi đội #${pad3(round.team_number)} · đồng hồ 90:00 chạy từ đây` : `Đã gọi đội #${pad3(round.team_number)}`, {
+    this.commit(req, now, round, 'LOBBY_CALL', `Đã gọi đội #${pad3(round.team_number)}`, {
       override: !decision.allowed ? true : undefined,
       remaining_ms: decision.remaining_ms,
       hiding_layout: round.hiding_layout,
       event_clock_started: firstTeam ? true : undefined,
-      deadline_ms: firstTeam ? eventDeadline(this.state.event) : undefined,
     });
     return this.result(true, 'OK', `Đội #${pad3(round.team_number)} đang lên tầng`, this.revision, now);
   }
@@ -451,9 +451,8 @@ export class ScreamEngine {
   }
 
   /**
-   * GATE freezes the 5-minute window (a player fell, the puzzle jammed, the
-   * hallway blocked). The 90-minute timeline is untouched and keeps counting, so
-   * a pause is always a cost the whole room can see, never free time.
+   * GATE freezes the 5-minute window when a player falls, the puzzle jams, or the
+   * hallway is blocked. Paused gaps do not count toward the official score.
    */
   private onGamePause(req: CommandRequest, now: number): CommandResult {
     const round = this.requireRunning(req, now);
@@ -702,6 +701,40 @@ export class ScreamEngine {
   }
 
   /**
+   * The optional label of the team currently on the floor. It is a normal
+   * revisioned command: every station receives the corrected name with the next
+   * snapshot, and the change stays in the audit history.
+   */
+  private onSetTeamName(req: CommandRequest, now: number): CommandResult {
+    const round = this.requireActive(req, now);
+    if (!round) return this.invalidRound(req, now);
+    const raw = (req.meta as { team_name?: unknown } | undefined)?.team_name;
+    // A missing value is a malformed command, never a silent erase: clearing the
+    // name must be an explicit empty string.
+    if (typeof raw !== 'string') {
+      return this.result(false, 'INVALID_STATE', 'Thiếu tên đội', this.revision, now);
+    }
+    const name = teamNameOf(req.meta);
+    if (name !== null && name.length > TEAM_NAME_MAX) {
+      return this.result(false, 'INVALID_STATE', `Tên đội tối đa ${TEAM_NAME_MAX} ký tự`, this.revision, now);
+    }
+    if (round.team_name === name) {
+      return this.result(true, 'OK', 'Tên đội không thay đổi', this.revision, now);
+    }
+    const before = round.team_name;
+    round.team_name = name;
+    this.commit(
+      req,
+      now,
+      round,
+      round.status,
+      name ? `Đặt tên đội #${pad3(round.team_number)}: ${name}` : `Đã xoá tên đội #${pad3(round.team_number)}`,
+      { team_name: name, previous_team_name: before },
+    );
+    return this.result(true, 'OK', name ? `Đã đặt tên đội: ${name}` : 'Đã xoá tên đội', this.revision, now);
+  }
+
+  /**
    * P0-06: reopening a reset invalidates every confirmation of the round by
    * advancing its reset cycle, and revokes READY so no team can be dispatched on
    * the old acknowledgement set. The original records stay in the audit log.
@@ -792,7 +825,7 @@ export class ScreamEngine {
     }
     this.state.event.event_ended_at = now;
     this.commit(req, now, null, 'ENDED', 'Sự kiện đã kết thúc (đóng có kiểm soát)', {
-      overtime_ms: eventRemainingMs(this.state.event, now) === null ? 0 : Math.max(0, -(eventRemainingMs(this.state.event, now) as number)),
+      overtime_ms: 0,
     });
     return this.result(true, 'OK', 'SỰ KIỆN KẾT THÚC', this.revision, now);
   }
@@ -939,53 +972,6 @@ export class ScreamEngine {
     return 'WON';
   }
 
-  /**
-   * Derived time boundaries. Only writes when a discrete boundary is crossed,
-   * so no countdown frame ever touches storage. Past the deadline the clock is
-   * deliberately left running negative: closing the event is a human decision
-   * (`END_EVENT`), never something the timer does to an occupied building.
-   */
-  private tick(now: number): void {
-    const ev = this.state.event;
-    const remaining = eventRemainingMs(ev, now);
-    if (remaining === null || ev.event_ended_at !== null) return;
-    const active = this.activeRound();
-    if (remaining <= 0) {
-      if (active && ev.overtime_started_at === null) {
-        ev.overtime_started_at = now;
-        this.autoLog('OVERTIME_STARTED', active, 'EVENT OVERTIME', now, { remaining_ms: remaining });
-      }
-      return;
-    }
-    if (remaining <= EVENT_WARN_CLOSE_MS && ev.closing_warned_at === null) {
-      ev.closing_warned_at = now;
-      this.autoLog('CONFIGURE', null, 'CLOSING', now, { warning: '15m' });
-    }
-    if (remaining <= EVENT_WARN_END_MS && ev.end_warned_at === null) {
-      ev.end_warned_at = now;
-      this.autoLog('CONFIGURE', null, 'CLOSING', now, { warning: '5m' });
-    }
-  }
-
-  private autoLog(action: ActionType, round: Round | null, toState: string | null, now: number, meta: Record<string, unknown>): void {
-    this.state.event.revision += 1;
-    this.state.log.push({
-      seq: this.state.log.length + 1,
-      event_id: this.state.event.id,
-      round_id: round?.id ?? null,
-      team_number: round?.team_number ?? null,
-      action,
-      actor_role: 'SUPERVISOR',
-      actor_id: 'system.clock',
-      from_state: round?.status ?? null,
-      to_state: toState,
-      at_ms: now,
-      revision: this.state.event.revision,
-      idempotency_key: `auto:${toState}:${now}`,
-      metadata: meta,
-    });
-  }
-
   private operatorStates(): OperatorState[] {
     const roles: Role[] = ['LOBBY', 'GATE', 'CORRIDOR', 'ROOM305', 'SUPERVISOR'];
     return roles.map((role) => {
@@ -1005,6 +991,14 @@ export class ScreamEngine {
 /* ------------------------------------------------------------------ helpers */
 
 export { deriveEventStatus, derivePhase };
+
+/** Trim a submitted team label; missing or non-string input means “no label”. */
+function teamNameOf(meta: CommandRequest['meta']): string | null {
+  const raw = (meta as { team_name?: unknown } | undefined)?.team_name;
+  if (typeof raw !== 'string') return null;
+  const name = raw.trim().replace(/\s+/g, ' ');
+  return name.length > 0 ? name : null;
+}
 
 export function pad3(n: number): string {
   return String(n).padStart(3, '0');

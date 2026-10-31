@@ -27,7 +27,7 @@ type Listener = (hint: RevisionHint) => void;
 
 /**
  * In-process authoritative hub: one engine, one fake clock, N gateway views.
- * Lets the entire 90-minute event be replayed without waiting 90 minutes.
+ * Lets long sessions be replayed without waiting in real time.
  */
 export class TestHub {
   clock: Clock;

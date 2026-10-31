@@ -4,7 +4,7 @@ import type { LiveStore } from '../client/liveStore';
 import type { StoredSession } from './session';
 import { analytics, formatClockMs, formatClockSec, formatDuration, formatSeconds, formatWallTime, leaderboard, roundMetrics } from '../shared/metrics';
 import { OUTCOME_LABEL, RESET_TASKS, RESET_TASK_LABEL, REVIEW_REASON_LABEL, ROLE_LABEL, STATUS_LABEL, LAYOUTS, type Role } from '../shared/constants';
-import { eventRemainingMs, isGameRunning } from '../shared/machine';
+import { isGameRunning } from '../shared/machine';
 import { disputedRounds } from '../shared/metrics';
 import { pad } from '../client/selectors';
 import { alarms } from './sound';
@@ -38,7 +38,7 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
         <Dialog.Content className="sheet-content flex flex-col" data-testid="details-sheet" aria-describedby={undefined}>
           <header className="flex items-center justify-between border-b border-hair px-4 py-3">
             <Dialog.Title className="text-[0.8rem] font-semibold tracking-[0.16em] text-snow">
-              {snap ? `${snap.rounds.length} LƯỢT · SỰ KIỆN ${formatClockSec(eventRemainingMs(snap.event, now) ?? 0)}` : 'ĐANG ĐỒNG BỘ'}
+              {snap ? `${snap.rounds.length} LƯỢT CHƠI` : 'ĐANG ĐỒNG BỘ'}
             </Dialog.Title>
             <Dialog.Close className="rounded px-3 py-1 text-[0.85rem] text-mute" data-testid="close-details">
               Đóng
@@ -357,13 +357,8 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
         tone="text-ember"
       />
       <Row k="Tổng thời gian chờ" v={formatDuration(stats.total_idle_ms)} />
-      <Row k="Overtime sự kiện" v={formatDuration(stats.total_overtime_ms)} tone={stats.total_overtime_ms > 0 ? 'text-blood' : 'text-snow'} />
       <Row k="Reset 5:00 (toàn sự kiện)" v={String(stats.clock_resets)} tone={stats.clock_resets > 0 ? 'text-ember' : 'text-snow'} />
       <Row k="Tạm dừng 5:00 (toàn sự kiện)" v={String(stats.clock_pauses)} tone={stats.clock_pauses > 0 ? 'text-ember' : 'text-snow'} />
-      <Row
-        k="Ước tính còn lại"
-        v={stats.remaining_capacity_estimate === null ? '—' : `≈ ${stats.remaining_capacity_estimate} đội (ước tính)`}
-      />
       <div className="mt-3 rounded-panel border border-hair px-3 py-2 text-[0.66rem] leading-relaxed text-mute" data-testid="sync-quality">
         Đồng bộ hiển thị: offset máy khách đã hiệu chỉnh bằng RTT. RTT trung vị {state.maxDisplayErrorMs === null ? '—' : 'đã đo'}, sai số
         tối đa ước tính {state.maxDisplayErrorMs === null ? 'chưa đồng bộ' : `${state.maxDisplayErrorMs} ms`} · now = {formatWallTime(now)}
@@ -455,9 +450,9 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   return (
     <div className="flex flex-col gap-4" data-testid="management">
       <div className="flex flex-col gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">CUỒI SỰ KIỆN (SUPERVISOR)</p>
+        <p className="text-[0.7rem] tracking-[0.1em] text-mute">ĐIỀU KHIỂN SỰ KIỆN (SUPERVISOR)</p>
         <p className="text-[0.7rem] text-mute">
-          Thời lượng sự kiện {Math.round(snap.event.config.event_duration_ms / 60000)} phút · giới hạn trận{' '}
+          Giới hạn mỗi lượt{' '}
           {Math.round(snap.event.config.game_limit_ms / 1000)} giây (mặc định bảo vệ, chỉ đổi trước khi chạy).
         </p>
         {!started && (
@@ -488,14 +483,14 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
         {!started ? (
           <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
-            Đồng hồ 90:00 mở khi LOBBY gọi đội đầu tiên — không cần bấm bắt đầu sự kiện.
+            LOBBY gọi đội đầu tiên. GATE bấm BẮT ĐẦU để chạy đồng hồ 5:00.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
             <input
               value={closeReason}
               onChange={(e) => setCloseReason(e.target.value)}
-              placeholder="Lý do đóng sự kiện sớm (bắt buộc, vào nhật ký)"
+              placeholder="Lý do đóng sự kiện (bắt buộc, vào nhật ký)"
               className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
               data-testid="close-reason"
             />

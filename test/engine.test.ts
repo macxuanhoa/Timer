@@ -1,21 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { MIN, SEC, TestHub, entries, latest, playRound } from './helpers/harness';
 import { analytics, leaderboard, roundMetrics, cycleMetrics } from '../src/shared/metrics';
-import { evaluateDispatch, evaluateGameStart, eventRemainingMs, gameRemainingMs } from '../src/shared/machine';
+import { evaluateDispatch, evaluateGameStart, gameRemainingMs } from '../src/shared/machine';
 import { resolveAlerts, resolveHero } from '../src/client/selectors';
 
 /**
- * Every case here runs on the controlled fake clock (requirement 20): the whole
- * 90-minute event is replayed without waiting 90 real minutes.
+ * Every case here runs on the controlled fake clock so long event durations can
+ * be exercised without waiting in real time.
  */
 describe('PASS 1 — event & game timekeeping', () => {
-  it('1. the first dispatch anchors the 90-minute timeline; only a human closes it', () => {
+  it('1. the first dispatch is history only; elapsed event time never closes it', () => {
     const hub = new TestHub();
     expect(hub.snapshot().phase).toBe('PRE_EVENT');
     expect(hub.snapshot().event.config.event_duration_ms).toBe(90 * MIN);
-    // nothing has gone upstairs yet, so the fixed timeline is not running at all
+    // nothing has gone upstairs yet, so no event timestamp has been recorded
     expect(hub.snapshot().event.event_started_at).toBeNull();
-    expect(eventRemainingMs(hub.snapshot().event, hub.now())).toBeNull();
 
     expect(hub.command('gate', 'CALL_TEAM').code).toBe('PERMISSION_DENIED'); // §2 lobby only
     const res = hub.command('lobby', 'CALL_TEAM');
@@ -23,22 +22,20 @@ describe('PASS 1 — event & game timekeeping', () => {
     expect(hub.snapshot().event.event_started_at).toBe(hub.now());
     expect(hub.snapshot().event.config).toMatchObject({ game_limit_ms: 5 * MIN });
 
-    hub.advance(89 * MIN);
-    expect(hub.snapshot().event_status).toBe('CLOSING');
-    hub.advance(2 * MIN);
-    // the clock never stops by itself: it keeps counting as a negative number
+    hub.advance(91 * MIN);
+    expect(hub.snapshot().event_status).toBe('LIVE');
+    // Elapsed event time never ends the event or limits the next team.
     expect(hub.snapshot().event.event_ended_at).toBeNull();
-    expect(eventRemainingMs(hub.snapshot().event, hub.now())).toBe(-1 * MIN);
-    expect(hub.snapshot().phase).not.toBe('ENDED');
+    expect(hub.snapshot().phase).toBe('PREPARING');
   });
 
   it('1b. no database write happens on a countdown frame', () => {
     const hub = new TestHub();
     const revision = hub.snapshot().revision;
     for (let i = 0; i < 500; i++) hub.advance(200); // 100 simulated seconds of ticking
-    expect(hub.snapshot().revision).toBe(revision + 0); // only warnings bump it
+    expect(hub.snapshot().revision).toBe(revision);
     const warnings = entries(hub).filter((l) => l.actor_id === 'system.clock');
-    expect(warnings.length).toBeLessThanOrEqual(2); // 15m and 5m warnings only
+    expect(warnings).toHaveLength(0);
   });
 
   it('2. the 5-minute game clock starts independently and expires at 300 s', () => {
@@ -220,42 +217,24 @@ describe('PASS 1 — event & game timekeeping', () => {
 });
 
 describe('PASS 1 — admission control, integrity and outcomes', () => {
-  it('9. blocks admission when the remaining event time is insufficient', () => {
-    const hub = new TestHub();
-    playRound(hub); // the first team anchors the fixed 90:00 timeline
-    const deadline = hub.snapshot().event.event_started_at! + 90 * MIN;
-    hub.advance(deadline - (5 * MIN + 90 * SEC) + 10 * SEC - hub.now()); // 5m40s left, needs 6m30s
-    const blocked = hub.command('lobby', 'CALL_TEAM');
-    expect(blocked.code).toBe('BLOCKED');
-    expect(blocked.requires_override).toBe(true);
-    expect(blocked.message).toContain('KHÔNG NHẬN ĐỘI MỚI');
-
-    // hard stop: no override at all once the event clock is exhausted
-    const left = eventRemainingMs(hub.snapshot().event, hub.now())!;
-    hub.advance(left);
-    expect(hub.command('supervisor', 'CALL_TEAM', { override: true, reason: 'khach VIP' }).code).toBe('BLOCKED');
-    expect(evaluateDispatch(hub.snapshot().event, hub.now()).overridePossible).toBe(false);
-  });
-
-  it('9b. supervisor override is explicit and audited', () => {
+  it('9. allows dispatch and start after the legacy 90-minute duration', () => {
     const hub = new TestHub();
     playRound(hub);
-    const deadline = hub.snapshot().event.event_started_at! + 90 * MIN;
-    hub.advance(deadline - 6 * MIN - hub.now()); // exactly 6 minutes remain
-    expect(hub.command('lobby', 'CALL_TEAM').code).toBe('BLOCKED');
-    expect(hub.command('supervisor', 'CALL_TEAM', { override: true }).code).toBe('BLOCKED'); // no reason
-    const ok = hub.command('supervisor', 'CALL_TEAM', { override: true, reason: 'Doi khach dat truoc' });
-    expect(ok.ok).toBe(true);
-    const round = hub.snapshot().active_round!;
-    expect(round.admission_override).toBe(true);
-    const entry = latest(hub, 'CALL_TEAM')!;
-    expect(entry.metadata?.reason).toBe('Doi khach dat truoc');
-    expect(entry.actor_role).toBe('SUPERVISOR');
-    // game start still guarded by the 5-minute rule
-    hub.advance(90 * SEC);
-    expect(hub.command('gate', 'START_GAME').code).toBe('BLOCKED');
-    expect(evaluateGameStart(hub.snapshot().event, hub.now()).overridePossible).toBe(true);
-    expect(hub.command('supervisor', 'START_GAME', { override: true, reason: 'Ngoai le: cho vao' }).ok).toBe(true);
+    hub.advance(91 * MIN);
+    const called = hub.command('lobby', 'CALL_TEAM');
+    expect(called.ok).toBe(true);
+    expect(hub.snapshot().active_round?.admission_override).toBe(false);
+    expect(evaluateDispatch(hub.snapshot().event, hub.now()).allowed).toBe(true);
+    expect(hub.command('gate', 'START_GAME').ok).toBe(true);
+    expect(evaluateGameStart(hub.snapshot().event, hub.now()).allowed).toBe(true);
+  });
+
+  it('9b. explicit supervisor closure still blocks later dispatches', () => {
+    const hub = new TestHub();
+    playRound(hub);
+    expect(hub.command('supervisor', 'END_EVENT', { reason: 'Đóng theo kế hoạch' }).ok).toBe(true);
+    expect(hub.command('lobby', 'CALL_TEAM').code).toBe('INVALID_STATE');
+    expect(hub.command('supervisor', 'CALL_TEAM').code).toBe('INVALID_STATE');
   });
 
   it('10. confirming the puzzle does not stop the clock', () => {
@@ -303,14 +282,14 @@ describe('PASS 1 — admission control, integrity and outcomes', () => {
     expect(hub.command('gate', 'GATE_FINALIZE').ok).toBe(true);
   });
 
-  it('11b. overtime is persisted separately from the scheduled close', () => {
+  it('11b. elapsed event time has no overtime state and never closes a round', () => {
     const hub = new TestHub();
     hub.command('lobby', 'CALL_TEAM');
     hub.advance(60 * SEC);
     hub.command('gate', 'START_GAME');
-    hub.advance(90 * MIN); // event deadline passes mid-game
+    hub.advance(90 * MIN); // no event-level deadline
     const snap = hub.snapshot();
-    expect(snap.event.overtime_started_at).not.toBeNull();
+    expect(snap.event.overtime_started_at).toBeNull();
     expect(snap.event.event_ended_at).toBeNull();
     expect(snap.phase).toBe('GAME_OVERTIME');
     hub.command('room305', 'ROOM_REACHED');
@@ -323,11 +302,11 @@ describe('PASS 1 — admission control, integrity and outcomes', () => {
     hub.command('corridor', 'RESET_DONE');
     hub.command('gate', 'GATE_FINALIZE');
     const closed = hub.snapshot();
-    // nobody auto-closes an occupied building: the timeline stays open (negative)
+    // The room stays available for the next team until a supervisor closes it.
     expect(closed.event.event_ended_at).toBeNull();
-    expect(closed.phase).toBe('RESET_OVERTIME');
-    expect(analytics(closed, hub.now()).total_overtime_ms).toBeGreaterThan(0);
-    expect(hub.command('supervisor', 'END_EVENT', { reason: 'Het gio, khu vuc da trong' }).ok).toBe(true);
+    expect(closed.event_status).toBe('LIVE');
+    expect(closed.phase).toBe('READY');
+    expect(hub.command('lobby', 'CALL_TEAM').ok).toBe(true);
   });
 
   it('12. the official STOP closes the round exactly once', () => {
@@ -514,38 +493,35 @@ describe('PASS 1 — admission control, integrity and outcomes', () => {
     expect(hub.command('supervisor', 'END_EVENT', { reason: 'lan 2' }).code).toBe('INVALID_STATE');
   });
 
-  it('20. the whole 90-minute event replays in one pass without real waiting', () => {
+  it('20. the event accepts teams after 90 minutes and still closes explicitly', () => {
     const hub = new TestHub();
     const startedAt = hub.now();
-    let rounds = 0;
     for (let i = 0; i < 24; i++) {
-      const remaining = hub.snapshot().event.config.event_duration_ms - (hub.now() - startedAt);
-      if (remaining < 5 * MIN + 90 * SEC) break;
       playRound(hub, { prepMs: 70 * SEC, gameMs: 140 * SEC, resetMs: 50 * SEC });
       hub.advance(20 * SEC);
-      rounds += 1;
     }
-    const snap = hub.snapshot();
-    expect(rounds).toBeGreaterThanOrEqual(17);
-    expect(snap.rounds).toHaveLength(rounds);
-    expect(leaderboard(snap)).toHaveLength(rounds);
-    expect(hub.command('lobby', 'CALL_TEAM').code).toBe('BLOCKED');
     hub.advance(10 * MIN);
-    // past the deadline the fixed timeline keeps running negative; a supervisor closes it
+    expect(hub.now() - startedAt).toBeGreaterThan(90 * MIN);
     expect(hub.snapshot().event.event_ended_at).toBeNull();
-    expect(hub.snapshot().phase).toBe('RESET_OVERTIME');
-    expect(hub.command('supervisor', 'END_EVENT', { reason: 'Het gio su kien' }).ok).toBe(true);
+    expect(hub.snapshot().phase).toBe('READY');
+    expect(evaluateDispatch(hub.snapshot().event, hub.now()).allowed).toBe(true);
+    const afterLimit = playRound(hub, { prepMs: 10 * SEC, gameMs: 30 * SEC, resetMs: 10 * SEC });
+    expect(afterLimit.stop.ok).toBe(true);
+    const rounds = hub.snapshot().rounds.length;
+    expect(rounds).toBe(25);
+    const snap = hub.snapshot();
+    expect(leaderboard(snap)).toHaveLength(rounds);
+    expect(hub.command('supervisor', 'END_EVENT', { reason: 'Đóng có kiểm soát' }).ok).toBe(true);
     expect(hub.snapshot().phase).toBe('ENDED');
     const stats = analytics(hub.snapshot(), hub.now());
     expect(stats.teams_completed).toBe(rounds);
     expect(stats.avg_cycle_ms).not.toBeNull();
     expect(entries(hub).length).toBeGreaterThan(rounds * 8);
-    expect(hub.now() - startedAt).toBeLessThan(90 * MIN + 20 * MIN);
   });
 });
 
 describe('PASS 1 — the flexible 5:00 window (pause / reset)', () => {
-  /** A team on the clock: 90:00 already anchored by the dispatch. */
+  /** A team on the clock: the first dispatch is recorded for history. */
   const onTheClock = () => {
     const hub = new TestHub();
     hub.command('lobby', 'CALL_TEAM');
@@ -562,10 +538,11 @@ describe('PASS 1 — the flexible 5:00 window (pause / reset)', () => {
     const limit = hub.snapshot().event.config.game_limit_ms;
     expect(gameRemainingMs(hub.snapshot().active_round!, limit, hub.now())).toBe(210 * SEC);
 
-    hub.advance(5 * MIN); // the fixed 90:00 keeps counting while the game is frozen
+    hub.advance(91 * MIN); // no event cutoff; paused 5:00 stays frozen
     const paused = hub.snapshot();
     expect(gameRemainingMs(paused.active_round!, limit, hub.now())).toBe(210 * SEC);
-    expect(eventRemainingMs(paused.event, hub.now())).toBe(90 * MIN - 450 * SEC);
+    expect(paused.event_status).toBe('LIVE');
+    expect(paused.event.event_ended_at).toBeNull();
     expect(paused.phase).toBe('RUNNING'); // a paused game is not overtime
     expect(resolveHero(paused, hub.now()).mode).toBe('GAME_PAUSED');
     expect(resolveAlerts(paused, hub.now(), false).some((a) => a.id === 'PAUSE')).toBe(true);

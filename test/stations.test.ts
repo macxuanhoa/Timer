@@ -16,7 +16,7 @@ describe('station relay — exactly one leg lit at a time', () => {
   it('lights LOBBY before the first call, and GATE only after it', () => {
     const hub = new TestHub();
 
-    // Nothing has run yet: LOBBY is the station that opens the 90:00.
+    // Nothing has run yet: LOBBY calls the first team.
     expect(active(hub)).toEqual(['LOBBY']);
     expect(turn(hub)).toEqual(['LOBBY']);
 

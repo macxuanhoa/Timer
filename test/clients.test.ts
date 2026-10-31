@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { OPERATORS, SEC, TestHub } from './helpers/harness';
 import { resolveHero, resolvePrimary, activeRound } from '../src/client/selectors';
+import { LiveStore } from '../src/client/liveStore';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function settle(times = 8) {
@@ -36,6 +37,28 @@ describe('PASS 2 — five synchronized operator clients', () => {
     clients.forEach((c) => c.store.stop());
   });
 
+  it('14c. a team rename reaches every phone at the same revision', async () => {
+    const hub = new TestHub();
+    const lobby = hub.client('lobby');
+    const gate = hub.client('gate');
+    await lobby.store.start();
+    await gate.store.start();
+    await settle();
+
+    await lobby.store.act('CALL_TEAM', { team_name: 'Ma Tro' });
+    await settle();
+    expect(gate.store.getSnapshot().snapshot?.active_round?.team_name).toBe('Ma Tro');
+
+    // The correction is a normal command: the other station adopts it with the
+    // acknowledged revision, not on its next poll.
+    expect((await lobby.store.act('SET_TEAM_NAME', { team_name: 'Nhà Búp Bê' }))?.ok).toBe(true);
+    await settle();
+    expect(gate.store.getSnapshot().snapshot?.active_round?.team_name).toBe('Nhà Búp Bê');
+    expect(gate.store.getSnapshot().revision).toBe(lobby.store.getSnapshot().revision);
+    lobby.store.stop();
+    gate.store.stop();
+  });
+
   it('14b. each role sees exactly one obvious next action', async () => {
     const hub = new TestHub();
     const stores = new Map(OPERATORS.map((o) => [o.role, hub.client(o.id).store]));
@@ -49,7 +72,7 @@ describe('PASS 2 — five synchronized operator clients', () => {
     };
 
     expect(label('SUPERVISOR').action).toBe(null);
-    expect(label('LOBBY').action).toBe('CALL_TEAM'); // the first dispatch starts the 90:00
+    expect(label('LOBBY').action).toBe('CALL_TEAM'); // LOBBY calls the first team
     expect(label('GATE').action).toBe(null);
     expect(label('GATE').label).toContain('CHỜ LOBBY');
 
@@ -203,6 +226,42 @@ describe('PASS 2 — five synchronized operator clients', () => {
     expect(Math.abs(c.store.serverNow() - hub.now())).toBeLessThan(50);
     expect(c.store.getSnapshot().maxDisplayErrorMs).not.toBeNull();
     c.store.stop();
+  });
+
+  it('a press instant reaches the wire as a whole millisecond', async () => {
+    const hub = new TestHub();
+    const lobby = hub.client('lobby');
+    await lobby.store.start();
+    await lobby.store.act('CALL_TEAM');
+    await settle();
+
+    const inner = hub.gateway('gate');
+    const sent: number[] = [];
+    // performance.now() is fractional in every browser, so the calibrated press
+    // estimate is too; the harness clock hides that by ticking in whole ms.
+    let mono = 1000.25;
+    const store = new LiveStore({
+      gateway: {
+        ...inner,
+        command: (req, opts) => {
+          sent.push(req.press!.press_ms);
+          return inner.command(req, opts);
+        },
+      },
+      account: { id: 'gate', role: 'GATE', display_name: 'Hung' },
+      mono: () => (mono += 1.5),
+    });
+    await store.start();
+    await settle();
+
+    expect((await store.act('START_GAME'))?.ok).toBe(true);
+    // A fractional instant is rejected outright by the database, which would
+    // roll the press back and report "CHƯA ĐƯỢC GHI NHẬN" on every retry.
+    expect(sent).toHaveLength(1);
+    expect(Number.isInteger(sent[0])).toBe(true);
+    expect(hub.snapshot().active_round?.start_press_ms).toBe(sent[0]);
+    store.stop();
+    lobby.store.stop();
   });
 
   it('double taps from one phone produce one server action', async () => {

@@ -240,7 +240,7 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
     });
     expect(forbidden.status).toBe(403);
 
-    // jump 76 minutes: the event must flip to CLOSING without any operator press
+    // jump 76 minutes: the event remains live, while the 5-minute game expires
     const res = await fetch(`${baseUrl}/api/dev/clock`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -250,7 +250,7 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
     await lobby.refresh();
     await supervisor.refresh();
     const snap = supervisor.getSnapshot().snapshot!;
-    expect(snap.event_status).toBe('CLOSING');
+    expect(snap.event_status).toBe('LIVE');
     expect(snap.phase).toBe('GAME_OVERTIME'); // the team is still inside
     expect(snap.active_round?.game_stopped_at).toBeNull();
     // and the lobby can no longer be offered a new team

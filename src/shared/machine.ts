@@ -1,4 +1,3 @@
-import { EVENT_WARN_CLOSE_MS, GAME_LIMIT_MS } from './constants.ts' ;
 import type {
   ActionType,
   EventSession,
@@ -9,7 +8,7 @@ import type {
   RoundStatus,
   Snapshot,
   SystemPhase,
-} from './types.ts' ;
+} from './types.ts';
 
 /**
  * Server-enforced permission table. The authoritative layer rejects any command
@@ -35,6 +34,9 @@ export const ROLE_ACTIONS: Record<ActionType, string[]> = {
   // Only the operator responsible for object placement prepares a layout; the
   // supervisor may correct it, always with an audit entry.
   SET_LAYOUT: ['CORRIDOR', 'GATE', 'SUPERVISOR'],
+  // The optional team label belongs to the same two stations that can dispatch
+  // a team: LOBBY names it while calling, SUPERVISOR may correct it later.
+  SET_TEAM_NAME: ['LOBBY', 'SUPERVISOR'],
   REOPEN_RESET: ['SUPERVISOR'],
   REVIEW_RESOLVE: ['SUPERVISOR'],
   END_EVENT: ['SUPERVISOR'],
@@ -84,7 +86,7 @@ export function isGameRunning(r: Round | null): boolean {
   }
 }
 
-/** True while GATE has frozen the 5-minute window; the 90-minute clock keeps running. */
+/** True while GATE has frozen the 5-minute window. */
 export function isGamePaused(r: Round | null): boolean {
   return !!r && r.game_started_at !== null && r.game_stopped_at === null && r.game_anchor_ms === null;
 }
@@ -149,65 +151,25 @@ export interface AdmissionDecision {
   message: string;
 }
 
-export function eventDeadline(event: EventSession): number | null {
-  if (event.event_started_at === null) return null;
-  return event.event_started_at + event.config.event_duration_ms;
-}
-
-export function eventRemainingMs(event: EventSession, nowMs: number): number | null {
-  const deadline = eventDeadline(event);
-  if (deadline === null) return null;
-  return deadline - nowMs;
+/**
+ * Event-level admission only checks explicit closure. The command handler also
+ * checks active rounds and reset readiness before dispatching the next team.
+ */
+export function evaluateDispatch(event: EventSession, _nowMs: number): AdmissionDecision {
+  if (event.event_ended_at !== null) {
+    return base('EVENT_ENDED', null, null, 'SỰ KIỆN ĐÃ KẾT THÚC');
+  }
+  return base('ALLOWED', null, null, 'Sẵn sàng nhận đội mới');
 }
 
 /**
- * Lobby dispatch gate. Rule: an incoming team needs the full 5-minute game limit
- * plus the configurable upstairs preparation allowance to still be admissible.
- * The very first dispatch is what anchors the 90-minute timeline, so it is always
- * allowed — there is no separate "start event" step to wait for.
+ * A new game keeps its full round limit regardless of event elapsed time.
  */
-export function evaluateDispatch(event: EventSession, nowMs: number): AdmissionDecision {
-  const remaining = eventRemainingMs(event, nowMs);
-  if (event.event_started_at === null) {
-    return base('ALLOWED', event.config.event_duration_ms, null, 'Đội đầu tiên — đồng hồ 90:00 chạy từ lúc này');
-  }
+export function evaluateGameStart(event: EventSession, _nowMs: number): AdmissionDecision {
   if (event.event_ended_at !== null) {
-    return base('EVENT_ENDED', remaining, null, 'SỰ KIỆN ĐÃ KẾT THÚC');
+    return base('EVENT_ENDED', null, null, 'SỰ KIỆN ĐÃ KẾT THÚC');
   }
-  if (remaining !== null && remaining <= 0) {
-    return base('TIME_EXHAUSTED', remaining, null, 'SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI');
-  }
-  const required = event.config.game_limit_ms + event.config.prep_allowance_ms;
-  if (remaining !== null && remaining < required) {
-    return {
-      ...base('OVERRIDE_ALLOWED', remaining, required, 'SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI'),
-      allowed: false,
-      overridePossible: true,
-    };
-  }
-  return base('ALLOWED', remaining, required, 'Đủ thời gian nhận đội mới');
-}
-
-/**
- * Game start gate. Rule: never start the official 5-minute clock with less than
- * 5 minutes left in the 90-minute event.
- */
-export function evaluateGameStart(event: EventSession, nowMs: number): AdmissionDecision {
-  const remaining = eventRemainingMs(event, nowMs);
-  if (event.event_ended_at !== null) {
-    return base('EVENT_ENDED', remaining, GAME_LIMIT_MS, 'SỰ KIỆN ĐÃ KẾT THÚC');
-  }
-  if (remaining !== null && remaining <= 0) {
-    return base('TIME_EXHAUSTED', remaining, GAME_LIMIT_MS, 'HẾT GIỜ SỰ KIỆN — KHÔNG BẮT ĐẦU TRẬN MỚI');
-  }
-  if (remaining !== null && remaining < event.config.game_limit_ms) {
-    return {
-      ...base('OVERRIDE_ALLOWED', remaining, event.config.game_limit_ms, 'CÒN DƯỚI 5 PHÚT'),
-      allowed: false,
-      overridePossible: true,
-    };
-  }
-  return base('ALLOWED', remaining, event.config.game_limit_ms, 'Đủ thời gian bắt đầu');
+  return base('ALLOWED', null, null, 'Sẵn sàng bắt đầu');
 }
 
 function base(
@@ -228,31 +190,27 @@ function base(
 
 /* ------------------------------------------------------------ display state */
 
-export function deriveEventStatus(ev: EventSession, nowMs: number): Snapshot['event_status'] {
+export function deriveEventStatus(ev: EventSession, _nowMs: number): Snapshot['event_status'] {
   if (ev.event_ended_at !== null) return 'ENDED';
   if (ev.event_started_at === null) return 'NOT_STARTED';
-  const remaining = eventRemainingMs(ev, nowMs);
-  if (remaining !== null && remaining <= EVENT_WARN_CLOSE_MS) return 'CLOSING';
   return 'LIVE';
 }
 
 export function derivePhase(ev: EventSession, active: Round | null, nowMs: number): SystemPhase {
+  if (ev.event_ended_at !== null) return 'ENDED';
   if (ev.event_started_at === null) return 'PRE_EVENT';
-  const remaining = eventRemainingMs(ev, nowMs);
-  const eventOvertime = remaining !== null && remaining <= 0;
   if (active) {
-    // A game that blew its own 5-minute limit is in overtime even if the event
-    // clock still has an hour to run; alerts and controlled exit follow this.
+    // A game that exceeded its 5-minute limit is in overtime; the team still
+    // follows the same controlled exit workflow.
     const gameOvertime =
       active.game_started_at !== null && active.game_stopped_at === null
         ? gameRemainingMs(active, ev.config.game_limit_ms, nowMs) <= 0
         : false;
-    if (isGameRunning(active)) return eventOvertime || gameOvertime ? 'GAME_OVERTIME' : 'RUNNING';
-    if (isResetWindow(active)) return eventOvertime ? 'RESET_OVERTIME' : 'RESETTING';
-    if (active.status === 'LOBBY_CALL' || active.status === 'TEAM_PREPARING') return eventOvertime ? 'GAME_OVERTIME' : 'PREPARING';
+    if (isGameRunning(active)) return gameOvertime ? 'GAME_OVERTIME' : 'RUNNING';
+    if (isResetWindow(active)) return 'RESETTING';
+    if (active.status === 'LOBBY_CALL' || active.status === 'TEAM_PREPARING') return 'PREPARING';
   }
-  if (ev.event_ended_at !== null) return 'ENDED';
-  return eventOvertime ? 'RESET_OVERTIME' : 'READY';
+  return 'READY';
 }
 
 /**

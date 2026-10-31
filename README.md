@@ -135,10 +135,11 @@ The historical mint tool refuses operation on the new access model.
 
 ## Security and administration
 
-Migration **0010_single_url_roles.sql** follows existing 0008_supervisor_pair.sql and
-0009_board_capacity.sql. Applied migration files 0001–0008 are unchanged. All active bindings,
-events, rounds, reset tasks and action logs survive the upgrade. The migration ledger decides
-which forward files remain pending; never reset bindings for this upgrade.
+Migration **0011_command_press_integer.sql** follows 0010_single_url_roles.sql,
+0009_board_capacity.sql and 0008_supervisor_pair.sql. Applied migration files 0001–0010 are
+unchanged. All active bindings, events, rounds, reset tasks and action logs survive the upgrade.
+The migration ledger decides which forward files remain pending; never reset bindings for this
+upgrade.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, partial unique index on (role, seat_slot) and slot CHECK constraints
@@ -146,6 +147,9 @@ provide additional enforcement: four single slots plus two supervisor slots, nev
 Every command still resolves its live binding, role permission, state, revision and actor-scoped
 idempotency key on the server. Claim/release do not call _ensure_event, tick, START or RESET.
 Access changes have a separate private audit table and do not alter the scoring history.
+handle_command truncates the optional `_press` diagnostic instant to whole milliseconds and drops
+it when it cannot be read, so a fractional browser clock can never abort START, STOP or PUZZLE.
+Committed press and transport values stay whole milliseconds either way.
 
 PIN hashes use pgcrypto bcrypt with cost 10. No plaintext PIN is stored in Postgres, frontend,
 logs or local storage. There are at most 5 PIN attempts per identity and 30 globally in a
@@ -192,7 +196,9 @@ npm run build
 
 SQL validation uses a disposable local PostgreSQL 16 Docker container. Historical access
 scenarios run before 0010; scenario 033 then checks the new capacity, binding, preservation,
-PIN and RLS contract. Never run the local auth stub against hosted Supabase.
+PIN and RLS contract. 0011 then normalises press instants and scenario 034 checks that a
+fractional or malformed press still commits the command. Never run the local auth stub against
+hosted Supabase.
 
 The workflow browser suite uses the local authoritative engine and covers full rounds, ranking,
 timeout, admission cutoff, offline commands, the wall display and 360px layouts. The access suite

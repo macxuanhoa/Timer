@@ -3,8 +3,6 @@ import { JOURNEY_STOPS, RESET_TASK_LABEL, STALL_WARN_MS } from '../shared/consta
 import {
   deriveEventStatus,
   derivePhase,
-  eventDeadline,
-  eventRemainingMs,
   gameRemainingMs,
   isGamePaused,
   isGameRunning,
@@ -27,9 +25,8 @@ export interface PrimaryAction {
 }
 
 /**
- * The only number allowed on the main screen besides the 90:00 corner clock: the
- * 5-minute game countdown. `valueMs === null` means “show no number at all”, which
- * is what every non-playing phase does — one fixed timeline, one flexible window.
+ * The main timer is the 5-minute game countdown. `valueMs === null` means “show
+ * no number at all”, which is what every non-playing phase does.
  */
 export interface HeroClock {
   mode: 'GAME' | 'GAME_OVERTIME' | 'GAME_PAUSED' | 'IDLE';
@@ -67,18 +64,18 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
   const ev = snap.event;
 
   if (phase === 'PRE_EVENT') {
-    // Nothing has burned the 90:00 yet: the first dispatch is the start button.
+    // The first dispatch opens the event history.
     if (role === 'LOBBY') {
       return {
         action: 'CALL_TEAM',
         label: 'CHO ĐỘI LÊN',
         tone: 'primary',
-        hint: `Đồng hồ ${Math.round(ev.config.event_duration_ms / 60_000)}:00 chạy ngay khi đội đầu tiên lên`,
+        hint: 'Gọi đội đầu tiên khi khu vực đã sẵn sàng',
         overrideOnly: false,
       };
     }
     if (role === 'SUPERVISOR') {
-      return { action: null, label: 'CHƯA CHẠY 90:00', tone: 'waiting', hint: 'LOBBY gọi đội đầu tiên để mở đồng hồ · cấu hình trong “Xem thêm”', overrideOnly: false };
+      return { action: null, label: 'CHỜ LOBBY GỌI ĐỘI', tone: 'waiting', hint: 'Cấu hình trong “Xem thêm” trước khi nhận đội đầu tiên', overrideOnly: false };
     }
     return { action: null, label: 'CHỜ LOBBY GỌI ĐỘI', tone: 'waiting', hint: 'Khu vực sẵn sàng, đồng hồ chưa chạy', overrideOnly: false };
   }
@@ -88,49 +85,8 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
   }
 
   if (phase === 'READY') {
-    const remaining = eventRemainingMs(ev, nowMs);
-    const required = ev.config.game_limit_ms + ev.config.prep_allowance_ms;
-    const cutoff = remaining !== null && remaining < required;
-    if (role === 'LOBBY') {
-      if (cutoff) {
-        return {
-          action: null,
-          label: 'SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI',
-          tone: 'warn',
-          hint: remaining <= 0 ? 'Đã hết thời gian sự kiện' : `Cần ${Math.ceil(required / 1000)}s, còn ${Math.ceil(remaining / 1000)}s`,
-          overrideOnly: true,
-        };
-      }
-      return {
-        action: 'CALL_TEAM',
-        label: 'CHO ĐỘI LÊN',
-        tone: 'primary',
-        hint: 'Đồng hồ 90:00 đang chạy · đội lên tầng ngay khi gọi',
-        overrideOnly: false,
-      };
-    }
-    if (role === 'SUPERVISOR') {
-      if (cutoff) {
-        // Exceptional admission belongs to the supervisor, with an audit reason.
-        return {
-          action: null,
-          label: 'SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI',
-          tone: 'warn',
-          hint: remaining <= 0 ? 'Đã hết thời gian sự kiện' : `Cần ${Math.ceil(required / 1000)}s, còn ${Math.ceil(remaining / 1000)}s`,
-          overrideOnly: true,
-        };
-      }
-      return { action: null, label: 'SẴN SÀNG — CHỜ LOBBY', tone: 'waiting', hint: 'Không cần thao tác trong trận bình thường', overrideOnly: false };
-    }
-    if (cutoff) {
-      return {
-        action: null,
-        label: 'SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI',
-        tone: 'warn',
-        hint: 'Chờ đội cuối cùng hoàn tất',
-        overrideOnly: false,
-      };
-    }
+    if (role === 'LOBBY') return { action: 'CALL_TEAM', label: 'CHO ĐỘI LÊN', tone: 'primary', hint: 'Khu vực đã sẵn sàng cho đội tiếp theo', overrideOnly: false };
+    if (role === 'SUPERVISOR') return { action: null, label: 'SẴN SÀNG — CHỜ LOBBY', tone: 'waiting', hint: 'Không cần thao tác trong trận bình thường', overrideOnly: false };
     const hint = role === 'GATE' ? 'Chưa có đội nào được gọi' : 'Khu vực đã sẵn sàng';
     return { action: null, label: 'SẴN SÀNG NHẬN ĐỘI', tone: 'waiting', hint, overrideOnly: false };
   }
@@ -142,16 +98,6 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
   /* ---------------------------------------------------------------- preparing */
   if (phase === 'PREPARING') {
     if (role === 'GATE') {
-      const remaining = eventRemainingMs(ev, nowMs);
-      if (remaining !== null && remaining < ev.config.game_limit_ms) {
-        return {
-          action: null,
-          label: 'CÒN DƯỚI 5 PHÚT — CHỜ SUPERVISOR',
-          tone: 'warn',
-          hint: 'Chỉ SUPERVISOR mới được vào trận bằng ghi nhận kiểm toán',
-          overrideOnly: true,
-        };
-      }
       return { action: 'START_GAME', label: 'BẮT ĐẦU', tone: 'primary', hint: 'Chốt đồng hồ chuẩn bị, chạy 05:00', overrideOnly: false };
     }
     if (role === 'LOBBY') {
@@ -211,11 +157,11 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
     if (role === 'LOBBY') {
       return { action: null, label: 'TRẬN ĐANG DIỄN RA', tone: 'waiting', hint: overtime ? 'Đội đang quá giờ' : null, overrideOnly: false };
     }
-    return { action: null, label: overtime ? 'SỰ KIỆN QUA GIỜ' : 'TRẬN ĐANG DIỄN RA', tone: overtime ? 'danger' : 'waiting', hint: 'Chỉ can thiệp khi khẩn cấp', overrideOnly: false };
+    return { action: null, label: overtime ? 'HẾT 5:00' : 'TRẬN ĐANG DIỄN RA', tone: overtime ? 'danger' : 'waiting', hint: 'Chỉ can thiệp khi khẩn cấp', overrideOnly: false };
   }
 
   /* ----------------------------------------------------------------- resetting */
-  if (phase === 'RESETTING' || phase === 'RESET_OVERTIME') {
+  if (phase === 'RESETTING') {
     const pendingFor = (r: Role) => pendingTasks(snap, r);
     const missing = pendingTasks(snap);
 
@@ -267,9 +213,8 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
 /* ------------------------------------------------------------------ hero clock */
 
 /**
- * The main screen carries exactly two numbers: the fixed 90:00 timeline in the
- * corner and, while a team is on the clock, the flexible 5:00 window. Everything
- * else (prep, reset, idle) is a status line, never another stopwatch.
+ * The main screen shows the flexible 5:00 window while a team is on the clock.
+ * Prep, reset and idle phases remain status lines.
  */
 export function resolveHero(snap: Snapshot, nowMs: number): HeroClock {
   const ev = snap.event;
@@ -285,7 +230,7 @@ export function resolveHero(snap: Snapshot, nowMs: number): HeroClock {
       return {
         mode: 'IDLE',
         label: 'CHƯA TÍNH GIỜ',
-        sublabel: 'Đồng hồ 90:00 chỉ chạy khi LOBBY gọi đội lên',
+        sublabel: 'Đồng hồ 5:00 bắt đầu khi GATE bấm BẮT ĐẦU',
         valueMs: null,
         tone: 'waiting',
       };
@@ -318,7 +263,7 @@ export function resolveHero(snap: Snapshot, nowMs: number): HeroClock {
       return {
         mode: 'GAME_PAUSED',
         label: 'TẠM DỪNG 5:00',
-        sublabel: `Đồng hồ trận đang dừng${resetNote} · 90:00 vẫn chạy`,
+        sublabel: `Đồng hồ trận đang dừng${resetNote}`,
         valueMs: left,
         tone: 'warn',
       };
@@ -355,16 +300,16 @@ export interface BigScreenClock {
   /** Identifies the running game; changes on every reset of the 5:00 window. */
   key: string;
   teamNumber: number;
-  /** The 5-minute game limit, never the 90-minute event duration. */
+  /** The authoritative 5-minute game limit. */
   limitMs: number;
   /** Signed ms: keeps counting into overtime so the display and the alarm agree. */
   remainingMs: number;
   expired: boolean;
-  /** True while the authoritative clock is paused; the 90:00 keeps running. */
+  /** True while the authoritative clock is paused; paused gaps do not count. */
   paused: boolean;
   resetCount: number;
   pauseCount: number;
-  eventRemainingMs: number | null;
+
 }
 
 /**
@@ -387,7 +332,7 @@ export function resolveBigScreen(snap: Snapshot, nowMs: number): BigScreenClock 
     paused: isGamePaused(round),
     resetCount: round.game_reset_count,
     pauseCount: round.game_pause_count,
-    eventRemainingMs: eventRemainingMs(snap.event, nowMs),
+
   };
 }
 
@@ -478,7 +423,7 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
     // have no column of their own, and a later press proves the earlier legs.
     at[3] = logAt(snap, round.id, 'ROOM_REACHED') ?? round.puzzle_completed_at;
     at[2] = logAt(snap, round.id, 'HALLWAY_PROGRESS') ?? at[3];
-    notes[0] = 'Đã gọi đội — mở đồng hồ 90:00';
+    notes[0] = 'Đã gọi đội lên tầng';
     position = 0;
 
     switch (round.status) {
@@ -564,14 +509,9 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
     // Between rounds the route starts again at the lobby, which is what makes the
     // first press of every team the same, predictable one.
     position = 0;
-    const remaining = eventRemainingMs(snap.event, nowMs);
-    const cutoff = remaining !== null && remaining < snap.event.config.game_limit_ms + snap.event.config.prep_allowance_ms;
     if (phase === 'PRE_EVENT') {
       caption = 'Chưa mở sự kiện — LOBBY gọi đội đầu tiên';
       turn = { roles: ['LOBBY'], label: 'CHO ĐỘI LÊN' };
-    } else if (cutoff) {
-      caption = 'Sắp kết thúc — không nhận đội mới';
-      turn = { roles: ['SUPERVISOR'], label: 'XEM NGOẠI LỆ VÀO ĐỘI' };
     } else {
       caption = `Sẵn sàng gọi đội #${pad(snap.event.next_team_number)}`;
       turn = { roles: ['LOBBY'], label: 'CHO ĐỘI LÊN' };
@@ -683,10 +623,6 @@ export function hasActiveRound(snap: Snapshot | null): boolean {
   return !!snap && !isTerminalRound(snap.active_round);
 }
 
-export function eventDeadlineMs(snap: Snapshot): number | null {
-  return eventDeadline(snap.event);
-}
-
 export function pad(n: number): string {
   return String(n).padStart(3, '0');
 }
@@ -719,16 +655,15 @@ export function resolveAlerts(snap: Snapshot, nowMs: number, staleData: boolean)
   if (round && round.needs_review && round.review_reasons.length > 0) {
     out.push({ id: 'REVIEW', tone: 'warn', text: `Kết quả đội #${pad(round.team_number)} chờ xét lại` });
   }
-  // A paused or restarted 5:00 is never silent: the whole room reads it here, and
-  // the 90:00 beside it keeps counting down the fixed timeline.
+  // A paused or restarted 5:00 is always visible to the whole room.
   if (round && isGamePaused(round)) {
-    out.push({ id: 'PAUSE', tone: 'warn', text: `5:00 đội #${pad(round.team_number)} đang TẠM DỪNG — 90:00 vẫn chạy` });
+    out.push({ id: 'PAUSE', tone: 'warn', text: `5:00 đội #${pad(round.team_number)} đang TẠM DỪNG` });
   } else if (round && round.game_reset_count > 0 && round.game_stopped_at === null) {
     out.push({ id: 'RESET', tone: 'warn', text: `5:00 đã RESET ${round.game_reset_count} lần — kết quả sẽ chờ SUPERVISOR xét` });
   }
   const phase = phaseOf(snap, nowMs);
-  if (phase === 'GAME_OVERTIME' || phase === 'RESET_OVERTIME') {
-    out.push({ id: 'OVERTIME', tone: 'danger', text: 'Sự kiện qua giờ — cho đội cuối ra an toàn' });
+  if (phase === 'GAME_OVERTIME') {
+    out.push({ id: 'OVERTIME', tone: 'danger', text: 'Hết 5:00 — GATE hoàn tất lượt chơi' });
   }
   if (staleData) {
     out.push({ id: 'DEGRADED', tone: 'warn', text: 'Dữ liệu có thể cũ — đang kiểm tra lại với máy chủ' });
@@ -777,7 +712,7 @@ const STATION_LABEL: Record<Role, string> = {
  */
 function owningStations(snap: Snapshot, nowMs: number): Set<Role> {
   const phase = phaseOf(snap, nowMs);
-  // The first dispatch is LOBBY's call — it is the station that opens the 90:00.
+  // LOBBY calls the next team, including the first team of the event.
   if (phase === 'PRE_EVENT') return new Set<Role>(['LOBBY']);
   if (phase === 'ENDED') return new Set<Role>();
 

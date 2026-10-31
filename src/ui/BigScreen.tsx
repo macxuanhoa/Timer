@@ -16,12 +16,9 @@ interface Props {
 }
 
 /**
- * Wall display for the 5-minute game countdown: one enormous number, the same
- * authoritative clock every phone reads, and the fixed 90:00 timeline in the
- * corner. GATE (or the supervisor) may pause or restart the 5:00 from here; both
- * are real audited commands, so the display can never drift from the score, and
- * the 90:00 keeps counting through either. It closes itself when GATE stops the
- * game clock.
+ * Wall display for the 5-minute game countdown. GATE (or the supervisor) may
+ * pause or restart the 5:00 from here; both are audited commands, and the display
+ * closes itself when GATE stops the game clock.
  */
 export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -105,7 +102,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const reset = () => {
     alarms.unlock();
     // A real command: restart the official 5:00 window. The round is then flagged
-    // for supervisor review, and the 90:00 timeline keeps running underneath.
+    // for supervisor review.
     void store.act('GAME_RESET');
     setMuted(false);
     setConfirmReset(false);
@@ -135,12 +132,6 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
             ĐỘI #{pad(clock.teamNumber)} · {formatClockSec(clock.limitMs)}
             {clock.resetCount > 0 ? <span className="ml-2 text-ember" data-testid="big-reset-count">RESET {clock.resetCount}</span> : null}
           </span>
-          <span className="text-right" data-testid="big-meta">
-            {/* The fixed timeline: never stopped, negative after 90 minutes. */}
-            {clock.eventRemainingMs === null
-              ? 'CHƯA CHẠY 90:00'
-              : `SỰ KIỆN ${formatClockSec(clock.eventRemainingMs)}`}
-          </span>
         </div>
       )}
 
@@ -156,7 +147,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
 
       {clock.paused && (
         <p className="digital mt-2 text-[clamp(1rem,4.5vw,2.4rem)] font-bold tracking-[0.24em] text-ember" data-testid="big-paused">
-          TẠM DỪNG · 90:00 VẪN CHẠY
+          TẠM DỪNG 5:00
         </p>
       )}
 
@@ -219,8 +210,8 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
           </div>
           <p className="text-[0.65rem] leading-snug text-mute" data-testid="big-note">
             {canControl
-              ? 'Reset/stop chỉ đổi cửa sổ 5:00 — đồng hồ 90:00 ở góc vẫn chạy. Reset làm kết quả chờ SUPERVISOR xét.'
-              : 'Chỉ GATE mới được reset hoặc tạm dừng 5:00. Số 90:00 ở góc là timeline cố định của sự kiện.'}
+              ? 'Reset đưa đồng hồ về 5:00 và làm kết quả chờ SUPERVISOR xét.'
+              : 'Chỉ GATE hoặc SUPERVISOR mới được reset hoặc tạm dừng 5:00.'}
             {autoOpened ? ' Tự đóng khi GATE chốt giờ.' : ''}
           </p>
         </div>

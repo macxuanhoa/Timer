@@ -82,7 +82,14 @@ async function main() {
     if (singleUrl && (!schemaExists || files.filter(f => /^000[1-7]_/.test(f)).some(f => !applied.has(f)))) {
       throw new Error('Single-URL deployment requires the existing 0001–0007 ledger. Refusing to replay historical migrations.');
     }
-    const allowed = new Set(['0008_supervisor_pair.sql', '0009_board_capacity.sql', '0010_single_url_roles.sql']);
+    const allowed = new Set([
+      '0008_supervisor_pair.sql',
+      '0009_board_capacity.sql',
+      '0010_single_url_roles.sql',
+      '0011_command_press_integer.sql',
+      '0012_round_clock_only.sql',
+      '0013_team_name.sql',
+    ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     const pin = configurePin ? process.env.SC_SUPERVISOR_PIN : null;
     delete process.env.SC_SUPERVISOR_PIN;

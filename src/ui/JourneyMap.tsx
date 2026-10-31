@@ -7,7 +7,6 @@ import { formatWallTime } from '../shared/metrics';
 import { ACCENT_HEX, STOP_ACCENT } from './accents';
 import {
   CheckIcon,
-  ChevronRightIcon,
   DoorIcon,
   FlagIcon,
   RoomIcon,
@@ -17,6 +16,8 @@ import {
 
 interface StripProps {
   journey: JourneyInfo;
+  /** Tapping the rail opens the floor-by-floor map — it is the only entry on the dashboard. */
+  onOpen?(): void;
 }
 
 const STOP_ICON: Record<JourneyStop['key'], (props: { className?: string }) => ReactElement> = {
@@ -52,7 +53,7 @@ function nodeStyle(stop: JourneyStop): CSSProperties {
  * its own colour as a ring, and stops still ahead stay grey. Labels sit under the
  * nodes exactly like the five-node rail on the wall of the design.
  */
-export function JourneyStepper({ journey }: StripProps) {
+export function JourneyStepper({ journey, onOpen }: StripProps) {
   const { stops, focus } = journey;
   return (
     <div
@@ -61,6 +62,20 @@ export function JourneyStepper({ journey }: StripProps) {
       data-position={journey.position}
       data-focus={focus}
       data-movement={journey.movement}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `Hành trình: ${journey.caption}. Mở sơ đồ từng tầng` : undefined}
+      onClick={onOpen}
+      onKeyDown={
+        onOpen
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
     >
       {stops.map((stop, i) => {
         const prev = i > 0 ? stops[i - 1] : null;
@@ -109,31 +124,6 @@ export function JourneyStepper({ journey }: StripProps) {
         );
       })}
     </div>
-  );
-}
-
-interface StatusProps {
-  journey: JourneyInfo;
-  onOpen(): void;
-}
-
-/** The one-line status under the rail; the chevron opens the floor-by-floor view. */
-export function JourneyStatus({ journey, onOpen }: StatusProps) {
-  const dot = ACCENT_HEX[STOP_ACCENT[journey.stops[Math.max(0, journey.focus)]?.key ?? 'lobby']];
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`Hành trình: ${journey.caption}. Mở sơ đồ từng tầng`}
-      className="status-pill flex w-full items-center gap-2 rounded-[10px] border border-hair bg-panel text-left active:bg-panel2"
-      data-testid="journey-status"
-    >
-      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: dot }} aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-snow/85" data-testid="progress-line">
-        {journey.caption}
-      </span>
-      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-mute" />
-    </button>
   );
 }
 

@@ -8,18 +8,16 @@ import {
   resolveJourney,
   resolvePrimary,
   resolveTeamLine,
-  statusOf,
-  type Tone,
 } from '../client/selectors';
-import { eventRemainingMs, isGamePaused, isGameRunning } from '../shared/machine';
+import { isGamePaused, isGameRunning } from '../shared/machine';
 import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
-import { EVENT_WARN_END_MS, ROLE_SHORT } from '../shared/constants';
-import { formatClockCs, formatClockHms, formatClockSec, leaderboard } from '../shared/metrics';
+import { ROLE_SHORT, TEAM_NAME_MAX } from '../shared/constants';
+import { formatClockCs, formatClockSec, leaderboard } from '../shared/metrics';
 import type { ActionType, Round } from '../shared/types';
 import { DetailsSheet } from './DetailsSheet';
 import { BigScreen } from './BigScreen';
-import { JourneyBoard, JourneyStatus, JourneyStepper } from './JourneyMap';
+import { JourneyBoard, JourneyStepper } from './JourneyMap';
 import { ACCENT_HEX, ROLE_ACCENT, TEAM_TONE_HEX } from './accents';
 import {
   ArrowUpIcon,
@@ -29,7 +27,6 @@ import {
   ChevronRightIcon,
   ClockIcon,
   GearIcon,
-  HourglassIcon,
   PencilIcon,
   PlayIcon,
   StopIcon,
@@ -38,12 +35,8 @@ import {
 } from './icons';
 import { pad } from '../client/selectors';
 
-const TONE_TEXT: Record<Tone, string> = {
-  primary: 'text-snow',
-  danger: 'text-blood',
-  warn: 'text-ember',
-  waiting: 'text-mute',
-};
+/** Matches the engine and the database: collapse blanks, then compare. */
+const cleanTeamName = (value: string) => value.trim().replace(/\s+/g, ' ');
 
 /** Colour of the big button, taken from the action's meaning (not the station). */
 const CTA_LOOK: Partial<Record<ActionType, 'red' | 'green' | 'amber' | 'neutral'>> = {
@@ -75,6 +68,7 @@ interface Props {
 export function Dashboard({ store, account, onLogout }: Props) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const snap = state.snapshot;
+  const activeRoundId = snap?.active_round?.id ?? null;
   const running = !!snap && isGameRunning(snap.active_round);
   const now = useNow(store, running ? 'raf' : 'slow');
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -89,12 +83,10 @@ export function Dashboard({ store, account, onLogout }: Props) {
   const journey = useMemo(() => (snap ? resolveJourney(snap, now, account.role) : null), [snap, now, account.role]);
   const teamLine = useMemo(() => (snap ? resolveTeamLine(snap, now) : null), [snap, now]);
   const phase = snap ? phaseOf(snap, now) : 'PRE_EVENT';
-  const status = snap ? statusOf(snap, now) : 'NOT_STARTED';
-  const remaining = snap ? eventRemainingMs(snap.event, now) : null;
 
   useWakeLock(phase !== 'ENDED' && phase !== 'PRE_EVENT');
 
-  /* The wall display follows the 5-minute game clock, never the 90-minute one. */
+  /* The wall display follows the authoritative game clock. */
   const counting = hero?.mode === 'GAME' || hero?.mode === 'GAME_OVERTIME' || hero?.mode === 'GAME_PAUSED';
 
   useEffect(() => {
@@ -107,13 +99,18 @@ export function Dashboard({ store, account, onLogout }: Props) {
     if (!counting) setBigOpen(false);
   }, [counting, account.role]);
 
+  useEffect(() => {
+    // A new team on the floor always starts with a clean, closed name editor.
+    setNameOpen(false);
+    setTeamName('');
+  }, [activeRoundId]);
+
   // Audible + visual alerting where supported (§1 individual game, §7 closing).
   useEffect(() => {
     if (!snap || bigOpen) return;
     const gameOver = phase === 'GAME_OVERTIME';
-    const closingSoon = remaining !== null && remaining > 0 && remaining <= EVENT_WARN_END_MS && phase !== 'ENDED';
-    alarms.setPattern(gameOver ? 'critical' : closingSoon ? 'warn' : 'none');
-  }, [snap, remaining, phase, bigOpen]);
+    alarms.setPattern(gameOver ? 'critical' : 'none');
+  }, [snap, phase, bigOpen]);
 
   // Re-render when the browser finally lets the alarm sound play.
   const [, bumpAudio] = useState(0);
@@ -137,20 +134,14 @@ export function Dashboard({ store, account, onLogout }: Props) {
   const rows = leaderboard(snap);
   const fastest = rows[0];
   const round = snap.active_round;
-  const closing = status === 'CLOSING' && snap.event.event_ended_at === null;
-  const cutoff = remaining !== null && remaining < snap.event.config.game_limit_ms + snap.event.config.prep_allowance_ms;
   const staleData = state.status === 'DEGRADED' || (store.dataAgeMs() ?? 0) > 22_000;
   const alerts = resolveAlerts(snap, now, staleData);
   if (alarms.status() !== 'READY' && alarms.pattern !== 'none') {
     alerts.push({ id: 'AUDIO', tone: 'danger', text: 'Chưa bật được âm thanh — chạm để kích hoạt cảnh báo' });
   }
 
-  const duration = snap.event.config.event_duration_ms;
-  const remainingEvent = remaining ?? duration;
-  const eventPct = Math.max(0, Math.min(100, ((duration - remainingEvent) / duration) * 100));
   const gameLimit = snap.event.config.game_limit_ms;
   const heroMs = hero.valueMs;
-  const heroRunning = heroMs !== null;
   const heroPct = heroMs !== null ? Math.max(0, Math.min(100, (heroMs / gameLimit) * 100)) : 0;
   const heroHue =
     hero.mode === 'GAME' ? ACCENT_HEX.green : hero.mode === 'GAME_OVERTIME' ? ACCENT_HEX.red : hero.mode === 'GAME_PAUSED' ? ACCENT_HEX.amber : '#9a9aa3';
@@ -161,11 +152,47 @@ export function Dashboard({ store, account, onLogout }: Props) {
         ? `+${formatClockCs(-heroMs)}`
         : formatClockCs(heroMs);
   const walkUp = account.role === 'LOBBY' && round?.status === 'LOBBY_CALL';
-  const canRename = primary.action === 'CALL_TEAM';
+  // The label can be changed on the team on the floor (SET_TEAM_NAME), or drafted
+  // by LOBBY for the team about to be called — then it travels with CALL_TEAM.
+  const canRename =
+    (account.role === 'LOBBY' || account.role === 'SUPERVISOR') &&
+    (round !== null || (account.role === 'LOBBY' && primary.action === 'CALL_TEAM'));
+  const nameSaving = state.pending === 'SET_TEAM_NAME';
+  const nameDirty = cleanTeamName(teamName) !== (round?.team_name ?? '');
   const accent = ACCENT_HEX[ROLE_ACCENT[account.role]];
 
   const ok = state.status === 'CONNECTED';
   const online = `${snap.operators.length}/${snap.operators.length} ONLINE`;
+
+  const cancelNameEdit = () => {
+    setNameOpen(false);
+    // Pre-dispatch naming is only a draft on this phone; cancelling discards it.
+    if (!round) setTeamName('');
+  };
+
+  const openNameEditor = () => {
+    if (!canRename) return;
+    if (nameOpen) {
+      cancelNameEdit();
+      return;
+    }
+    setTeamName(round?.team_name ?? '');
+    setNameOpen(true);
+  };
+
+  const saveName = async () => {
+    if (!canRename || nameSaving) return;
+    if (!round) {
+      // No round exists yet: CALL_TEAM carries the name into the database.
+      setNameOpen(false);
+      return;
+    }
+    const result = await store.act('SET_TEAM_NAME', { team_name: cleanTeamName(teamName) });
+    if (result?.ok) {
+      setTeamName(cleanTeamName(teamName));
+      setNameOpen(false);
+    }
+  };
 
   return (
     <div
@@ -215,43 +242,16 @@ export function Dashboard({ store, account, onLogout }: Props) {
       <ReturnHome onLogout={onLogout} />
 
       <main className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-2">
-        {/* ------------------------------------------------------- event card */}
-        <section className="event-card ev-card" data-testid="event-bar">
-          <div className="flex items-center justify-between gap-2">
-            <p className="flex items-center gap-1.5 text-[9px] font-semibold tracking-[0.12em] text-[#f0705f]">
-              <HourglassIcon className="h-3.5 w-3.5" />
-              THỜI GIAN SỰ KIỆN CÒN
-            </p>
-            {phase === 'GAME_OVERTIME' || phase === 'RESET_OVERTIME' ? (
-              <span className="text-[9px] font-bold tracking-[0.1em] text-blood" data-testid="overtime-flag">
-                OVERTIME
-              </span>
-            ) : closing || cutoff ? (
-              <span className="text-[9px] font-bold tracking-[0.1em] text-ember" data-testid="closing-flag">
-                SẮP KẾT THÚC
-              </span>
-            ) : null}
-          </div>
-          <p className="digital event-digits mt-1 font-bold text-snow" data-testid="event-remaining">
-            {formatClockHms(remainingEvent)}
-          </p>
-          <div className="mt-2.5 flex items-center gap-2">
-            <div className="track flex-1">
-              <span style={{ width: `${eventPct}%`, background: 'linear-gradient(90deg,#f0705f,#e1362c)' }} />
-            </div>
-            <span className="text-[9px] font-semibold text-mute">{formatClockSec(duration)}</span>
-          </div>
-        </section>
-
         {/* --------------------------------------------------------- team card */}
         <section className="card tm-card" data-testid="active-team">
           <div className="flex items-center justify-between gap-2">
             <h1 className="digital team-digits font-bold text-snow">TEAM #{pad(round?.team_number ?? snap.event.next_team_number)}</h1>
             <button
               type="button"
-              onClick={() => setNameOpen((v) => !v)}
+              onClick={openNameEditor}
               disabled={!canRename}
               aria-label="Đặt tên đội"
+              aria-expanded={nameOpen}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-hair bg-panel2 text-mute active:text-snow disabled:opacity-40"
               data-testid="team-edit"
             >
@@ -268,19 +268,62 @@ export function Dashboard({ store, account, onLogout }: Props) {
             {round?.team_name ? <span className="text-mute"> · {round.team_name}</span> : null}
           </p>
           {nameOpen && canRename && (
-            <input
-              value={teamName}
-              onChange={(e) => setTeamName(e.target.value)}
-              placeholder="Tên đội (tuỳ chọn)"
-              autoFocus
-              className="mt-2 w-full rounded-[8px] border border-hair bg-panel2 px-2.5 py-2 text-[12px] text-snow outline-none focus:border-blood"
-              data-testid="team-name"
-            />
+            <div className="mt-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void saveName();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      cancelNameEdit();
+                    }
+                  }}
+                  placeholder="Tên đội (tuỳ chọn)"
+                  maxLength={TEAM_NAME_MAX}
+                  autoFocus
+                  disabled={nameSaving}
+                  className="h-8 min-w-0 flex-1 rounded-[8px] border border-hair bg-panel2 px-2.5 text-[12px] text-snow outline-none focus:border-blood disabled:opacity-60"
+                  data-testid="team-name"
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveName()}
+                  disabled={nameSaving || (round !== null && !nameDirty)}
+                  className="flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-blood/60 bg-blood/10 px-2.5 text-[10px] font-bold text-blood disabled:opacity-40"
+                  data-testid="team-name-save"
+                >
+                  {nameSaving ? 'ĐANG LƯU' : round ? 'LƯU' : 'XONG'}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelNameEdit}
+                  disabled={nameSaving}
+                  className="flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-hair px-2.5 text-[10px] font-semibold text-mute disabled:opacity-40"
+                  data-testid="team-name-cancel"
+                >
+                  HỦY
+                </button>
+              </div>
+              {!round ? (
+                <p className="mt-1 text-[9px] leading-snug text-mute">Tên sẽ được lưu cùng lượt gọi đội tiếp theo.</p>
+              ) : null}
+            </div>
           )}
         </section>
 
         {/* --------------------------------------------------------------- hero */}
-        <section className="hero-block flex flex-1 flex-col items-center justify-center py-2" data-testid="hero">
+        {/* The clock is the one block that grows with the screen: the halo keeps the
+            middle of a tall phone from reading as leftover space. */}
+        <section className="hero-block relative isolate flex flex-1 flex-col items-center justify-center py-2" data-testid="hero">
+          <span
+            className="hero-aura -z-10"
+            aria-hidden
+            style={{ background: `radial-gradient(ellipse 46% 26% at 50% 50%, ${heroHue}20 0%, transparent 70%)` }}
+          />
           {walkUp ? (
             <>
               <ArrowUpIcon className="h-10 w-10 text-ember" />
@@ -308,8 +351,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
         </section>
 
         {/* ------------------------------------------------------------ journey */}
-        <JourneyStepper journey={journey} />
-        <JourneyStatus journey={journey} onOpen={() => setJourneyOpen(true)} />
+        <JourneyStepper journey={journey} onOpen={() => setJourneyOpen(true)} />
 
         {/* Safety and prize warnings stay on the main screen, never only in the sheet. */}
         {alerts.map((a) => (
@@ -343,6 +385,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
           primary={primary}
           pending={state.pending}
           verifying={state.verifying}
+          draftName={teamName}
         />
 
         {round && round.game_started_at !== null && round.game_stopped_at === null && (account.role === 'GATE' || account.role === 'SUPERVISOR') && (
@@ -429,10 +472,12 @@ interface ZoneProps {
   primary: ReturnType<typeof resolvePrimary>;
   pending: string | null;
   verifying: string | null;
+  /** LOBBY's draft label for the next call; ignored by every other action. */
+  draftName: string;
 }
 
 /** One context-sensitive control. No action → the same shape, greyed out. */
-function PrimaryZone({ store, account, primary, pending, verifying }: ZoneProps) {
+function PrimaryZone({ store, account, primary, pending, verifying, draftName }: ZoneProps) {
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [reason, setReason] = useState('');
   const busy = pending !== null || verifying !== null;
@@ -446,7 +491,8 @@ function PrimaryZone({ store, account, primary, pending, verifying }: ZoneProps)
     // idempotency key. A time-based guard would only swallow deliberate presses.
     if (busy || !primary.action) return;
     alarms.unlock();
-    await store.act(primary.action);
+    const name = cleanTeamName(draftName);
+    await store.act(primary.action, primary.action === 'CALL_TEAM' && name ? { team_name: name } : {});
   };
 
   const sendOverride = async () => {
@@ -553,7 +599,7 @@ function PrimaryZone({ store, account, primary, pending, verifying }: ZoneProps)
 /**
  * GATE's flexible controls for the 5-minute window. They are authoritative
  * commands, so a pause or a restart is visible on every phone at once — and the
- * 90:00 timeline above keeps running through both.
+ * score excludes paused gaps and records resets for review.
  */
 function ClockControls({ store, round, pending }: { store: LiveStore; round: Round; pending: string | null }) {
   const [confirmReset, setConfirmReset] = useState(false);

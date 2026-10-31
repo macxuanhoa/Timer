@@ -70,6 +70,12 @@ try {
   run('032 supervisor pair', ['supabase/tests/032_supervisor_pair.sql']);
   run('010 single root URL', ['supabase/migrations/0010_single_url_roles.sql']);
   run('033 role access + PIN + RLS', ['supabase/tests/033_single_url_roles.sql']);
+  run('011 press instant normalisation', ['supabase/migrations/0011_command_press_integer.sql']);
+  run('034 fractional press instants', ['supabase/tests/034_press_integer.sql']);
+  run('012 round clock only', ['supabase/migrations/0012_round_clock_only.sql']);
+  run('035 no event deadline', ['supabase/tests/035_round_clock_only.sql']);
+  run('013 revisioned team labels', ['supabase/migrations/0013_team_name.sql']);
+  run('036 team label scenario', ['supabase/tests/036_team_name.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

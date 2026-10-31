@@ -244,10 +244,12 @@ export class LiveStore {
     const key = options.idempotencyKey ?? this.inFlight.get(action) ?? nextKey();
     this.inFlight.set(action, key);
     // Physical press instant, expressed in server time by the calibrated clock.
+    // Whole milliseconds only: the estimate is fractional because it is derived
+    // from performance.now(), and the server stores the press as a bigint.
     const press: CommandRequest['press'] = {
-      press_ms: this.clock.now(),
+      press_ms: Math.round(this.clock.now()),
       local_press_ms: Date.now(),
-      rtt_ms: this.clock.medianRtt,
+      rtt_ms: this.clock.medianRtt === null ? null : Math.round(this.clock.medianRtt),
     };
     this.patch({ pending: action, error: null, notice: null });
     const req: CommandRequest = {

@@ -53,7 +53,7 @@ describe('unit — formats, permissions and boundaries', () => {
     expect(ROLES.filter((r) => isAllowed(r, 'ROOM_REACHED'))).toEqual(['ROOM305', 'SUPERVISOR']);
   });
 
-  it('applies the admission boundaries exactly', () => {
+  it('does not impose an event duration limit on dispatch or game start', () => {
     const clock = new FakeClock(T0);
     const engine = new ScreamEngine(initialState(T0), clock, {
       supervisor: { id: 'supervisor', role: 'SUPERVISOR', display_name: 'S' },
@@ -65,29 +65,23 @@ describe('unit — formats, permissions and boundaries', () => {
       idempotency_key: 'a',
     });
     const ev = engine.snapshot().event;
-    const required = ev.config.game_limit_ms + ev.config.prep_allowance_ms; // 390 s
-
-    // exactly enough time -> allowed
-    expect(evaluateDispatch(ev, T0 + ev.config.event_duration_ms - required).allowed).toBe(true);
-    // one millisecond short -> needs an audited override
-    const tight = evaluateDispatch(ev, T0 + ev.config.event_duration_ms - required + 1);
-    expect(tight.allowed).toBe(false);
-    expect(tight.overridePossible).toBe(true);
-    // exhausted -> hard stop
-    expect(evaluateDispatch(ev, T0 + ev.config.event_duration_ms).overridePossible).toBe(false);
-    expect(evaluateDispatch(ev, T0 + ev.config.event_duration_ms + 1).code).toBe('TIME_EXHAUSTED');
-    // the 5-minute rule is independent of the preparation allowance
-    expect(evaluateGameStart(ev, T0 + ev.config.event_duration_ms - ev.config.game_limit_ms).allowed).toBe(true);
-    expect(evaluateGameStart(ev, T0 + ev.config.event_duration_ms - ev.config.game_limit_ms + 1).allowed).toBe(false);
+    const afterLegacyDuration = T0 + ev.config.event_duration_ms + 1;
+    expect(evaluateDispatch(ev, afterLegacyDuration).allowed).toBe(true);
+    expect(evaluateDispatch(ev, afterLegacyDuration).remaining_ms).toBeNull();
+    expect(evaluateGameStart(ev, afterLegacyDuration).allowed).toBe(true);
+    expect(evaluateGameStart(ev, afterLegacyDuration).overridePossible).toBe(false);
     expect(evaluateGameStart(ev, T0).code).toBe('ALLOWED');
+    const ended = { ...ev, event_ended_at: afterLegacyDuration };
+    expect(evaluateDispatch(ended, afterLegacyDuration).code).toBe('EVENT_ENDED');
+    expect(evaluateGameStart(ended, afterLegacyDuration).code).toBe('EVENT_ENDED');
   });
 
-  it('the first dispatch is always admissible and anchors the fixed timeline', () => {
+  it('keeps the first dispatch timestamp only as event history', () => {
     const ev = initialState(T0).event;
     const first = evaluateDispatch(ev, T0);
     expect(first.allowed).toBe(true);
     expect(first.code).toBe('ALLOWED');
-    expect(first.remaining_ms).toBe(ev.config.event_duration_ms);
+    expect(first.remaining_ms).toBeNull();
     expect(defaultConfig()).toMatchObject({ event_duration_ms: 5_400_000, game_limit_ms: 300_000, prep_allowance_ms: 90_000 });
   });
 
@@ -126,7 +120,7 @@ describe('unit — formats, permissions and boundaries', () => {
   });
 
   describe('big screen — the wall display mirrors the flexible 5:00 window', () => {
-    it('mirrors the official game clock, not the 90-minute event clock', () => {
+    it('mirrors only the official game clock', () => {
       const now = T0 + 150_000; // 60 s after GATE pressed BẮT ĐẦU
       const snap = runningSnap(now);
       const big = resolveBigScreen(snap, now);
@@ -135,11 +129,10 @@ describe('unit — formats, permissions and boundaries', () => {
       expect(big?.remainingMs).toBe(240_000);
       expect(big?.expired).toBe(false);
       expect(big?.paused).toBe(false);
-      // the event clock is carried alongside it and is never the number shown
-      expect(big?.eventRemainingMs).toBe(5_400_000 - 150_000);
+      expect(big).not.toHaveProperty('eventRemainingMs');
     });
 
-    it('a paused game freezes the number while the 90:00 keeps running', () => {
+    it('a paused game freezes its 5:00 number', () => {
       const now = T0 + 150_000;
       const snap = runningSnap(now, { game_anchor_ms: null, game_elapsed_ms: 60_000, game_pause_count: 1 });
       const big = resolveBigScreen(snap, now);
@@ -147,7 +140,7 @@ describe('unit — formats, permissions and boundaries', () => {
       expect(big?.remainingMs).toBe(240_000);
       const muchLater = resolveBigScreen(snap, now + 600_000);
       expect(muchLater?.remainingMs).toBe(240_000); // frozen window
-      expect(muchLater?.eventRemainingMs).toBe(5_400_000 - 750_000); // fixed timeline
+      expect(muchLater).not.toHaveProperty('eventRemainingMs');
     });
 
     it('counts past zero instead of stopping, so the alarm and the digits agree', () => {
@@ -246,7 +239,7 @@ describe('journey — the route every phone shows', () => {
   });
 });
 
-/** One running round inside a live 90-minute event, ready for display selectors. */
+/** One running round inside an open event, ready for display selectors. */
 function runningSnap(nowMs: number, over: Partial<import('../src/shared/types').Round> = {}) {
   const base = initialState(T0);
   const event = { ...base.event, event_started_at: T0 };

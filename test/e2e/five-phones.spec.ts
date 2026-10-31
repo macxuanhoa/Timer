@@ -51,16 +51,24 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     const room = await phone(browser, 'room305');
     const sup = await phone(browser, 'supervisor');
 
+    // Reset through the live server after all five clients are connected. This
+    // makes the first scenario deterministic even when a prior run was aborted.
+    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
+    const reset = await sup.context.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${token}` } });
+    expect(reset.ok()).toBe(true);
+    await Promise.all([lobby, gate, corridor, room, sup].map(({ page }) => page.reload()));
+    await Promise.all([lobby, gate, corridor, room, sup].map(({ page }) => expect(page.getByTestId('dashboard')).toBeVisible()));
+
     // §5/§7 before the first team: LOBBY owns the start, everyone else waits
-    await expect(lobby.page.getByTestId('event-remaining')).toHaveText('01:30:00'); // frozen until a team goes up
+    await expect(lobby.page.getByTestId('event-bar')).toHaveCount(0);
     await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await expect(sup.page.getByTestId('waiting-state')).toContainText('CHƯA CHẠY 90:00');
+    await expect(sup.page.getByTestId('waiting-state')).toContainText('CHỜ LOBBY GỌI ĐỘI');
     await expect(gate.page.getByTestId('waiting-state')).toContainText('CHỜ LOBBY GỌI ĐỘI');
 
     await lobby.page.getByTestId('team-edit').click();
     await lobby.page.getByTestId('team-name').fill('Ma Tro');
     await primary(lobby.page).click();
-    await expect(gate.page.getByTestId('event-remaining')).not.toHaveText('01:30:00'); // the timeline now runs
+    await expect(gate.page.getByTestId('event-bar')).toHaveCount(0);
 
     // §5 the hero shows no number while the team walks up: only the 5:00 window is a clock
     await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
@@ -75,7 +83,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await primary(lobby.page).click();
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐỘI ĐANG Ở CỬA VÀO TẦNG 3');
     await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '1');
-    await expect(gate.page.getByTestId('journey-status')).toContainText('Đội đã lên tới cửa vào tầng 3');
+    await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'at');
 
     await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
     await primary(gate.page).click();
@@ -90,11 +98,11 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await expect(room.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '3');
     await expect(primary(room.page)).toHaveText('XÁC NHẬN HOÀN THÀNH');
     await primary(room.page).click();
+    await expect(primary(room.page)).toHaveText('ĐỘI RỜI PHÒNG 305');
     await expect(room.page.getByTestId('journey-node-room')).toHaveAttribute('data-state', 'lead');
-    await expect(room.page.getByTestId('progress-line')).toContainText('Trận đồ đã hoàn thành');
 
     // The floor map opens from any phone and shows the real press times.
-    await room.page.getByTestId('journey-status').click();
+    await room.page.getByTestId('journey-strip').click();
     await expect(room.page.getByTestId('journey-board')).toBeVisible();
     await expect(room.page.getByTestId('journey-where')).toContainText('PHÒNG 305');
     await expect(room.page.getByTestId('journey-stop-room')).toHaveAttribute('data-state', 'lead');
@@ -133,7 +141,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
     // …and the route is back at tầng 1, where LOBBY presses first.
     await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '0');
-    await expect(lobby.page.getByTestId('journey-status')).toContainText('Sẵn sàng gọi đội');
+    await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'idle');
 
     // §8 the leaderboard ranks the finished, successful team
     await lobby.page.getByTestId('open-details').click();
@@ -165,16 +173,16 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     const sheet = gate.page.getByTestId('details-sheet');
     await expect(sheet).toBeVisible();
 
-    // the event clock in the sheet header keeps counting while it is open
+    // the sheet shows round history without an event countdown
     const header = gate.page.getByTestId('details-sheet').locator('header');
-    const before = await header.innerText();
-    await expect.poll(() => header.innerText(), { timeout: 12_000 }).not.toBe(before);
+    await expect(header).toContainText('1 LƯỢT CHƠI');
 
     // another phone advances the shared state; the covered dashboard still updates
     const statusBefore = await teamStatus(gate.page);
     expect(statusBefore).toContain('Chờ gọi đội');
     await primary(lobby.page).click(); // CHO ĐỘI LÊN
     await expect.poll(() => teamStatus(gate.page), { timeout: 10_000 }).not.toBe(statusBefore);
+    await expect(header).toContainText('2 LƯỢT CHƠI');
     expect(await teamStatus(gate.page)).toContain('Đang lên tầng');
     expect(await heroLabel(gate.page)).toBe('CHƯA TÍNH GIỜ');
 
@@ -208,7 +216,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     });
     await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME_OVERTIME');
     await expect(gate.page.getByTestId('hero-label')).toHaveText('QUÁ GIỜ');
-    await expect(gate.page.getByTestId('overtime-flag')).toHaveText('OVERTIME');
+    await expect(gate.page.getByTestId('alert-OVERTIME')).toContainText('Hết 5:00');
     await expect(primary(gate.page)).toHaveText('KHÁCH ĐÃ RA — CHỐT GIỜ'); // still GATE's call
 
     await primary(gate.page).click();
@@ -238,7 +246,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await gate.page.reload();
     await sup.page.reload();
 
-    // The first dispatch opens the 90:00 — there is no separate start button.
+    // The first dispatch is recorded, then GATE starts the per-round 5:00 clock.
     await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
     await primary(lobby.page).click();
     await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
@@ -285,7 +293,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     }
   });
 
-  test('9. the lobby is stopped from admitting a team near the cutoff', async ({ browser }) => {
+  test('9. lobby can admit and start another team after the old 90-minute duration', async ({ browser }) => {
     const sup = await phone(browser, 'supervisor');
     const lobby = await phone(browser, 'lobby');
     const gate = await phone(browser, 'gate');
@@ -293,8 +301,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     const room = await phone(browser, 'room305');
 
     // Start from a known-clean session, run one full round so the area is READY,
-    // then jump the controlled clock to exactly 6 minutes before the deadline:
-    // less than the 5-minute limit + 90s allowance.
+    // then move the simulated clock past the old 90-minute duration.
     const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
     const headers = { authorization: `Bearer ${token}` };
     expect((await sup.context.request.post('/api/dev/reset', { headers })).ok()).toBe(true);
@@ -323,27 +330,19 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     const live = await readSnapshot();
     expect(live.event.event_started_at).not.toBeNull();
     const pushed = await sup.context.request.post('/api/dev/clock', {
-      data: { set_ms: (live.event.event_started_at as number) + live.event.config.event_duration_ms - 360_000 },
+      data: { set_ms: (live.event.event_started_at as number) + live.event.config.event_duration_ms + 1 },
       headers,
     });
     expect(pushed.ok()).toBe(true);
 
-    // A synthetic 84-minute jump must discard the display clock's smoothing
-    // window; real server time advances continuously in production.
+    // The old event duration no longer blocks dispatch or game start.
     await lobby.page.reload();
     await sup.page.reload();
-
-    await expect(lobby.page.getByTestId('override-zone')).toContainText('SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI');
-    await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
-    await expect(sup.page.getByTestId('override-open')).toBeVisible();
-
-    // an exceptional admission needs a typed reason and lands in the audit log
-    await sup.page.getByTestId('override-open').click();
-    await expect(sup.page.getByTestId('override-reason')).toBeVisible();
-    await expect(sup.page.getByTestId('override-confirm')).toBeDisabled(); // no confirmation without a reason
-    await sup.page.getByTestId('override-reason').fill('Da dat truoc');
-    await sup.page.getByTestId('override-confirm').click();
-    await expect(sup.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
+    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
+    await primary(lobby.page).click();
+    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
+    await primary(gate.page).click();
+    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
 
     await sup.page.getByTestId('open-details').click();
     await sup.page.getByTestId('section-admin').locator('summary').click();
@@ -365,7 +364,7 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     await lobby.page.reload();
     await gate.page.reload();
     await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await primary(lobby.page).click(); // the first dispatch opens the 90:00
+    await primary(lobby.page).click(); // record the first dispatch
     await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
 
     // Nobody touches the lobby phone: the 5-minute countdown becomes the whole screen.

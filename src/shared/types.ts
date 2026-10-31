@@ -17,8 +17,8 @@ export class SystemClock implements Clock {
 }
 
 /**
- * Deterministic clock for tests: the whole 90-minute event can be replayed in
- * microseconds. Only the authoritative side may use this — never the renderer.
+ * Deterministic clock for tests: long sessions can be replayed in microseconds.
+ * Only the authoritative side may use this — never the renderer.
  */
 export class FakeClock implements Clock {
   private current: number;
@@ -67,10 +67,11 @@ export function isSteppable(clock: Clock): clock is SteppableClock {
 
 /* ------------------------------------------------------------------ event */
 
-export type EventStatus = 'NOT_STARTED' | 'LIVE' | 'CLOSING' | 'ENDED';
+export type EventStatus = 'NOT_STARTED' | 'LIVE' | 'ENDED';
 
 export interface EventConfig {
   event_name: string;
+  /** Legacy history only; no countdown or admission limit uses this value. */
   event_duration_ms: number;
   game_limit_ms: number;
   prep_allowance_ms: number;
@@ -88,13 +89,12 @@ export interface EventSession {
   id: string;
   config: EventConfig;
   /**
-   * Anchor of the fixed 90-minute timeline. Set the instant LOBBY dispatches the
-   * first team (there is no separate "start event" press) and never moved again:
-   * the clock keeps running past its deadline until `event_ended_at` is recorded.
+   * First dispatch timestamp for event history and analytics. It never imposes
+   * a deadline; only an explicit supervisor closure ends the event.
    */
   event_started_at: number | null;
   event_ended_at: number | null;
-  /** Set when the 90-minute deadline passed while a team was still inside. */
+  /** Legacy event-limit history; new operations never set this field. */
   overtime_started_at: number | null;
   closing_warned_at: number | null;
   end_warned_at: number | null;
@@ -133,8 +133,8 @@ export interface Round {
   game_started_at: number | null;
   /**
    * Start of the currently running segment of the 5-minute clock, or null while
-   * GATE has paused it. The 90-minute event clock never pauses: only this window
-   * is flexible, and every pause or reset keeps its own accumulated time.
+   * GATE has paused it. Only the per-round window is timed, and every pause or
+   * reset keeps its own accumulated time.
    */
   game_anchor_ms: number | null;
   /** Playing time already banked before the current segment; 0 after a game reset. */
@@ -206,6 +206,7 @@ export type ActionType =
   | 'RESET_DONE'
   | 'GATE_FINALIZE'
   | 'SET_LAYOUT'
+  | 'SET_TEAM_NAME'
   | 'REOPEN_RESET'
   | 'REVIEW_RESOLVE'
   | 'END_EVENT'
@@ -242,8 +243,7 @@ export type SystemPhase =
   | 'EXITED'
   | 'RESETTING'
   | 'ENDED'
-  | 'GAME_OVERTIME'
-  | 'RESET_OVERTIME';
+  | 'GAME_OVERTIME';
 
 export interface OperatorState {
   role: Role;

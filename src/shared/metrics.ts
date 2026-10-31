@@ -1,5 +1,5 @@
 import type { Outcome, ResetTask, Round, Snapshot } from './types.ts' ;
-import { eventDeadline, gameElapsedMs } from './machine.ts' ;
+import { gameElapsedMs } from './machine.ts';
 
 /** Per-round operational measurements, derived only from persisted timestamps. */
 export interface RoundMetrics {
@@ -150,12 +150,10 @@ export interface Analytics {
   longest_reset: { team_number: number; ms: number } | null;
   longest_prep: { team_number: number; ms: number } | null;
   total_idle_ms: number;
-  total_overtime_ms: number;
   /** How often the flexible 5-minute window had to be restarted or paused. */
   clock_resets: number;
   clock_pauses: number;
   fastest: LeaderRow | null;
-  remaining_capacity_estimate: number | null;
   cycles: CycleMetrics[];
 }
 
@@ -166,7 +164,7 @@ function mean(values: number[]): number | null {
 
 export function analytics(
   snapshot: Pick<Snapshot, 'rounds' | 'reset_tasks' | 'event'>,
-  nowMs: number,
+  _nowMs: number,
 ): Analytics {
   const rounds = [...snapshot.rounds].sort((a, b) => a.round_number - b.round_number);
   const metrics = rounds.map((r) => roundMetrics(r, snapshot.reset_tasks));
@@ -188,19 +186,8 @@ export function analytics(
     return !acc || v > acc.ms ? { team_number: m.team_number, ms: v } : acc;
   }, null);
 
-  const deadline = eventDeadline(snapshot.event);
-  const live = snapshot.event.event_started_at !== null && snapshot.event.event_ended_at === null;
   const cycleTimes = cycles.map((c) => c.start_to_start_ms).filter((v): v is number => v !== null);
   const avgCycle = mean(cycleTimes);
-  const remainingMs = live && deadline !== null ? deadline - nowMs : null;
-  const overtimeMs =
-    deadline === null
-      ? 0
-      : snapshot.event.event_ended_at !== null
-        ? Math.max(0, snapshot.event.event_ended_at - deadline)
-        : remainingMs !== null && remainingMs < 0
-          ? -remainingMs
-          : 0;
 
   return {
     teams_completed: completed.length,
@@ -214,13 +201,10 @@ export function analytics(
     longest_reset: longestReset,
     longest_prep: longestPrep,
     total_idle_ms: cycles.reduce((a, c) => a + (c.idle_after_ready_ms ?? 0), 0),
-    total_overtime_ms: overtimeMs,
     clock_resets: metrics.reduce((a, m) => a + m.game_reset_count, 0),
     clock_pauses: metrics.reduce((a, m) => a + m.game_pause_count, 0),
     fastest: rows[0] ?? null,
     cycles,
-    remaining_capacity_estimate:
-      avgCycle !== null && remainingMs !== null && remainingMs > 0 ? Math.floor(remainingMs / avgCycle) : null,
   };
 }
 
@@ -235,19 +219,13 @@ export function formatClockMs(ms: number): string {
   return `${sign}${pad(abs / 60_000)}:${pad((abs % 60_000) / 1000)}.${pad(abs % 1000, 3)}`;
 }
 
-/** MM:SS — event clock and calm displays. */
+/** MM:SS — round clocks and calm displays. */
 export function formatClockSec(ms: number): string {
   const sign = ms < 0 ? '-' : '';
   const abs = Math.abs(ms);
   return `${sign}${pad(abs / 60_000)}:${pad((abs % 60_000) / 1000)}`;
 }
 
-/** HH:MM:SS — the 90-minute event card. */
-export function formatClockHms(ms: number): string {
-  const sign = ms < 0 ? '-' : '';
-  const abs = Math.abs(ms);
-  return `${sign}${pad(abs / 3_600_000)}:${pad((abs % 3_600_000) / 60_000)}:${pad((abs % 60_000) / 1000)}`;
-}
 
 /** MM:SS.hh — the running game clock on the operator screen. */
 export function formatClockCs(ms: number): string {

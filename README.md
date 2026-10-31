@@ -17,7 +17,9 @@ below.
 
 Production has no accounts and no login screen. There are exactly **five permanent station links**
 — one per role — built from 256-bit tokens of which only the SHA-256 is stored. A link never expires
-and is never spent; what is exclusive is the **seat**: at most one live device per role.
+and is never spent; what is exclusive is the **seat**: at most one live device per role — with one
+deliberate exception, **SUPERVISOR may be staffed by two devices** (organiser + assistant) opening
+the same link. Every other station still accepts exactly one phone.
 
 1. The organizer mints the five links once: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`.
    They are written to `%USERPROFILE%\.scream-305\invites-<date>.txt` (never into git, never into the
@@ -31,6 +33,8 @@ and is never spent; what is exclusive is the **seat**: at most one live device p
 4. The link is reusable for ever, but only while its station is **free**. With a phone already on duty,
    another phone opening the same link is refused with `VỊ TRÍ ĐANG CÓ NGƯỜI SỬ DỤNG`, and no link —
    a second one, a forgotten bookmark, an edited URL — can evict, replace or kick the phone on duty.
+   SUPERVISOR is the only double-staffed station: the same link admits a second supervisor into the
+   second seat, and a third device is still refused with the same sentence.
 5. The gate paints the five-seat board — **red** for a station that already has a phone, **green** for
    a free one — straight from the database, before the phone holds any session.
 6. Replacing a phone: `ĐỔI MÁY` releases the binding on the server, then the new phone opens the
@@ -89,8 +93,13 @@ you would hand over a house key:
   copy, because the database stores hashes only.
 - Moving a station to another phone: `ĐỔI MÁY` on the old one (or `--release GATE` when the phone is
   lost), then open the **same** link on the new one. Nothing is re-minted, nothing is re-registered.
-- All five on duty: a sixth phone is refused on every link, while the five dashboards keep their seat,
+- All five stations on duty: a new phone is refused on every link (at most six devices in total:
+  four single-staffed stations plus two supervisors), while the live dashboards keep their seat,
   their session and every command. Freeing any seat makes its link usable again at once.
+- SUPERVISOR alone may be staffed twice on the same link. Both devices get the real supervisor
+  rights, and the audit log tells them apart by `actor_id`; a third device is refused.
+  To give the seat to someone else, either supervisor releases its own phone (or the organiser runs
+  `--release SUPERVISOR`, which frees both).
 - Nothing expires (`--expires` is ignored and warned about). Re-mint only for a leak or a lost file;
   that revokes the station's previous link and nothing else.
 - Staff never register anything: no email, no phone number, no password, no PIN.
@@ -208,7 +217,7 @@ rehearsal devices would take the five seats the event needs. Two isolated enviro
 Anonymous sign-ins, apply the migrations, mint rehearsal links, then drive five devices:
 
 ```powershell
-powershell -File .\scripts\db-push.ps1        # 0001–0007 against the rehearsal database
+powershell -File .\scripts\db-push.ps1        # 0001–0008 against the rehearsal database
 powershell -File .\scripts\mint-invites.ps1 --base https://<rehearsal-app-url>
 node scripts/rehearsal.mjs --url https://<rehearsal-ref>.supabase.co --key <rehearsal-publishable-key> --links ~\.scream-305\invites-<date>.txt
 ```
@@ -279,7 +288,7 @@ The browser suite is serial: run the whole file (`npm run test:e2e`) rather than
    is bound to, and the gate reports `SUPABASE CHƯA BẬT ĐĂNG NHẬP ẨN DANH`. Nothing else about Auth
    needs configuring: there are no users to create, no email templates and no passwords.
 3. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
-   the database password without echoing it and applies `0001`–`0007` in order, recording each file in
+   the database password without echoing it and applies `0001`–`0008` in order, recording each file in
    `public._sc_migrations` so a re-run is a no-op. It connects through the Supavisor pooler because the
    direct host `db.<ref>.supabase.co` only publishes an AAAA record and cannot be reached from an
    IPv4-only network. The same files can be pasted into the SQL editor instead; add `-Baseline` if the
@@ -318,7 +327,7 @@ hardening brief: only `PASS` means the check was executed and its output support
 | R02 zero simultaneous active rounds | engine CAS + partial unique index `rounds_single_active`, SQL 020 §20, H7 | PASS |
 | R03 zero invalid READY transitions | `GATE_FINALIZE` cycle-aware checks: engine tests #8/#8b, H3/H4, SQL 010 §5, 020 §15 | PASS |
 | R04 zero unauthorized committed actions | permission table in `machine.ts` + `sc.role_permissions`; unit “gives every role…”, SQL 010 §1, 020 §13a/§15e, 030 §8 | PASS |
-| Operator entry: permanent reusable links, one seat per role | SQL 030 §1–§7, §8w–§8ae (bind, idempotent re-open, refusal, no takeover, full board, live phones untouched) + SQL 031 P1–P13/Q1–Q16 (first join, second phone refused with the official sentence, a second link cannot take over, release, same link reused, three reuse cycles, simultaneous redeem, past expiry ignored, revoked link refused, session revocation, 5/5 capacity, no function but `release_device` retires a binding) | PASS |
+| Operator entry: permanent reusable links, one seat per role (SUPERVISOR ×2) | SQL 030 §1–§7, §8w–§8ae (bind, idempotent re-open, refusal, no takeover, full board, live phones untouched) + SQL 031 P1–P13/Q1–Q16 (first join, second phone refused with the official sentence, a second link cannot take over, release, same link reused, three reuse cycles, simultaneous redeem, past expiry ignored, revoked link refused, session revocation, 5/5 capacity, no function but `release_device` retires a binding) + SQL 032 S1–S9/T1–T8 (two supervisors on ONE link, third refused, slots 1/2, catalog constraints, every other station still single, six devices max, board still five stations) | PASS |
 | Operators hold no write grants | SQL 030 §10 (table privileges, `anon` cannot redeem, no internal `sc` helper is callable) | PASS |
 | R05 no lost acknowledged records | file/JSON persistence + snapshot reconciliation, SQL 010 §8 (history completeness), e2e reload cases | PASS |
 | R06 consistent official scores | `test/transport.test.ts` convergence asserts equal `official_duration_ms` on all five clients | PASS |
@@ -338,10 +347,11 @@ Commands and what they produced:
   reconciliation, offline/lost-response handling, disputes, reopen, layout, concurrency races,
   leaderboard eligibility, wall-display countdown, controlled-clock event replay, invitation-link
   parsing, and the boot path: a forged `localStorage` or `?role=` never becomes a role).
-- `npm run test:sql` — migrations 0001–0007 apply to Postgres 16 and **all four** scenarios pass:
-  010 (§1–§12), 020 (§13–§20), 030 (bindings, board, privilege boundary) and 031 (permanent links:
+- `npm run test:sql` — migrations 0001–0008 apply to Postgres 16 and **all five** scenarios pass:
+  010 (§1–§12), 020 (§13–§20), 030 (bindings, board, privilege boundary), 031 (permanent links:
   reuse after release, exclusive seat, no takeover, no auto-release, catalog-level proof that
-  redemption holds neither consumption nor expiry logic). 030 is what caught `handle_command`
+  redemption holds neither consumption nor expiry logic) and 032 (SUPERVISOR double staffing on the
+  same link, third device refused, other stations still single). 030 is what caught `handle_command`
   resolving the operator row without honouring a released binding; it now goes through a guarded
   wrapper.
 - `npm run test:e2e` — **9 passing** browser cases, including a real offline STOP (`context.setOffline`)

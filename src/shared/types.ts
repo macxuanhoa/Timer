@@ -273,6 +273,11 @@ export interface StationSlot {
   role: Role;
   /** A live binding holds this seat; the gate paints it red and closes it. */
   occupied: boolean;
+  /**
+   * Devices on that seat: 1 everywhere, 2 when SUPERVISOR is double staffed
+   * (0008). Additive and optional so older snapshots keep parsing.
+   */
+  devices?: number;
 }
 
 /**

@@ -109,7 +109,8 @@ async function listInvitations(client) {
     return;
   }
   const bindings = await liveBindings(client);
-  const holder = new Map(bindings.map((b) => [b.role, b]));
+  const byRole = new Map();
+  for (const b of bindings) byRole.set(b.role, [...(byRole.get(b.role) ?? []), b]);
 
   console.log('role        link       device                         expires');
   console.log('----------  ---------  -----------------------------  -----------------');
@@ -120,8 +121,11 @@ async function listInvitations(client) {
       console.log(`${role.padEnd(10)}  ${'MISSING'.padEnd(9)}  ${'—'.padEnd(29)}  —`);
       continue;
     }
-    const live = holder.get(role);
-    const device = live ? `OCCUPIED ${live.display_name}` : 'available';
+    const live = byRole.get(role) ?? [];
+    const device =
+      live.length === 0 ? 'available'
+        : live.length === 1 ? `OCCUPIED ${live[0].display_name}`
+          : `OCCUPIED ×${live.length} (${live.map((x) => x.display_name).join(', ')})`;
     console.log(`${role.padEnd(10)}  ${LINK_STATE(shown).padEnd(9)}  ${device.padEnd(29)}  ${LINK_EXPIRY(shown)}`);
   }
 
@@ -129,8 +133,9 @@ async function listInvitations(client) {
   const wrong = perRole.filter(([, n]) => n !== 1);
   console.log(`\nACTIVE links: ${perRole.filter(([, n]) => n === 1).length}/5 stations` +
     (wrong.length ? ` · ATTENTION: ${wrong.map(([r, n]) => `${r}=${n}`).join(', ')} (the model requires exactly one active link per station)` : ''));
-  console.log(`LIVE devices: ${bindings.length}/5 · ${bindings.map((b) => `${b.role}=${b.display_name}`).join(', ') || '(none)'}`);
+  console.log(`LIVE devices: ${bindings.length}/6 · ${bindings.map((b) => `${b.role}=${b.display_name}`).join(', ') || '(none)'}`);
   console.log('\nA link is a station credential, not a ticket: it stays ACTIVE and NEVER EXPIRES, and it is reusable whenever its station is available.');
+  console.log('Every station takes one phone; SUPERVISOR is the only one that may hold two (both openings use the same link).');
   console.log('Only SHA-256 is stored: a lost link is replaced with --role <ROLE>, which revokes the old one.');
 }
 

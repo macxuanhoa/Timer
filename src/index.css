@@ -1,0 +1,386 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #131316;
+  --color-panel: #1c1c20;
+  --color-panel2: #232329;
+  --color-hair: #2c2c33;
+  --color-mute: #8b8b94;
+  --color-snow: #f2f2f4;
+  --color-blood: #e1362c;
+  --color-ember: #f0a12a;
+  --color-jade: #1fb96e;
+  --color-azure: #3b82f6;
+  --color-violet: #a855f7;
+
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-digital: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', monospace;
+
+  --text-hero: clamp(2.4rem, 15vw, 3.4rem);
+  /* The wall display digit: readable across a room, never clipped on a phone. */
+  --text-bigscreen: clamp(3.25rem, 20vw, 24rem);
+
+  --radius-panel: 14px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ink);
+    color: var(--color-snow);
+    font-family: var(--font-sans);
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button {
+    font: inherit;
+    letter-spacing: 0.01em;
+  }
+
+  /* Timer digits must never reflow while counting. */
+  .digital {
+    font-family: var(--font-digital);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    letter-spacing: -0.02em;
+  }
+
+  .safe-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .safe-top {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+
+  /* Handoff ring: whoever must press now. Visible without motion, so the cue is
+     never only an animation. */
+  .turn-pulse {
+    box-shadow: 0 0 0 2px rgb(244 244 245 / 0.35);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .breathe {
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%,
+      100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.35;
+      }
+    }
+
+    .turn-pulse {
+      animation: turn-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes turn-pulse {
+      0%,
+      100% {
+        box-shadow: 0 0 0 2px rgb(244 244 245 / 0.35);
+      }
+      50% {
+        box-shadow: 0 0 0 5px rgb(244 244 245 / 0.1);
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- operator */
+
+/* Stacked cards of the operator screen. */
+.card {
+  border-radius: 14px;
+  border: 1px solid var(--color-hair);
+  background: linear-gradient(180deg, #202025 0%, #1b1b20 100%);
+}
+
+/* The 90-minute card is the one warm surface: it is the event itself. */
+.event-card {
+  border-radius: 14px;
+  border: 1px solid #4b221e;
+  background:
+    radial-gradient(120% 170% at 0% 0%, #3c1613 0%, #271413 55%, #191112 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+
+.track {
+  height: 6px;
+  border-radius: 999px;
+  background: #34343c;
+  overflow: hidden;
+}
+
+/* Card spacing and the big digits scale with the viewport height: a 640 px phone
+   keeps the whole round on one screen, a 844 px phone gets the taller composition
+   of the design. */
+.ev-card {
+  padding: 13px 12px;
+}
+
+.tm-card {
+  padding: 13px 12px;
+}
+
+.hero-block {
+  min-height: 176px;
+}
+
+.event-digits {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.team-digits {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.hero-digits {
+  font-size: clamp(3rem, 16vw, 4.2rem);
+  line-height: 1;
+}
+
+.status-pill {
+  padding: 9px 12px;
+}
+
+@media (max-height: 700px) {
+  .ev-card,
+  .tm-card {
+    padding: 10px 12px;
+  }
+
+  .hero-block {
+    min-height: 96px;
+  }
+
+  .event-digits {
+    font-size: 27px;
+  }
+
+  .team-digits {
+    font-size: 24px;
+  }
+
+  .hero-digits {
+    font-size: clamp(2rem, 12vw, 2.8rem);
+  }
+
+  .status-pill {
+    padding: 6px 10px;
+  }
+}
+
+.track > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 180ms linear;
+}
+
+/* Primary call to action: the biggest target on the phone. */
+.cta {
+  display: flex;
+  min-height: 58px;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border-radius: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: filter 120ms ease, transform 60ms ease;
+}
+
+.cta:active {
+  filter: brightness(0.92);
+  transform: translateY(1px);
+}
+
+.cta:disabled {
+  opacity: 0.55;
+}
+
+.cta-red {
+  background: linear-gradient(180deg, #e8453a 0%, #c4271d 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 8px 20px rgb(225 54 44 / 0.32);
+}
+
+.cta-green {
+  background: linear-gradient(180deg, #25b573 0%, #128a50 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 8px 20px rgb(31 185 110 / 0.3);
+}
+
+.cta-amber {
+  background: linear-gradient(180deg, #f3ac35 0%, #d3860f 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 8px 20px rgb(240 161 42 / 0.3);
+}
+
+.cta-neutral {
+  border: 1px solid var(--color-hair);
+  background: #232329;
+  color: var(--color-mute);
+}
+
+/* ---------------------------------------------------------------- stepper */
+
+.step-node {
+  display: flex;
+  height: 32px;
+  width: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.step-node svg {
+  height: 16px;
+  width: 16px;
+}
+
+.step-label {
+  font-size: 8px;
+  line-height: 1.2;
+}
+
+@media (max-height: 700px) {
+  .step-node {
+    height: 28px;
+    width: 28px;
+  }
+
+  .step-node svg {
+    height: 14px;
+    width: 14px;
+  }
+
+  .step-label {
+    font-size: 7px;
+  }
+
+  .cta {
+    min-height: 50px;
+  }
+}
+
+.step-lead {
+  animation: step-glow 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-lead {
+    animation: none;
+  }
+}
+
+@keyframes step-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.25);
+  }
+}
+
+/* ------------------------------------------------------------------ sheets */
+
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.66);
+  backdrop-filter: blur(2px);
+}
+
+.sheet-content {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 88vh;
+  background: var(--color-panel);
+  border-top: 1px solid var(--color-hair);
+  border-radius: 18px 18px 0 0;
+  outline: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sheet-overlay[data-state='open'],
+  .sheet-content[data-state='open'] {
+    animation: sheet-in 180ms ease-out;
+  }
+  .sheet-overlay[data-state='closed'],
+  .sheet-content[data-state='closed'] {
+    animation: sheet-out 140ms ease-in;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-out {
+  to {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------- big screen */
+
+/* Time is up: the whole wall display flashes red. Kept visible without motion so
+   the alarm is never only an animation. */
+.alarm-flash {
+  background-color: #3a0705;
+}
+
+.alarm-blink {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .alarm-flash {
+    animation: alarm-flash 0.8s steps(1, end) infinite;
+  }
+  .alarm-blink {
+    animation: alarm-blink 0.55s steps(1, end) infinite;
+  }
+}
+
+@keyframes alarm-flash {
+  0%,
+  49% {
+    background-color: var(--color-ink);
+  }
+  50%,
+  100% {
+    background-color: #6d0b07;
+  }
+}
+
+@keyframes alarm-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.2;
+  }
+}

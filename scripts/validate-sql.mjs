@@ -1,0 +1,73 @@
+// Validates the production PostgreSQL migrations and RPCs against a real
+// Postgres 16 instance, using the local auth stub (never run the stub against a
+// real Supabase project).
+//
+//   node scripts/validate-sql.mjs [--keep]
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const NAME = 'sc305-pg-validate';
+const DB = 'sc305_test';
+const keep = process.argv.includes('--keep');
+
+const docker = (args, opts = {}) =>
+  execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...opts });
+
+const run = (label, files) => {
+  process.stdout.write(`  ${label.padEnd(28, ' ')} `);
+  const sql = files.map((f) => readFileSync(resolve(root, f), 'utf8')).join('\n');
+  try {
+    const out = docker(['exec', '-i', NAME, 'psql', '-U', 'postgres', '-d', DB, '-v', 'ON_ERROR_STOP=1', '-q'], {
+      input: sql,
+    });
+    console.log('ok');
+    if (out.trim()) console.log(out.trim().replace(/^/gm, '      '));
+  } catch (err) {
+    console.log('FAILED');
+    console.error(String(err.stdout ?? '') + String(err.stderr ?? ''));
+    throw new Error(`${label} failed`);
+  }
+};
+
+try {
+  console.log(`Preparing Postgres 16 container (${NAME})…`);
+  try {
+    docker(['rm', '-f', NAME]);
+  } catch {
+    /* not running */
+  }
+  docker(['run', '-d', '--name', NAME, '-e', 'POSTGRES_PASSWORD=postgres', 'postgres:16-alpine']);
+
+  for (let i = 0; i < 60; i++) {
+    try {
+      docker(['exec', NAME, 'pg_isready', '-U', 'postgres']);
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (i === 59) throw new Error('Postgres did not become ready');
+    }
+  }
+  docker(['exec', NAME, 'createdb', '-U', 'postgres', DB]);
+
+  console.log('Applying migrations and running the RPC scenario:');
+  run('000 local auth stub', ['supabase/tests/000_local_auth_stub.sql']);
+  run('001 schema + RLS', ['supabase/migrations/0001_init.sql']);
+  run('002 authoritative RPCs', ['supabase/migrations/0002_rpc.sql']);
+  run('003 flexible window upgrade', ['supabase/migrations/0003_clock_window.sql']);
+  run('010 five-operator scenario', ['supabase/tests/010_scenario.sql']);
+  run('020 hardening scenario', ['supabase/tests/020_hardening.sql']);
+  console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
+} finally {
+  if (!keep) {
+    try {
+      docker(['rm', '-f', NAME]);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    console.log(`Container kept: docker exec -it ${NAME} psql -U postgres -d ${DB}`);
+  }
+}

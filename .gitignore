@@ -1,0 +1,10 @@
+node_modules
+dist
+dev-dist
+test-results
+playwright-report
+.scream-data
+.env
+.env.local
+*.log
+.DS_Store

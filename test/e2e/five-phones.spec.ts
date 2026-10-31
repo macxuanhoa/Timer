@@ -1,15 +1,6 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
-/** Dev passcodes for the self-hosted engine (see .env.example). */
-const PASSCODE = {
-  lobby: process.env.SC_PASSCODE_LOBBY ?? '3110',
-  gate: process.env.SC_PASSCODE_GATE ?? '3110',
-  corridor: process.env.SC_PASSCODE_CORRIDOR ?? '3110',
-  room305: process.env.SC_PASSCODE_ROOM305 ?? '3110',
-  supervisor: process.env.SC_PASSCODE_SUPERVISOR ?? '3110',
-} as const;
-
-type Phone = keyof typeof PASSCODE;
+type Phone = 'lobby' | 'gate' | 'corridor' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: 'LOBBY',
   gate: 'NPC 1',
@@ -18,12 +9,13 @@ const ROLE_TAG: Record<Phone, string> = {
   supervisor: 'SUP',
 };
 
+/**
+ * The self-hosted engine has no Supabase to redeem an invitation against, so a
+ * station link (`?station=lobby`) is its stand-in for the real `/i/<token>`.
+ */
 async function signIn(context: BrowserContext, phone: Phone): Promise<Page> {
   const page = await context.newPage();
-  await page.goto('/');
-  await page.getByTestId(`role-${phone.toUpperCase()}`).click();
-  await page.getByTestId('passcode').fill(PASSCODE[phone]);
-  await page.getByTestId('login-submit').click();
+  await page.goto(`/?station=${phone}`);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[phone]);
   await expect(page.getByTestId('connection')).toHaveAttribute('data-status', 'CONNECTED');
@@ -420,25 +412,35 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     for (const { context } of [sup, lobby, gate]) await context.close();
   });
 
-  test('19. the eye button shows and hides the duty passcode while it is typed', async ({ page }) => {
+  test('19. no login form: a phone without a link only sees the invitation gate', async ({ page }) => {
     await page.goto('/');
-    const input = page.getByTestId('passcode');
-    const eye = page.getByTestId('toggle-passcode');
-    await expect(input).toHaveAttribute('type', 'password');
-    await expect(eye).toHaveAttribute('aria-label', 'HIỆN mật khẩu');
+    await expect(page.getByTestId('invite-gate')).toBeVisible();
 
-    await eye.click();
-    await expect(input).toHaveAttribute('type', 'text');
-    await input.fill(PASSCODE.lobby);
-    await expect(input).toHaveValue(PASSCODE.lobby);
-    await expect(eye).toHaveAttribute('aria-label', 'ẨN mật khẩu');
+    // Nothing that looks like a login screen is offered any more.
+    await expect(page.locator('input')).toHaveCount(0);
+    await expect(page.getByTestId('passcode')).toHaveCount(0);
+    await expect(page.getByTestId('role-LOBBY')).toHaveCount(0);
 
-    // hiding it again keeps what was typed, and the visible code still signs in
-    await eye.click();
-    await expect(input).toHaveAttribute('type', 'password');
-    await expect(input).toHaveValue(PASSCODE.lobby);
-    await eye.click();
-    await page.getByTestId('login-submit').click();
+    // The self-hosted build still exposes its five stations to the suite.
+    await expect(page.getByTestId('dev-station-LOBBY')).toBeVisible();
+    await page.getByTestId('dev-station-SUPERVISOR').click();
     await expect(page.getByTestId('dashboard')).toBeVisible();
+    await expect(page.getByTestId('role-tag')).toHaveText('SUP');
+  });
+
+  test('20. a redeemed station survives reopening without the link', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await signIn(context, 'lobby');
+
+    // Back to the bare origin: only the stored session can restore the station.
+    await page.goto('/');
+    await expect(page.getByTestId('dashboard')).toBeVisible();
+    await expect(page.getByTestId('role-tag')).toHaveText('LOBBY');
+
+    await page.reload();
+    await expect(page.getByTestId('dashboard')).toBeVisible();
+    await expect(page.getByTestId('role-tag')).toHaveText('LOBBY');
+
+    await context.close();
   });
 });

@@ -1,26 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dashboard } from './Dashboard';
-import { Login } from './Login';
-import { gatewayFor, loadSession, logout as clearSession, type StoredSession } from './session';
+import { Invitation } from './Invitation';
+import { enterStation, gatewayFor, logout, type StoredSession } from './session';
 import { LiveStore } from '../client/liveStore';
-import { USING_SUPABASE } from '../client/gateway';
 import { PwaUpdate } from './PwaUpdate';
 
 export default function App() {
-  const [session, setSession] = useState<StoredSession | null>(() => loadSession());
-  const [checking, setChecking] = useState(USING_SUPABASE);
-
-  // Supabase restores its own persisted auth session on cold start.
-  useEffect(() => {
-    if (!USING_SUPABASE) return;
-    void (async () => {
-      const { supabaseCurrentSession } = await import('../client/supabaseAuth');
-      setSession(await supabaseCurrentSession());
-      setChecking(false);
-    })();
-  }, []);
-
+  const booted = useRef(false);
+  const [checking, setChecking] = useState(true);
+  const [session, setSession] = useState<StoredSession | null>(null);
+  const [gateError, setGateError] = useState<string | null>(null);
   const [liveStore, setLiveStore] = useState<LiveStore | null>(null);
+
+  /** One boot path: invitation link, restored session, or the invitation gate. */
+  const boot = async () => {
+    setChecking(true);
+    setGateError(null);
+    try {
+      setSession(await enterStation());
+    } catch (err) {
+      setSession(null);
+      setGateError(err instanceof Error ? err.message : 'KHÔNG MỞ ĐƯỢC PHIÊN TRỰC');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  // StrictMode mounts effects twice; the anonymous sign-in must happen once.
+  useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
+    void boot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // One store per signed-in operator: calibrate clock, load snapshot, subscribe.
   useEffect(() => {
@@ -46,13 +58,33 @@ export default function App() {
   }, [session]);
 
   const signOut = () => {
-    void clearSession();
-    setLiveStore(null);
-    setSession(null);
+    void (async () => {
+      try {
+        // Releasing the station on the server comes first: if it fails (offline)
+        // the phone keeps its role instead of being stranded without one.
+        await logout();
+        setLiveStore(null);
+        setSession(null);
+        setGateError(null);
+      } catch {
+        /* keep the live station and let the operator try again */
+      }
+    })();
   };
 
   if (checking) return <Splash text="ĐANG KIỂM TRA PHIÊN…" />;
-  if (!session) return <Login onSignedIn={(s) => setSession(s)} />;
+  if (!session) {
+    return (
+      <Invitation
+        error={gateError}
+        onEnter={(next) => {
+          setGateError(null);
+          setSession(next);
+        }}
+        onRetryBoot={() => void boot()}
+      />
+    );
+  }
   if (!liveStore) return <Splash text="ĐANG KẾT NỐI MÁY CHỦ…" />;
 
   return (

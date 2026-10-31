@@ -17,52 +17,11 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
+import { connect } from './lib/pooler.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = path.join(root, 'supabase', 'migrations');
-
-const ref = process.env.SUPABASE_PROJECT_REF ?? 'efsamoxceegkrwucpqkq';
-const region = process.env.SUPABASE_REGION ?? 'eu-west-1';
-const password = process.env.PGPASSWORD;
 const baseline = process.argv.includes('--baseline');
-
-if (!password) {
-  console.error('PGPASSWORD is empty — run scripts/db-push.ps1 so the password is prompted for.');
-  process.exit(1);
-}
-
-const hosts = [`aws-0-${region}.pooler.supabase.com`, `aws-1-${region}.pooler.supabase.com`];
-
-async function connect() {
-  let lastError;
-  for (const host of hosts) {
-    const client = new pg.Client({
-      host,
-      port: 5432,
-      user: `postgres.${ref}`,
-      password,
-      database: 'postgres',
-      ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 15_000,
-      statement_timeout: 0,
-    });
-    try {
-      await client.connect();
-      console.log(`connected: ${host} as postgres.${ref}`);
-      return client;
-    } catch (error) {
-      await client.end().catch(() => undefined);
-      lastError = error;
-      const message = String(error.message ?? '');
-      // The pooler answers "tenant/user ... not found" when the project lives
-      // behind the other pooler shard, so that one is worth retrying.
-      if (!/tenant|not found|ENOTFOUND|EAI_AGAIN|ECONNREFUSED/i.test(message)) throw error;
-      console.warn(`  ${host}: ${message.split('\n')[0]}`);
-    }
-  }
-  throw lastError ?? new Error('no pooler host answered');
-}
 
 async function main() {
   const files = (await readdir(migrationsDir))

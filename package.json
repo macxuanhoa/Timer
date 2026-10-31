@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:sql": "node scripts/validate-sql.mjs",
     "db:push": "node scripts/db-push.mjs",
+    "invite:mint": "node scripts/mint-invites.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"

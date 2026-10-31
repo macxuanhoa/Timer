@@ -57,8 +57,11 @@ try {
   run('001 schema + RLS', ['supabase/migrations/0001_init.sql']);
   run('002 authoritative RPCs', ['supabase/migrations/0002_rpc.sql']);
   run('003 flexible window upgrade', ['supabase/migrations/0003_clock_window.sql']);
+  run('004 invitations + binding', ['supabase/migrations/0004_invitations.sql']);
+  run('005 public API surface', ['supabase/migrations/0005_public_api.sql']);
   run('010 five-operator scenario', ['supabase/tests/010_scenario.sql']);
   run('020 hardening scenario', ['supabase/tests/020_hardening.sql']);
+  run('030 invitation scenario', ['supabase/tests/030_invitations.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   CommandRequest,
   CommandResult,
@@ -7,6 +7,7 @@ import type {
   Snapshot,
 } from '../shared/types';
 import type { ConnectionStatus, Gateway, RevisionHint } from './gateway';
+import { supabase } from './supabaseAuth';
 import { finalizeSnapshot } from '../shared/machine';
 
 /**
@@ -21,20 +22,18 @@ export class SupabaseGateway implements Gateway {
   private constructor(private readonly sb: SupabaseClient, private readonly role: string) {}
 
   static async connect(): Promise<SupabaseGateway> {
-    const url = import.meta.env.VITE_SUPABASE_URL as string;
-    const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-    if (!url || !key) throw new Error('THIẾU VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY');
-    const sb = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true } });
+    const sb = supabase();
     const { data } = await sb.auth.getSession();
     const userId = data.session?.user.id;
     if (!userId) throw new Error('CHƯA ĐĂNG NHẬP');
-    const { data: profile, error } = await sb
-      .from('operators')
-      .select('role,display_name')
-      .eq('user_id', userId)
-      .single();
-    if (error || !profile) throw new Error('TÀI KHOẢN CHƯA ĐƯỢC PHÂN QUYỀN VỊ TRÍ');
-    return new SupabaseGateway(sb, profile.role as string);
+    // The role comes from the server-side binding, never from the client.
+    const { data: profile, error } = await sb.rpc('whoami');
+    const who = profile as { user_id?: string; role?: string } | null;
+    // Bind the connection to the role the server assigned to this exact user id.
+    if (error || !who?.role || who.user_id !== userId) {
+      throw new Error('TÀI KHOẢN CHƯA ĐƯỢC PHÂN QUYỀN VỊ TRÍ');
+    }
+    return new SupabaseGateway(sb, who.role);
   }
 
   /**

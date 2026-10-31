@@ -10,25 +10,58 @@ npm install
 npm run dev          # http://localhost:5173  (authoritative engine runs in-process)
 ```
 
-Then open the app from five devices (or five browser profiles) and sign in with the role for
-each station.
+Then open the app from five devices (or five browser profiles), each on its own station link — see
+below.
 
-## Operator accounts (self-hosted engine)
+## Operator access
 
-| Station | Account | Default passcode (`SC_PASSCODE_*`) | Owns |
-| --- | --- | --- | --- |
-| LOBBY | `lobby` | `3110` | call/dispatch a team — the first call starts the 90:00 |
-| GATE · NPC 1 | `gate` | `3110` | **start** and **stop** the 5:00, pause/restart it, final readiness |
-| CORRIDOR · NPC 2 | `corridor` | `3110` | hallway progress, hidden objects + hallway reset |
-| ROOM 305 · NPC 3 | `room305` | `3110` | arrival, puzzle completion, room reset |
-| SUPERVISOR | `supervisor` | `3110` | close event, config, overrides, abort, corrections, CSV |
+Production has no accounts and no login screen. A phone is bound to exactly one station by an
+invitation link:
 
-All five stations share the duty passcode `3110` by default. Passcodes and the token secret come
-from the environment (see `.env.example`), so each station can be given its own code; change them
-for any real session. The login field keeps the code hidden but has an eye button to show it while
-it is typed. Only GATE can finalise readiness, only GATE stops the 5:00 (and only GATE or the
-supervisor may pause or restart it), and only SUPERVISOR may override admission or correct a
-record — all enforced by the authoritative layer, not just hidden in the UI.
+1. The organizer mints one link per station — 256-bit tokens, of which only the SHA-256 is stored:
+   `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`
+   The five links are written to `%USERPROFILE%\.scream-305\invites-<date>.txt` (never into git, and
+   never into the terminal log) and are sent to the five phones.
+2. Opening `https://<app>/i/<token>` signs the phone in anonymously — Supabase Anonymous Sign-ins,
+   invisible to the operator — and exchanges the token for one device-bound `sc.operators` row. The
+   app lands straight on that station's dashboard: no password, no role picker.
+3. The session survives refresh and PWA restart: Supabase persists the anonymous session and the app
+   re-reads its role with `whoami()` on every boot.
+4. One role, one phone: a unique index over the live binding means a second phone opening the same
+   link is refused with `VỊ TRÍ NÀY ĐANG TRỰC Ở MÁY KHÁC`.
+5. Replacing a phone: tap `ĐỔI MÁY` on the old phone — it releases the binding and forgets its
+   anonymous identity — then open the same link on the new one. If the old phone is lost, the
+   organizer mints a replacement link: `...mint-invites.ps1 --role GATE --reassign`.
+6. The token is removed from the address bar as soon as it has been read, and it is never written to
+   storage: only the Supabase session is kept on the phone.
+
+| Station | Owns |
+| --- | --- |
+| LOBBY | call/dispatch a team — the first call starts the 90:00 |
+| GATE · NPC 1 | **start** and **stop** the 5:00, pause/restart it, final readiness |
+| CORRIDOR · NPC 2 | hallway progress, hidden objects + hallway reset |
+| ROOM 305 · NPC 3 | arrival, puzzle completion, room reset |
+| SUPERVISOR | close event, config, overrides, abort, corrections, CSV |
+
+Only GATE can finalise readiness, only GATE stops the 5:00 (and only GATE or the supervisor may
+pause or restart it), and only SUPERVISOR may override admission or correct a record — all enforced
+inside Postgres by `sc.role_permissions`, not merely hidden in the UI. The right to *be* SUPERVISOR
+is the SUPERVISOR link itself: no client can ask for a role, and a bound phone that opens another
+station's link is refused.
+
+**Why the PostgreSQL role is never the authority.** An anonymous session and a password session are
+granted the *same* database role — `authenticated` — so a grant to `authenticated` can only ever mean
+"this function is callable", never "this caller may act". Every operator-facing function therefore
+resolves `auth.uid()` against the live `sc.operators` binding before it reads `sc.role_permissions`, and
+the RLS policies on the seven readable tables go through `sc.is_operator()` (self-only for
+`sc.operators`). An anonymous phone that holds no valid link is `authenticated` and still gets zero rows
+and `PERMISSION_DENIED` on every write — asserted by SQL scenario 030, and re-checked against the live
+catalog with `npm run test:sql`.
+
+The self-hosted engine (`npm run dev`) has no Supabase to redeem against, so `/?station=GATE` stands
+in for a link: it signs in with that station's `SC_PASSCODE_*` value (default `3110`; override the
+client side with `VITE_DEV_PASSCODE`). It is a development harness and is never part of a production
+build.
 
 ## How the rules are implemented
 
@@ -134,49 +167,46 @@ record — all enforced by the authoritative layer, not just hidden in the UI.
 | `npm run dev` | App + in-process authoritative engine (HTTP + SSE at `/api/*`), state persisted to `.scream-data/event.json` so a restart restores the live session |
 | `npm run build` / `npm run preview` | Production PWA build (service worker, installable, standalone) |
 | `npm test` | Vitest: domain rules, engine, five-client reconciliation, real HTTP+SSE transport |
-| `npm run test:sql` | Runs `supabase/migrations/*` plus the five-operator scenario against a throwaway Postgres 16 container (Docker required) |
-| `npm run test:e2e` | Playwright: five phone profiles, one real round, 360 px layout, cutoff and overtime behaviour |
+| `npm run test:sql` | Runs `supabase/migrations/*` plus the operator, hardening and invitation scenarios against a throwaway Postgres 16 container (Docker required) |
+| `npm run test:e2e` | Playwright: five phone profiles, one real round, 360 px layout, cutoff, overtime, the invitation gate |
 | `npm run typecheck` | `tsc --noEmit` over app, server, migrations-facing client code and tests |
+| `powershell -File .\scripts\db-push.ps1` | Applies pending migrations to the hosted Supabase project; prompts for the database password with no echo |
+| `powershell -File .\scripts\mint-invites.ps1` | Mints/burns station invitation links; writes them to `%USERPROFILE%\.scream-305\invites-<date>.txt` (`--list`, `--revoke GATE`, `--role GATE --reassign`) |
 
 The browser suite is serial: run the whole file (`npm run test:e2e`) rather than a single case.
 
 ## Production deployment (Supabase)
 
 1. Create a Supabase project (Postgres, Auth, Realtime enabled).
-2. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
-   the database password without echoing it and applies `0001`–`0003` in order, recording each file in
+2. **Turn on anonymous sign-ins**: Authentication → Sign In / Providers → *Anonymous sign-ins* →
+   Enable → Save. Without this the phone cannot obtain the anonymous identity that the station link
+   is bound to, and the gate reports `SUPABASE CHƯA BẬT ĐĂNG NHẬP ẨN DANH`. Nothing else about Auth
+   needs configuring: there are no users to create, no email templates and no passwords.
+3. Apply the migrations: `powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1` prompts for
+   the database password without echoing it and applies `0001`–`0005` in order, recording each file in
    `public._sc_migrations` so a re-run is a no-op. It connects through the Supavisor pooler because the
    direct host `db.<ref>.supabase.co` only publishes an AAAA record and cannot be reached from an
    IPv4-only network. The same files can be pasted into the SQL editor instead; add `-Baseline` if the
    `sc.*` schema was created that way before. Do **not** run `supabase/tests/000_local_auth_stub.sql`;
    it exists only so plain Postgres can execute the migrations locally.
-3. Create the five operator accounts (Authentication → Users): `lobby`, `gate`, `corridor`,
-   `room305`, `supervisor` at your `VITE_OPERATOR_DOMAIN` (for example
-   `gate@scream305.local`), each with its own password, then map them:
-   ```sql
-   insert into sc.operators (user_id, role, display_name)
-   select id, 'SUPERVISOR', 'Mai' from auth.users where email = 'supervisor@scream305.local';
-   -- repeat for LOBBY, GATE, CORRIDOR, ROOM305
-   ```
-4. Create one session row before the event (revision starts at 0):
-   ```sql
-   insert into sc.events (name, duration_ms, game_limit_ms, prep_allowance_ms, reset_target_ms, hidden_object_owner)
-   values ('Halloween 305', 5400000, 300000, 90000, 90000, 'CORRIDOR')
-   returning *;
-   insert into sc.state (id, event_id, revision, updated_at)
-   select true, id, 0, sc.now_ms() from sc.events order by id desc limit 1;
-   ```
-5. Set `.env`: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
-   `VITE_OPERATOR_DOMAIN`, then `npm run build` and host `dist/` on HTTPS (any static host; the
-   PWA needs a service-worker-capable origin). On Vercel, `vercel.json` pins `npm run build` and
-   `dist/`, so the same three `VITE_*` values only need to exist in
-   Project → Settings → Environment Variables before the first deploy.
-6. Realtime revision hints come from Postgres changes on `sc.state` (already added to
-   `supabase_realtime` by the migration); clients reconcile by calling `sc.snapshot()`, so a lost
-   hint only delays a refresh, it never corrupts state.
+4. Mint the five station links: `powershell -ExecutionPolicy Bypass -File .\scripts\mint-invites.ps1`
+   (add `--base https://your-app.vercel.app` if the default origin is wrong). The links are written to
+   a file outside the repository; only their SHA-256 is ever stored in the database.
+5. Set `.env`: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, then
+   `npm run build` and host `dist/` on HTTPS (any static host; the PWA needs a service-worker-capable
+   origin). On Vercel, `vercel.json` pins `npm run build` and `dist/`, so the same values only need to
+   exist in Project → Settings → Environment Variables before the first deploy. No schema needs to be
+   exposed to PostgREST: the browser talks to eight `public` functions (0005) and never to a table.
+6. The event session and its single state row are created by the first phone that redeems a link
+   (`sc._ensure_event()`), using the column defaults from `0001`; a project that already has an event
+   keeps it. Realtime revision hints come from Postgres changes on `sc.state` (added to
+   `supabase_realtime` by the migration); clients reconcile by calling `snapshot()`, so a lost hint
+   only delays a refresh, it never corrupts state.
+7. Optional: delete the `*.txt` invitation file once the five phones are set up. A phone keeps its
+   binding; a lost link is re-minted, never recovered.
 
-Server-side rights live in `sc.role_permissions`; clients hold no write grants. There is no
-separate backend service to deploy.
+Server-side rights live in `sc.role_permissions`; clients hold no write grants and cannot execute the
+internal `sc` helpers. There is no separate backend service to deploy.
 
 ## Verification evidence
 
@@ -188,33 +218,36 @@ hardening brief: only `PASS` means the check was executed and its output support
 | R01 zero duplicate committed START/STOP | `test/engine.test.ts` #12/#13, `test/hardening.test.ts` H13, `test/transport.test.ts` G02, SQL 010 §4/§6 | PASS |
 | R02 zero simultaneous active rounds | engine CAS + partial unique index `rounds_single_active`, SQL 020 §20, H7 | PASS |
 | R03 zero invalid READY transitions | `GATE_FINALIZE` cycle-aware checks: engine tests #8/#8b, H3/H4, SQL 010 §5, 020 §15 | PASS |
-| R04 zero unauthorized committed actions | permission table in `machine.ts` + `sc.role_permissions`; unit “gives every role…”, SQL 010 §1, 020 §13a/§15e | PASS |
+| R04 zero unauthorized committed actions | permission table in `machine.ts` + `sc.role_permissions`; unit “gives every role…”, SQL 010 §1, 020 §13a/§15e, 030 §8 | PASS |
+| Operator entry: one role per phone | SQL 030 §1–§7 (bind, idempotent re-open, refusal, reassignment, release) | PASS |
+| Operators hold no write grants | SQL 030 §10 (table privileges, `anon` cannot redeem, no internal `sc` helper is callable) | PASS |
 | R05 no lost acknowledged records | file/JSON persistence + snapshot reconciliation, SQL 010 §8 (history completeness), e2e reload cases | PASS |
 | R06 consistent official scores | `test/transport.test.ts` convergence asserts equal `official_duration_ms` on all five clients | PASS |
 | R07 authoritative restore after reconnect | `test/clients.test.ts` #15, `test/transport.test.ts` #15b, e2e “Xem thêm”/reload cases | PASS |
 | R08 no fabricated success for uncertain requests | `reconcileUnknown` + `/api/operation`: transport G02, hardening H6, clients “network failure…”, e2e G03 | PASS |
 | R09 300-second boundary | unit (300 000 win / 300 001 timeout), hardening H2/H8 (before, exactly at, after) | PASS |
 | R10 90-minute admission and closure | engine #1/#9/#9b/11b/19d/20, SQL 010 §10–§12, e2e #9 | PASS |
-| R11 five-device workflow | Playwright `test/e2e/five-phones.spec.ts` (8 cases, five browser contexts over HTTP+SSE) | PASS |
+| R11 five-device workflow | Playwright `test/e2e/five-phones.spec.ts` (9 cases, five browser contexts over HTTP+SSE, station links) | PASS |
 | R12 real-device rehearsal | needs five physical phones on the event Wi-Fi against a deployed build | **NOT TESTED** — release readiness is not established until this is done |
-| Supabase deployment (migrations applied to a live project) | needs project URL + anon key + five auth users | **NOT TESTED** — SQL is validated against Postgres 16 locally, not against a Supabase host |
+| Supabase deployment (migrations applied to a live project, anonymous sign-ins on) | needs the project password, the dashboard switch, and five real phones | **NOT TESTED** — SQL is validated against Postgres 16 locally, not against a Supabase host |
 | Real background execution / alarm audibility on iOS+Android | outside browser automation | **NOT TESTED** — the UI reports audio readiness and degrades to visual alarms |
 
 Commands and what they produced:
 
 - `npm run typecheck` — clean.
-- `npm test` — **64 passing** cases (engine rules and every derived duration, five-client
+- `npm test` — **81 passing** cases (engine rules and every derived duration, five-client
   reconciliation, offline/lost-response handling, disputes, reopen, layout, concurrency races,
-  leaderboard eligibility, wall-display countdown, controlled-clock event replay).
-- `npm run test:sql` — migrations 0001+0002 apply to Postgres 16 and **both** scenarios pass:
-  010 (§1–§12) and 020 (§13–§20). This is what caught `operation_status` returning SQL `NULL`
-  instead of `found:false`, an inverted override test in `START_GAME`, missing client read grants,
-  and a reopened-reset cycle that could never be re-confirmed.
-- `npm run test:e2e` — **8 passing** browser cases, including a real offline STOP (`context.setOffline`)
-  that proves no score is invented, the wall display auto-opening on `BẮT ĐẦU`, and 360 px layout
-  checks for all five roles.
-- `npm run build` — clean PWA build; app bundle 332 kB / **103 kB gzip**, Supabase client split into
-  a lazy chunk the self-hosted build never loads.
+  leaderboard eligibility, wall-display countdown, controlled-clock event replay, invitation-link
+  parsing).
+- `npm run test:sql` — migrations 0001–0005 apply to Postgres 16 and **all three** scenarios pass:
+  010 (§1–§12), 020 (§13–§20) and 030 (invitations). 030 is what caught `handle_command` resolving the
+  operator row without honouring a released binding; it now goes through a guarded wrapper.
+- `npm run test:e2e` — **9 passing** browser cases, including a real offline STOP (`context.setOffline`)
+  that proves no score is invented, the wall display auto-opening on `BẮT ĐẦU`, 360 px layout checks
+  for all five roles, a phone that only sees the invitation gate unless it holds a link, and a
+  station that survives reopening without the link.
+- `npm run build` — clean PWA build; app bundle 356 kB / **110 kB gzip**, Supabase client split into
+  lazy chunks the self-hosted build never loads.
 - `npm audit --omit=dev` — 0 vulnerabilities.
 
 **Measured synchronisation (loopback HTTP + SSE, five live clients, one full round = 44 observations)**:
@@ -234,6 +267,6 @@ the venue network, and each phone displays its own current RTT and estimated dis
   restores the live round from the server — the paper backup timer in the runbook is the fallback.
 - Zero-millisecond display divergence between devices cannot be guaranteed, and no claim is made here.
 
-Needs your project (cannot be executed here): Supabase URL + anon key, the five auth users mapped into
-`sc.operators`, `supabase db push`, then `VITE_BACKEND=supabase npm run build` hosted on HTTPS, and the
-real five-device rehearsal on the venue network.
+Needs your project (cannot be executed here): Anonymous sign-ins enabled, `db-push.ps1` run against the
+hosted database, the five links minted with `mint-invites.ps1`, `VITE_BACKEND=supabase` build hosted on
+HTTPS, and the real five-device rehearsal on the venue network.

@@ -82,6 +82,9 @@ export function Dashboard({ store, account, onLogout }: Props) {
   const primary = useMemo(() => (snap ? resolvePrimary(account.role, snap, now) : null), [snap, account.role, now]);
   const journey = useMemo(() => (snap ? resolveJourney(snap, now, account.role) : null), [snap, now, account.role]);
   const teamLine = useMemo(() => (snap ? resolveTeamLine(snap, now) : null), [snap, now]);
+  // The ranking reads persisted results only, so it is rebuilt when the snapshot
+  // changes — not on every frame of the running game clock.
+  const rows = useMemo(() => (snap ? leaderboard(snap) : []), [snap]);
   const phase = snap ? phaseOf(snap, now) : 'PRE_EVENT';
 
   useWakeLock(phase !== 'ENDED' && phase !== 'PRE_EVENT');
@@ -131,7 +134,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
     );
   }
 
-  const rows = leaderboard(snap);
   const fastest = rows[0];
   const round = snap.active_round;
   const staleData = state.status === 'DEGRADED' || (store.dataAgeMs() ?? 0) > 22_000;
@@ -202,8 +204,10 @@ export function Dashboard({ store, account, onLogout }: Props) {
       data-phase={phase}
       onPointerDown={() => alarms.unlock()}
     >
-      {/* ------------------------------------------------------------ header */}
-      <header className="safe-top flex items-start justify-between gap-2 px-3 pt-3 pb-2.5">
+      {/* ---------------------------------------------------------- header.
+           .safe-top carries the top spacing plus the notch band, so the title
+           and the role pill clear the ear-piece instead of sitting under it. */}
+      <header className="safe-top flex items-start justify-between gap-2 px-3 pb-2.5">
         <div className="min-w-0">
           <p className="text-[15px] font-extrabold leading-none tracking-[0.01em] text-blood">SCREAM CONTROL</p>
           <p className="mt-1.5 flex items-center gap-1.5 text-[8.5px] font-semibold tracking-[0.1em] text-mute">

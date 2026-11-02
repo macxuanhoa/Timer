@@ -5,6 +5,7 @@ const { Pool } = createRequire(import.meta.url)('pg');
 // Deliberately fixed to loopback + a test-only database, never production env.
 const pool = new Pool({ host: '127.0.0.1', port: 55436, database: 'sc305_access', user: 'postgres', password: 'postgres', max: 16 });
 const PIN = '9876543210';
+const RESET = 'greenwich99';
 const roles = ['LOBBY','GATE','CORRIDOR','ROOM305'];
 const contexts: BrowserContext[] = [];
 
@@ -18,12 +19,14 @@ const queries: Record<string,string> = {
   server_now_ms: 'select public.server_now_ms() as result', operation_status: 'select public.operation_status($1) as result',
   handle_command: 'select public.handle_command($1,$2,$3,$4) as result',
   redeem_invitation: 'select public.redeem_invitation($1,$2) as result',
+  reset_all_stations: 'select public.reset_all_stations($1) as result',
 };
 async function rpc(uid: string | null, name: string, body: Record<string,unknown> = {}) {
   if (!queries[name]) throw new Error('Unknown RPC');
   const args = name === 'claim_station' ? [body.p_role,body.p_pin] : name === 'handle_command' ?
     [body.p_action,body.p_meta,body.p_expected_revision,body.p_idempotency_key] : name === 'operation_status' ?
-    [body.p_idempotency_key] : name === 'redeem_invitation' ? [body.p_token,body.p_device_id] : [];
+    [body.p_idempotency_key] : name === 'redeem_invitation' ? [body.p_token,body.p_device_id] :
+    name === 'reset_all_stations' ? [body.p_secret] : [];
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -79,6 +82,7 @@ async function claim(p: Awaited<ReturnType<typeof phone>>, role: string) {
 test.beforeEach(async () => {
   await pool.query('update sc.operators set revoked_at=now() where revoked_at is null');
   await pool.query('select sc.configure_station_access($1,false)',[PIN]);
+  await pool.query('select sc.configure_station_reset($1)',[RESET]);
 });
 test.afterEach(async()=>{await Promise.all(contexts.splice(0).map(c=>c.close()));});
 test.afterAll(async()=>{await pool.end();});
@@ -134,7 +138,53 @@ test('offline release keeps dashboard and occupancy; a lost committed reply is s
   await a.page.getByTestId('return-home').click(); await expect(a.page.getByTestId('scream-home')).toBeVisible();
   await expect(b.page.getByTestId('station-GATE')).toBeEnabled();
 });
-test('stale occupancy becomes neutral and disabled, reconnect refetches; old link cannot grant a role',async({browser})=>{
+test('organiser secret frees every occupied station; a wrong secret keeps every seat', async ({browser}) => {
+  const lobby=await phone(browser); await claim(lobby,'LOBBY');
+  const gate=await phone(browser); await claim(gate,'GATE');
+  const sup=await phone(browser); await claim(sup,'SUPERVISOR');
+  for (const [role,pin] of [['CORRIDOR',null],['ROOM305',null]] as [string,string|null][]) {
+    expect((await rpc(await identity(),'claim_station',{p_role:role,p_pin:pin})).ok).toBe(true);
+  }
+  const spare=await identity();
+  expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
+  const organiser=await phone(browser);
+  await expect(organiser.page.getByTestId('station-count')).toHaveText('6/6');
+
+  await organiser.page.getByTestId('home-reset-open').click();
+  await organiser.page.getByLabel('Mật khẩu reset',{exact:true}).fill('greenwich98');
+  await organiser.page.getByTestId('home-reset-confirm').click();
+  await expect(organiser.page.getByTestId('home-error')).toHaveText('MẬT KHẨU RESET KHÔNG ĐÚNG');
+  await expect(organiser.page.getByTestId('station-count')).toHaveText('6/6');
+  await expect(gate.page.getByTestId('dashboard')).toBeVisible();
+
+  await organiser.page.getByLabel('Mật khẩu reset',{exact:true}).fill(RESET);
+  await organiser.page.screenshot({path:'shots/home-reset-secret.png'});
+  await organiser.page.getByTestId('home-reset-confirm').click();
+  await expect(organiser.page.getByTestId('home-reset-result')).toHaveText('ĐÃ GIẢI PHÓNG 6 VỊ TRÍ · BẢNG CÒN TRỐNG');
+  await expect(organiser.page.getByTestId('station-count')).toHaveText('0/6');
+  await organiser.page.screenshot({path:'shots/home-reset-free-board.png'});
+  await expect(organiser.page.getByTestId('station-GATE')).toBeEnabled();
+  // Every duty phone loses authority on its own recheck and lands back on the picker.
+  for (const p of [lobby,gate,sup]) await expect(p.page.getByTestId('scream-home')).toBeVisible();
+  expect((await rpc(spare,'whoami'))).toBeNull();
+  expect((await rpc(gate.uid(),'handle_command',{p_action:'GAME_STOP',p_meta:{},p_expected_revision:0,p_idempotency_key:randomUUID()})).code).toBe('PERMISSION_DENIED');
+  expect((await rpc(sup.uid(),'release_device')).code).toBe('NOT_BOUND');
+});
+test('reset is inert without a configured secret, refuses guesses and repeats safely', async () => {
+  const uid=await identity();
+  expect((await rpc(uid,'claim_station',{p_role:'GATE',p_pin:null})).ok).toBe(true);
+  await pool.query('select sc.configure_station_reset(null)');
+  expect((await rpc(uid,'reset_all_stations',{p_secret:'whatever-value'})).code).toBe('RESET_NOT_CONFIGURED');
+  await pool.query('select sc.configure_station_reset($1)',[RESET]);
+  expect((await rpc(uid,'reset_all_stations',{p_secret:'Greenwich99'})).code).toBe('RESET_INVALID');
+  expect((await rpc(uid,'whoami'))?.role).toBe('GATE');
+  expect((await rpc(uid,'reset_all_stations',{p_secret:RESET})).freed).toBe(1);
+  expect(await rpc(uid,'whoami')).toBeNull();
+  // A repeat sweep on an empty board is a safe no-op, and seats are instantly reusable.
+  expect((await rpc(uid,'reset_all_stations',{p_secret:RESET})).freed).toBe(0);
+  expect((await rpc(await identity(),'claim_station',{p_role:'GATE',p_pin:null})).ok).toBe(true);
+});
+test('stale occupancy becomes neutral and disabled, reconnect refetches; old link cannot grant a role', async({browser})=>{
   const a=await phone(browser); a.blockBoard(true);
   await expect(a.page.getByTestId('station-GATE')).toHaveAttribute('data-state','unknown');
   await expect(a.page.getByTestId('station-GATE')).toBeDisabled();

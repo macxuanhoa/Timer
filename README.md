@@ -22,6 +22,13 @@ when claiming. Unknown, stale or offline occupancy is neutral and disabled. A Po
 Realtime subscription refetches the public board on updates; a 3-second poll and foreground/
 online refetch recover missed hints. The server always rechecks capacity at claim time.
 
+Under the board, **RESET TẤT CẢ VỊ TRÍ** is the organiser escape hatch for a stuck board:
+after the administrator secret is typed in, PostgreSQL revokes every live binding at once,
+so all six seats return to CÒN TRỐNG and each kicked phone lands back on this picker within
+its next 5-second authority recheck. The sweep touches access only — events, rounds, reset
+tasks, the 90:00 and 5:00 clocks and the audit log keep their values — and a seat freed this
+way is immediately re-claimable. A repeat reset on an empty board is a safe no-op.
+
 Supabase Anonymous Auth runs in the background on selection and persists across refresh,
 screen lock, network loss and PWA restart. Every boot resolves authority with whoami;
 active dashboards recheck it every 5 seconds and on foreground/reconnect. Local storage,
@@ -132,6 +139,12 @@ The historical mint tool refuses operation on the new access model.
    Tap it once early so its alarm is unlocked, then leave it — it opens and closes with the game
    clock by itself. If it is a TV or tablet, open the LOBBY link on it: the display is read-only and
    changes no score, so it is safe to aim at the players.
+10. **Board stuck full** (a crew left mid-shift, phones were handed over, or a station shows
+   ĐÃ ĐỦ NGƯỜI with nobody on duty): open the root URL on any phone that is not holding a station,
+   tap **RESET TẤT CẢ VỊ TRÍ** under the board, and type the administrator secret. Every seat
+   returns to CÒN TRỐNG, every on-duty phone drops back to this picker, and the crew re-selects its
+   station. Scores and clocks are untouched. If nobody is trusted with the secret, an administrator
+   may instead revoke one lost `user_id` in `sc.operators` from a trusted SQL session.
 
 ## Security and administration
 
@@ -139,7 +152,8 @@ Migration **0011_command_press_integer.sql** follows 0010_single_url_roles.sql,
 0009_board_capacity.sql and 0008_supervisor_pair.sql. Applied migration files 0001–0010 are
 unchanged. All active bindings, events, rounds, reset tasks and action logs survive the upgrade.
 The migration ledger decides which forward files remain pending; never reset bindings for this
-upgrade.
+upgrade. 0014_station_reset.sql is forward-only in the same manner: it adds the reset secret
+column and functions and revokes no binding by itself — only a typed, correct secret sweeps.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, partial unique index on (role, seat_slot) and slot CHECK constraints
@@ -157,10 +171,25 @@ logs or local storage. There are at most 5 PIN attempts per identity and 30 glob
 attacker to temporarily deny new supervisor claims. Existing supervisors remain operational.
 Use a unique randomly chosen 10–12 digit PIN and share it privately with supervisors.
 
+The board reset secret follows the same model: migration **0014_station_reset.sql** stores only
+a bcrypt cost-10 hash in `sc.station_access_config`, `sc.reset_all_stations(secret)` compares
+the typed value inside PostgreSQL, and neither the secret nor its hash ever reaches the browser,
+an audit row or local storage. Refusals are capped at 5 attempts per identity and 10 globally
+per 15 minutes under separate `reset:%` counters, so they cannot lock out supervisor PIN claims.
+Every refusal (`RESET_REFUSED`) and every sweep (`STATIONS_RESET`, with the number of freed
+seats and the secret version) lands in the private access audit. When no secret is configured
+the button reports RESET CHƯA ĐƯỢC MỞ and frees nothing.
+
 Rotate through the hidden prompt:
 
 ~~~powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -ConfigureSupervisorPin
+~~~
+
+Install or rotate the reset secret the same way — it is never written to a file:
+
+~~~powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -ConfigureStationReset
 ~~~
 
 The database-owner-only sc.configure_station_access(pin, revoke_supervisors) function supports
@@ -168,7 +197,9 @@ rotation, disabling new claims with NULL, and explicit revocation with the secon
 Rotation defaults to preserving on-duty devices. It is not granted to anon/authenticated or
 exposed through PostgREST. If a phone is lost, an administrator may revoke only that user_id in
 sc.operators from a trusted SQL session; do not clear all staff bindings. No expiry or heartbeat
-can silently free a working phone.
+can silently free a working phone. sc.configure_station_reset(secret) and sc.reset_all_stations(secret)
+are owner-only in the same way: the browser can reach only `public.reset_all_stations(text)`, and
+freeing the whole board is a deliberate, secret-gated human action rather than an automatic sweep.
 
 Public station_occupancy contains only five role/capacity/device counters. RLS permits SELECT
 for anon/authenticated and no client writes. Operator identities, access audit, PIN hashes and
@@ -233,11 +264,11 @@ Use the existing Supabase project and Vercel project; do not create replacements
 Run the protected database upgrade before pushing main (GitHub pushes trigger Vercel):
 
 ~~~powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -SingleUrl -ConfigureSupervisorPin
+powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -SingleUrl -ConfigureSupervisorPin -ConfigureStationReset
 ~~~
 
-The terminal asks for the PostgreSQL password and supervisor PIN using hidden prompts.
-Secrets exist only in process memory. No DATABASE_URL or password file is needed.
+The terminal asks for the PostgreSQL password, supervisor PIN and reset secret using hidden
+prompts. Secrets exist only in process memory. No DATABASE_URL or password file is needed.
 The runner refuses missing 0001–0007 history, locks access changes, fingerprints the event
 and active roster before/after, and commits all pending migrations plus PIN configuration in
 one transaction. It rolls back on changed fingerprints or unsafe grants. A non-secret report is

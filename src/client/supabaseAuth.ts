@@ -52,6 +52,25 @@ export function claimErrorMessage(result: ClaimResult | null): string {
   return CLAIM_ERROR[result?.code ?? ''] ?? 'CHƯA VÀO ĐƯỢC VỊ TRÍ — KIỂM TRA KẾT NỐI';
 }
 
+export interface ResetResult {
+  ok: boolean;
+  code: string;
+  /** How many duty bindings the server actually revoked. */
+  freed?: number;
+}
+
+/** The board reset is checked inside PostgreSQL; these are its refusal reasons. */
+const RESET_ERROR: Record<string, string> = {
+  NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
+  RESET_INVALID: 'MẬT KHẨU RESET KHÔNG ĐÚNG',
+  RESET_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
+  RESET_NOT_CONFIGURED: 'RESET CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
+};
+
+export function resetErrorMessage(result: ResetResult | null): string {
+  return RESET_ERROR[result?.code ?? ''] ?? 'CHƯA RESET ĐƯỢC — KIỂM TRA KẾT NỐI';
+}
+
 /**
  * Which of the five stations are already on duty. Readable before sign-in on
  * purpose: the gate has to show the board to a phone that holds no session yet.
@@ -121,6 +140,19 @@ export async function leaveStation(): Promise<void> {
   const { data, error } = await sb.rpc('release_device');
   if (error) throw new Error(error.message);
   if (!(data as { ok?: boolean } | null)?.ok) throw new Error('CHƯA NHẢ ĐƯỢC VỊ TRÍ');
+}
+
+/**
+ * Organiser sweep: free every occupied station at once. The secret is sent to
+ * PostgreSQL and compared against a bcrypt hash there — the app never knows
+ * whether a secret is configured beyond the server's own refusal, and the typed
+ * secret is not kept in storage. Event, round and timer data are untouched.
+ */
+export async function resetAllStations(secret: string): Promise<ResetResult> {
+  await ensureAnonymousSession();
+  const { data, error } = await supabase().rpc('reset_all_stations', { p_secret: secret });
+  if (error) throw new Error(error.message);
+  return data as ResetResult;
 }
 
 /** Realtime carries no authority; its hints trigger a fresh occupancy RPC. */

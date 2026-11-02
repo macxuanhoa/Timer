@@ -31,6 +31,11 @@ try {
   check('legacy invitation grant revoked',Boolean(legacy));
   const denied=await rpc(a,'handle_command',{p_action:'GAME_STOP',p_meta:{},p_expected_revision:0,p_idempotency_key:crypto.randomUUID()});
   check('unbound identity cannot send an event command',denied.code==='PERMISSION_DENIED');
+  // One deliberately wrong secret only: it proves the hosted RPC exists and refuses,
+  // and can never free an on-duty phone. It does spend one of the reset attempts.
+  const resetDenied=await rpc(a,'reset_all_stations',{p_secret:'production-smoke-not-the-secret'});
+  check('wrong reset secret is refused and frees nothing',resetDenied?.ok!==true);
+  report.resetRefusal=resetDenied?.code;
   const target=initial.stations.find(s=>s.role!=='SUPERVISOR'&&s.devices===0);
   if(target){
     let postgresReady=false;
@@ -61,6 +66,7 @@ try {
     await rpc(winner,'release_device');
   }else report.unverified.push('No vacant NPC slot: live claim/release skipped to preserve existing operators.');
   report.unverified.push('Two live supervisor claims: requires the privately entered PIN and available seats; proven locally.');
+  report.unverified.push('A real board reset: never run against on-duty phones; proven locally in 037 and the access suite.');
   report.status='passed';
 }catch(error){report.status='failed';report.error=error.message;console.error(error.message);process.exitCode=1;}
 finally {

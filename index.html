@@ -13,10 +13,30 @@
     <meta name="description" content="SCREAM CONTROL — Room 305: điều phối sự kiện Halloween 90 phút cho năm trực máy." />
     <link rel="icon" href="/pwa/icon-192.png" />
     <link rel="apple-touch-icon" href="/pwa/icon-180.png" />
+    <!-- Warm the database connection while the HTML is still parsing: the first
+         authoritative read in Supabase builds otherwise pays DNS + TLS + key
+         exchange on the critical path. Vite substitutes the build-time URL, and an
+         empty value (local engine) simply points back at this origin. -->
+    <link rel="preconnect" href="%VITE_SUPABASE_URL%" crossorigin />
     <title>SCREAM CONTROL · Room 305</title>
+    <!-- Paint the console's own darkness before the stylesheet arrives, so a cold
+         start never flashes white behind the operator's eyes. -->
+    <style>
+      html {
+        background: #131316;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Static shell: rendered by the HTML parser alone, so the phone shows a
+         responding console during the bundle download and parse. React replaces
+         this subtree on mount (src/main.tsx), and nothing waits on it. -->
+    <div id="root">
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #131316; color: #8b8b94; font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; letter-spacing: 0.3em; text-align: center; padding: 24px">
+        <span style="color: #e1362c; font-weight: 800; letter-spacing: 0.18em">SCREAM CONTROL</span>
+        <span>ĐANG MỞ MÁY…</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

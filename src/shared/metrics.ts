@@ -31,12 +31,35 @@ function diff(from: number | null | undefined, to: number | null | undefined): n
   return Math.max(0, to - from);
 }
 
-/** Only the reset confirmations of the current cycle count. */
+/**
+ * Only the reset confirmations of the current cycle count.
+ *
+ * A metrics pass asks for three keys per round, and each ask used to walk the whole
+ * task list — quadratic across a 90-minute event. The list is indexed once per
+ * snapshot instead (a WeakMap, so an index dies with the array it came from) and
+ * looked up in constant time. The first match in array order wins, exactly as the
+ * previous `find` did.
+ */
+type TaskDoneIndex = Map<string, number>;
+const taskIndexByList = new WeakMap<ResetTask[], TaskDoneIndex>();
+const taskSlot = (roundId: string, key: string, cycle: number) => `${roundId}|${key}|${cycle}`;
+
+function taskIndex(tasks: ResetTask[]): TaskDoneIndex {
+  let index = taskIndexByList.get(tasks);
+  if (!index) {
+    index = new Map<string, number>();
+    for (const t of tasks) {
+      if (t.completed_at === null) continue;
+      const slot = taskSlot(t.round_id, t.task_key, t.cycle);
+      if (!index.has(slot)) index.set(slot, t.completed_at);
+    }
+    taskIndexByList.set(tasks, index);
+  }
+  return index;
+}
+
 function taskDone(tasks: ResetTask[], round: Round, key: string): number | null {
-  const t = tasks.find(
-    (x) => x.round_id === round.id && x.task_key === key && x.completed_at !== null && x.cycle === round.reset_cycle,
-  );
-  return t?.completed_at ?? null;
+  return taskIndex(tasks).get(taskSlot(round.id, key, round.reset_cycle)) ?? null;
 }
 
 /**

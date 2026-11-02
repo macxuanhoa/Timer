@@ -48,6 +48,16 @@ export interface GatewayConfig {
 const BACKEND = (import.meta.env.VITE_BACKEND as string | undefined) ?? 'local';
 export const USING_SUPABASE = BACKEND === 'supabase';
 
+/**
+ * Boot warm-up. Both Supabase modules are needed only a moment later (the session
+ * check, then the gateway), and one of them carries the client library: fetching
+ * them while the app is still mounting keeps that download off the critical path,
+ * so the awaited imports below resolve from the module cache. A local build never
+ * enters this branch and therefore never requests the chunks. Failing to warm up
+ * is invisible on purpose: the real await below still reports the error.
+ */
+if (USING_SUPABASE) void Promise.all([import('./supabaseGateway'), import('./supabaseAuth')]).catch(() => undefined);
+
 export async function createGateway(config: GatewayConfig): Promise<Gateway> {
   if (USING_SUPABASE) {
     const { SupabaseGateway } = await import('./supabaseGateway');
@@ -66,6 +76,8 @@ export class LocalGateway implements Gateway {
     return { authorization: `Bearer ${this.cfg.token}` };
   }
 
+  private snapshotInFlight: Promise<Snapshot> | null = null;
+
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${this.cfg.baseUrl}${path}`, {
       ...init,
@@ -77,7 +89,15 @@ export class LocalGateway implements Gateway {
   }
 
   snapshot(): Promise<Snapshot> {
-    return this.json<Snapshot>('/api/snapshot');
+    // One authoritative read on the wire at a time: the boot path, a revision hint
+    // that arrives during it and the periodic check can all ask in the same instant
+    // for the same server state, and the payload is the heaviest one we fetch.
+    if (!this.snapshotInFlight) {
+      this.snapshotInFlight = this.json<Snapshot>('/api/snapshot').finally(() => {
+        this.snapshotInFlight = null;
+      });
+    }
+    return this.snapshotInFlight;
   }
 
   revision(): Promise<RevisionHintResponse> {

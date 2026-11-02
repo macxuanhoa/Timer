@@ -12,8 +12,11 @@
   -Baseline is only for a database whose sc.* schema was created by hand in the
   SQL editor before this script existed: it records 0001_init.sql as applied
   instead of running it a second time.
+
+  -ConfigureSupervisorPin and -ConfigureStationReset install a bcrypt hash of the
+  typed secret. Neither value is echoed, saved to a file or sent to the browser.
 #>
-param([switch]$Baseline, [switch]$SingleUrl, [switch]$ConfigureSupervisorPin)
+param([switch]$Baseline, [switch]$SingleUrl, [switch]$ConfigureSupervisorPin, [switch]$ConfigureStationReset)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -40,6 +43,20 @@ try {
     }
     $nodeArgs += '--configure-supervisor-pin'
   }
+  if ($ConfigureStationReset) {
+    $secretSecure = Read-Host -AsSecureString 'Station reset secret (10-64 characters, hidden)'
+    $secretConfirm = Read-Host -AsSecureString 'Confirm station reset secret (hidden)'
+    $secretBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
+    $secretConfirmBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretConfirm)
+    try {
+      $env:SC_STATION_RESET_SECRET = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretBstr)
+      if ($env:SC_STATION_RESET_SECRET -cne [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretConfirmBstr)) { throw 'Reset secret confirmation does not match.' }
+    } finally {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretBstr)
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretConfirmBstr)
+    }
+    $nodeArgs += '--configure-station-reset'
+  }
   & node @nodeArgs
   exit $LASTEXITCODE
 }
@@ -47,4 +64,5 @@ finally {
   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
   Remove-Item Env:\SC_SUPERVISOR_PIN -ErrorAction SilentlyContinue
+  Remove-Item Env:\SC_STATION_RESET_SECRET -ErrorAction SilentlyContinue
 }

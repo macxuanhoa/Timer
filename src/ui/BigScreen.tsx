@@ -127,7 +127,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
       }}
     >
       {!digitsOnly && (
-        <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-4 pt-3 text-[0.7rem] tracking-[0.16em] text-mute">
+        <div className="notch-top absolute inset-x-0 flex items-start justify-between gap-3 px-4 pt-3 text-[0.7rem] tracking-[0.16em] text-mute">
           <span data-testid="big-team">
             ĐỘI #{pad(clock.teamNumber)} · {formatClockSec(clock.limitMs)}
             {clock.resetCount > 0 ? <span className="ml-2 text-ember" data-testid="big-reset-count">RESET {clock.resetCount}</span> : null}
@@ -161,7 +161,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
       )}
 
       {!digitsOnly && (
-        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 px-3 pb-4" data-testid="big-controls">
+        <div className="notch-bottom absolute inset-x-0 flex flex-col gap-2 px-3 pb-4" data-testid="big-controls">
           <div className="flex gap-2">
             {confirmReset ? (
               <button
@@ -217,7 +217,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
         </div>
       )}
 
-      {digitsOnly && <p className="absolute bottom-3 text-[0.6rem] tracking-[0.2em] text-mute/50">CHẠM ĐỂ THẤY LẠI NÚT</p>}
+      {digitsOnly && <p className="notch-bottom absolute mb-3 text-[0.6rem] tracking-[0.2em] text-mute/50">CHẠM ĐỂ THẤY LẠI NÚT</p>}
     </div>
   );
 }

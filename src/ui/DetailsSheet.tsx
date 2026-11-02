@@ -29,7 +29,10 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
   const isSupervisor = account.role === 'SUPERVISOR';
 
   const rows = useMemo(() => (snap ? leaderboard(snap) : []), [snap]);
-  const stats = useMemo(() => (snap ? analytics(snap, now) : null), [snap, now]);
+  // `analytics` is built entirely from persisted timestamps and never reads the
+  // clock argument, so the memo keys on the snapshot alone: with a game running the
+  // dashboard ticks at display rate, and this summarised the whole event each time.
+  const stats = useMemo(() => (snap ? analytics(snap, now) : null), [snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>

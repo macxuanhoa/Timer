@@ -97,8 +97,14 @@ export class LiveStore {
   /* --------------------------------------------------------------- lifecycle */
 
   async start(): Promise<void> {
+    // Boot overlap: the clock probe and the first authoritative read go out on the
+    // wire together instead of one after the other, so a phone on field Wi-Fi pays
+    // one round trip before the dashboard appears instead of two. The results are
+    // still applied in the original order — probe first, then snapshot — so every
+    // patch, including every failure path, lands exactly as it did serially.
+    const firstRead = this.readSnapshot();
     await this.probeClock();
-    await this.refresh();
+    await this.commitRead(firstRead);
     this.unsubscribe = this.opts.gateway.subscribe({
       onRevision: (hint) => {
         const current = this.state.snapshot;
@@ -190,15 +196,36 @@ export class LiveStore {
     }
   }
 
-  /** Best-effort authoritative re-read; never lets a stale UI authorize an action. */
-  async refresh(hintRevision?: number): Promise<void> {
+  /**
+   * Issues an authoritative read without waiting for it. A failed read becomes
+   * `null` rather than a rejection, so a read started before its consumer awaits
+   * it can never surface as an unhandled rejection.
+   */
+  private readSnapshot(): Promise<Snapshot | null> {
+    return this.opts.gateway.snapshot().then(
+      (snap) => snap,
+      () => null,
+    );
+  }
+
+  /** Applies a read that was already issued: the only place a snapshot is adopted. */
+  private async commitRead(read: Promise<Snapshot | null>, hintRevision?: number): Promise<void> {
     try {
-      const snap = await this.opts.gateway.snapshot();
+      const snap = await read;
+      if (!snap) {
+        this.patch({ status: 'OFFLINE' });
+        return;
+      }
       this.applySnapshot(snap, hintRevision);
       this.patch({ status: 'CONNECTED', error: null, lastVerifiedMono: this.now() });
     } catch {
       this.patch({ status: 'OFFLINE' });
     }
+  }
+
+  /** Best-effort authoritative re-read; never lets a stale UI authorize an action. */
+  async refresh(hintRevision?: number): Promise<void> {
+    await this.commitRead(this.readSnapshot(), hintRevision);
   }
 
   private applySnapshot(snap: Snapshot, hintRevision?: number): void {

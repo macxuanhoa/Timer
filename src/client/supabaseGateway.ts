@@ -18,6 +18,8 @@ import { finalizeSnapshot } from '../shared/machine';
 export class SupabaseGateway implements Gateway {
   kind = 'supabase' as const;
   private channel: ReturnType<SupabaseClient['channel']> | null = null;
+  /** The one authoritative read in flight, shared by everyone who asks for it. */
+  private snapshotInFlight: Promise<Snapshot> | null = null;
 
   private constructor(private readonly sb: SupabaseClient, private readonly role: string) {}
 
@@ -40,8 +42,21 @@ export class SupabaseGateway implements Gateway {
    * Postgres returns stored rows only; phase is derived by the shared machine so
    * both backends behave identically. `server_now_ms` comes from the database
    * clock, never from the phone.
+   *
+   * Concurrent asks are coalesced: the snapshot is the largest payload this app
+   * moves, and a hint landing during boot or during a verification tick wants the
+   * same server state the read already in flight will return.
    */
-  async snapshot(): Promise<Snapshot> {
+  snapshot(): Promise<Snapshot> {
+    if (!this.snapshotInFlight) {
+      this.snapshotInFlight = this.readSnapshot().finally(() => {
+        this.snapshotInFlight = null;
+      });
+    }
+    return this.snapshotInFlight;
+  }
+
+  private async readSnapshot(): Promise<Snapshot> {
     const { data, error } = await this.sb.rpc('snapshot');
     if (error) throw new Error(error.message);
     const raw = data as { revision: number; server_now_ms: number } & Omit<Snapshot, 'event_status' | 'phase' | 'active_round' | 'server_now_ms'>;

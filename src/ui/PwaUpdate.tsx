@@ -11,6 +11,11 @@ export function PwaUpdate() {
     needRefresh: [needRefresh],
     updateServiceWorker,
   } = useRegisterSW({
+    // Deferred on purpose: registering during boot makes the service worker pull the
+    // whole app shell into the cache while the first authoritative read is still
+    // on its way. `immediate: false` hands registration to the window load event,
+    // so the update prompt arrives once the phone is already operational.
+    immediate: false,
     onRegisteredSW(_swUrl, r) {
       if (!r) return;
       // Check for a new build hourly — never auto-apply while operators are live.

@@ -32,6 +32,17 @@
 .home-pin input { width: 100%; padding: 13px; margin-bottom: 16px; border: 1px solid #4c4c55; border-radius: 9px; font-size: 22px; letter-spacing: .3em; background: #131316; }
 .home-pin [role=alert] { font-size: 12px; color: #f0a12a; margin-bottom: 16px; }
 .home-pin-cancel { width: 100%; min-height: 44px; color: #aaaab2; margin-top: 10px; font-size: 11px; }
+.home-pin-note { font-size: 11px; line-height: 1.55; color: #8b8b94; margin: -14px 0 18px; }
+.home-pin-backdrop form { max-height: calc(100dvh - 44px); overflow-y: auto; }
+
+/* Organiser escape hatch: frees every occupied station, so it stays deliberately
+   quiet next to the five bright station rows and never looks tappable by mistake. */
+.home-reset { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; margin-top: 12px; padding: 0 15px; border: 1px dashed #4a3134; border-radius: 11px; background: #e1362c0a; color: #b9564f; font-size: 10px; font-weight: 700; letter-spacing: .12em; cursor: pointer; }
+.home-reset:hover:not(:disabled) { border-color: #e1362c88; color: #e1362c; }
+.home-reset:focus-visible { outline: 2px solid #f2f2f4; outline-offset: 4px; }
+.home-reset:disabled { opacity: .45; cursor: default; }
+.home-reset-mark { font-size: 15px; }
+.home-ok { color: #1fb96e; }
 
 @theme {
   --color-ink: #131316;
@@ -84,12 +95,28 @@
     letter-spacing: -0.02em;
   }
 
+  /* Notch band. The inset is added on top of each surface's own padding instead
+     of replacing it, so the design spacing survives and a utility padding on the
+     same element cannot cancel the band away. The first line is the fallback for
+     engines without env(); --safe-*-gap lets a screen ask for more air. */
   .safe-bottom {
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-bottom: 0.75rem;
+    padding-bottom: calc(var(--safe-bottom-gap, 0.75rem) + env(safe-area-inset-bottom, 0px));
   }
 
   .safe-top {
-    padding-top: max(0.5rem, env(safe-area-inset-top));
+    padding-top: 0.75rem;
+    padding-top: calc(var(--safe-top-gap, 0.75rem) + env(safe-area-inset-top, 0px));
+  }
+
+  /* Overlay strips anchored to an inset edge are placed on the padding box, so
+     the padding above cannot reach them: they anchor to the notch edge itself. */
+  .notch-top {
+    top: env(safe-area-inset-top, 0px);
+  }
+
+  .notch-bottom {
+    bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Handoff ring: whoever must press now. Visible without motion, so the cue is

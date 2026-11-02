@@ -13,6 +13,8 @@
  *   npm run db:push -- --baseline  record 0001_init.sql as already applied
  *
  * Env overrides: SUPABASE_PROJECT_REF, SUPABASE_REGION.
+ * The supervisor PIN and the station reset secret are read from the environment
+ * only when the matching flag is set, and are installed as bcrypt hashes.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,6 +26,7 @@ const migrationsDir = path.join(root, 'supabase', 'migrations');
 const baseline = process.argv.includes('--baseline');
 const singleUrl = process.argv.includes('--single-url');
 const configurePin = process.argv.includes('--configure-supervisor-pin');
+const configureReset = process.argv.includes('--configure-station-reset');
 const reportPath = path.join(root, '.git', 'production-migration.json');
 
 async function fingerprint(client) {
@@ -89,11 +92,18 @@ async function main() {
       '0011_command_press_integer.sql',
       '0012_round_clock_only.sql',
       '0013_team_name.sql',
+      '0014_station_reset.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     const pin = configurePin ? process.env.SC_SUPERVISOR_PIN : null;
     delete process.env.SC_SUPERVISOR_PIN;
     if (configurePin && !/^\d{8,12}$/.test(pin ?? '')) throw new Error('An 8–12 digit PIN is required through the hidden prompt.');
+    const resetSecret = configureReset ? process.env.SC_STATION_RESET_SECRET : null;
+    delete process.env.SC_STATION_RESET_SECRET;
+    const resetLength = (resetSecret ?? '').length;
+    if (configureReset && (resetLength < 10 || resetLength > 64)) {
+      throw new Error('The station reset secret must be 10–64 characters, entered through the hidden prompt.');
+    }
     const report = { status: 'pending', at: new Date().toISOString(), pending };
     await client.query('begin');
     try {
@@ -116,14 +126,21 @@ async function main() {
         console.log(`staged ${name}`);
       }
       if (configurePin) await client.query('select sc.configure_station_access($1, false)', [pin]);
+      // Hashes only: the secret itself is never written to a table, log or file.
+      if (configureReset) await client.query('select sc.configure_station_reset($1)', [resetSecret]);
       if (singleUrl) {
         report.after = await fingerprint(client);
         if (JSON.stringify(report.before) !== JSON.stringify(report.after)) throw new Error('Event data or duty bindings changed; rolling back.');
         report.occupancy = (await client.query('select sc.station_board() as board')).rows[0].board;
         const { rows } = await client.query(`select
           has_function_privilege('authenticated','public.redeem_invitation(text,text)','EXECUTE') as legacy,
-          has_function_privilege('authenticated','sc.configure_station_access(text,boolean)','EXECUTE') as pin_exposed`);
-        if (rows[0].legacy || rows[0].pin_exposed) throw new Error('Unsafe access grants; rolling back.');
+          has_function_privilege('authenticated','sc.configure_station_access(text,boolean)','EXECUTE') as pin_exposed,
+          has_function_privilege('authenticated','sc.reset_all_stations(text)','EXECUTE') as reset_exposed,
+          has_function_privilege('anon','public.reset_all_stations(text)','EXECUTE') as reset_unsigned,
+          has_function_privilege('authenticated','public.reset_all_stations(text)','EXECUTE') as reset_granted`);
+        if (rows[0].legacy || rows[0].pin_exposed || rows[0].reset_exposed || rows[0].reset_unsigned || !rows[0].reset_granted) {
+          throw new Error('Unsafe access grants; rolling back.');
+        }
       }
       await client.query('commit');
       report.status = 'applied';

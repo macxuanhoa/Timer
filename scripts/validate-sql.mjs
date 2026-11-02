@@ -76,6 +76,8 @@ try {
   run('035 no event deadline', ['supabase/tests/035_round_clock_only.sql']);
   run('013 revisioned team labels', ['supabase/migrations/0013_team_name.sql']);
   run('036 team label scenario', ['supabase/tests/036_team_name.sql']);
+  run('014 secret-gated board reset', ['supabase/migrations/0014_station_reset.sql']);
+  run('037 board reset scenario', ['supabase/tests/037_station_reset.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

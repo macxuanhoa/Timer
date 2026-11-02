@@ -22,9 +22,14 @@ export function Home({ onEnter, canSelect = true, error }: {
   const [pinOpen, setPinOpen] = useState(false);
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [secret, setSecret] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [freed, setFreed] = useState<number | null>(null);
   const loading = useRef(false);
   const refresh = useRef<() => Promise<void>>(async () => {});
   const entering = useRef(false);
+  const sweeping = useRef(false);
   const lastRead = useRef(0);
 
   useEffect(() => {
@@ -71,7 +76,7 @@ export function Home({ onEnter, canSelect = true, error }: {
   }, []);
 
   const claim = async (role: Role) => {
-    if (entering.current || !fresh || !canSelect) return;
+    if (entering.current || sweeping.current || !fresh || !canSelect) return;
     entering.current = true;
     setBusy(role); setMessage(null);
     try {
@@ -81,6 +86,32 @@ export function Home({ onEnter, canSelect = true, error }: {
       await refresh.current();
     } finally {
       entering.current = false; setBusy(null); setPin('');
+    }
+  };
+
+  /**
+   * The organiser escape hatch for a stuck board: every occupied station returns
+   * to CÒN TRỐNG. The secret is verified in PostgreSQL, so a wrong one simply
+   * frees nothing, and a lost reply is repeatable — resetting an empty board is
+   * a no-op that reports zero seats freed.
+   */
+  const resetAll = async () => {
+    if (sweeping.current || entering.current) return;
+    sweeping.current = true;
+    setResetting(true); setMessage(null);
+    try {
+      const { resetAllStations, resetErrorMessage } = await import('../client/supabaseAuth');
+      const result = await resetAllStations(secret);
+      if (!result?.ok) {
+        setMessage(resetErrorMessage(result));
+        return;
+      }
+      setResetOpen(false); setSecret(''); setFreed(result.freed ?? 0);
+      await refresh.current();
+    } catch {
+      setMessage('MẤT KẾT NỐI — CHƯA RESET ĐƯỢC. KIỂM TRA MẠNG RỒI BẤM LẠI');
+    } finally {
+      sweeping.current = false; setResetting(false);
     }
   };
 
@@ -106,7 +137,7 @@ export function Home({ onEnter, canSelect = true, error }: {
               <button key={role} type="button" data-testid={`station-${role}`}
                 data-state={!known ? 'unknown' : full ? 'full' : 'available'}
                 className={`home-station ${available ? 'is-available' : ''}`}
-                disabled={!available || busy !== null || !canSelect}
+                disabled={!available || busy !== null || !canSelect || resetting}
                 onClick={() => {
                   if (role === 'SUPERVISOR') { setMessage(null); setPinOpen(true); }
                   else void claim(role);
@@ -122,12 +153,45 @@ export function Home({ onEnter, canSelect = true, error }: {
             );
           })}
         </div>
+        {USING_SUPABASE ? (
+          <button type="button" data-testid="home-reset-open"
+            disabled={busy !== null || resetting || pinOpen}
+            onClick={() => { setFreed(null); setMessage(null); setSecret(''); setResetOpen(true); }}
+            className="home-reset">
+            <span>RESET TẤT CẢ VỊ TRÍ</span><span className="home-reset-mark" aria-hidden="true">↺</span>
+          </button>
+        ) : null}
         <div aria-live="polite" className="home-feedback">
           {message || error ? <p role="alert" data-testid="home-error">{message ?? error}</p> :
+            freed !== null ? <p className="home-ok" data-testid="home-reset-result">
+              {freed > 0 ? `ĐÃ GIẢI PHÓNG ${freed} VỊ TRÍ · BẢNG CÒN TRỐNG` : 'BẢNG ĐÃ TRỐNG — KHÔNG CÓ VỊ TRÍ NÀO BỊ ĐÁ'}
+            </p> :
             !fresh ? <p className="text-mute">Đang kết nối để kiểm tra vị trí…</p> : null}
         </div>
         <footer className="home-footer"><span>SCREAM CONTROL</span><span>MỘT KHÔNG GIAN. MỘT NHỊP CHƠI.</span></footer>
       </div>
+      {resetOpen ? (
+        <div className="home-pin-backdrop">
+          <form className="home-pin" aria-label="RESET toàn bộ vị trí" onSubmit={e => { e.preventDefault(); void resetAll(); }}>
+            <p className="home-eyebrow">QUYỀN QUẢN TRỊ</p>
+            <h2>Reset tất cả vị trí</h2>
+            <p className="home-pin-note">
+              Mọi điện thoại đang giữ vị trí bị đá về CÒN TRỐNG, kể cả SUPERVISOR. Đồng hồ,
+              lượt chơi và nhật ký không đổi. Nhập mật khẩu quản trị để xác nhận.
+            </p>
+            <input autoFocus type="password" autoComplete="off" spellCheck={false} maxLength={64}
+              minLength={10} required aria-label="Mật khẩu reset" value={secret}
+              onChange={e => { setSecret(e.target.value); setMessage(null); }} disabled={resetting} />
+            {message ? <p role="alert">{message}</p> : null}
+            <button className="cta cta-red" disabled={resetting || busy !== null} type="submit"
+              data-testid="home-reset-confirm">
+              {resetting ? 'ĐANG RESET…' : 'XÁC NHẬN RESET'}
+            </button>
+            <button type="button" className="home-pin-cancel" disabled={resetting}
+              onClick={() => { setResetOpen(false); setSecret(''); setMessage(null); }}>QUAY LẠI</button>
+          </form>
+        </div>
+      ) : null}
       {pinOpen ? (
         <div className="home-pin-backdrop">
           <form className="home-pin" aria-label="PIN SUPERVISOR" onSubmit={e => { e.preventDefault(); void claim('SUPERVISOR'); }}>

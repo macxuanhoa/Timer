@@ -39,6 +39,56 @@ async function connect(role: Role, session: StoredSession): Promise<LiveStore> {
   return store;
 }
 
+/**
+ * Walks whatever round is currently on the floor to a closed state, so a later case
+ * starts from a clean area. Uses NPC1's guarded early exit rather than waiting out
+ * the 300 s, which is exactly the path an operator would take between teams.
+ */
+async function clearFloor(): Promise<void> {
+  for (let step = 0; step < 12; step++) {
+    const lobby = stores.get('LOBBY')!;
+    await lobby.refresh();
+    const round = lobby.getSnapshot().snapshot?.active_round;
+    if (!round) return;
+    const press = async (role: Role, action: Parameters<LiveStore['act']>[0], meta?: Record<string, unknown>) => {
+      await stores.get(role)!.refresh();
+      await stores.get(role)!.act(action, meta);
+    };
+    switch (round.status) {
+      case 'WAITING_FLOOR2_CONFIRMATION':
+        await press('CORRIDOR', 'CONFIRM_FLOOR2');
+        break;
+      case 'READY_AT_FLOOR3':
+        await press('GATE', 'START_GAME');
+        break;
+      case 'RUNNING':
+        await press('GATE', 'EARLY_EXIT', { reason: 'Dọn sàn giữa hai ca' });
+        break;
+      case 'WAITING_FOR_EXIT':
+      case 'TIME_EXPIRED_PENDING_VALIDATION':
+        await press('GATE', 'CONFIRM_EXIT');
+        break;
+      case 'EXIT_CONFIRMED':
+        await press('GATE', 'RESET_DONE');
+        await press('ROOM305', 'RESET_DONE');
+        await press('GATE', 'GATE_FINALIZE');
+        break;
+      default:
+        return;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  throw new Error('clearFloor could not close the active round');
+}
+
+/** Refreshes first, then presses, so a fast sequence never races its own view. */
+async function press(role: Role, action: Parameters<LiveStore['act']>[0], meta?: Record<string, unknown>): Promise<boolean> {
+  const store = stores.get(role)!;
+  await store.refresh();
+  const res = await store.act(action, meta);
+  return Boolean(res?.ok);
+}
+
 beforeAll(async () => {
   const hub = createHub({ store: new MemoryStore(), allowTestClock: true, clock: new FakeClock(Date.now()) });
   server = createServer(hub.handler);
@@ -59,8 +109,8 @@ afterAll(() => {
   server?.close();
 });
 
-describe('PASS 4 — real HTTP synchronisation between five phones', () => {
-  it('authenticates and refuses anonymous access', async () => {
+describe('PASS 4 — real HTTP synchronisation between the phones', () => {
+  it('authenticates operators and lets the observer in without a passcode', async () => {
     const anonymous = await fetch(`${baseUrl}/api/snapshot`);
     expect(anonymous.status).toBe(401);
     const wrong = await fetch(`${baseUrl}/api/login`, {
@@ -69,6 +119,76 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
       body: JSON.stringify({ account: 'gate', passcode: 'nope' }),
     });
     expect(wrong.status).toBe(401);
+    // The viewer seat is open: an empty passcode is the documented behaviour.
+    const viewer = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'observer', passcode: '' }),
+    });
+    expect(viewer.status).toBe(200);
+    const token = (await viewer.json()).token as string;
+    const asViewer = await fetch(`${baseUrl}/api/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+    const redacted = await asViewer.json();
+    // A viewer sees the game, not the operating record.
+    expect(redacted.redacted).toBe(true);
+    expect(redacted.log).toEqual([]);
+    expect(redacted.attempts).toEqual([]);
+    expect(redacted.operators).toEqual([]);
+    if (redacted.active_round) {
+      expect(redacted.active_round.started_by).toBeNull();
+      expect(redacted.active_round.review_reasons).toEqual([]);
+    }
+  });
+
+  it('refuses every command from an observer over the wire', async () => {
+    const viewer = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'observer', passcode: '' }),
+    });
+    const token = (await viewer.json()).token as string;
+    const before = (await (await fetch(`${baseUrl}/api/snapshot`, { headers: { authorization: `Bearer ${token}` } })).json()).revision;
+    for (const action of ['CALL_TEAM', 'START_GAME', 'CLAIM_COMPLETE', 'CONFIRM_EXIT', 'GATE_FINALIZE']) {
+      const res = await fetch(`${baseUrl}/api/command`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ action, expected_revision: before, idempotency_key: `viewer:${action}` }),
+      });
+      expect([401, 403, 409], `${action} → ${res.status}`).toContain(res.status);
+    }
+    const after = (await (await fetch(`${baseUrl}/api/snapshot`, { headers: { authorization: `Bearer ${token}` } })).json()).revision;
+    expect(after).toBe(before);
+  });
+
+  it('an observer seat is reused by the same viewer and freed only by an explicit leave', async () => {
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'observer', passcode: '' }),
+    });
+    const token = (await login.json()).token as string;
+    const presence = async (path: 'join' | 'leave', viewer_id: string) => {
+      const res = await fetch(`${baseUrl}/api/observer/${path}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ viewer_id }),
+      });
+      return res.json() as Promise<{ ok: boolean; code: string; devices: number }>;
+    };
+    const first = await presence('join', 'seat-A');
+    expect(first.ok).toBe(true);
+    // The same browser coming back — a remount, a refresh, a return from the
+    // full-room screen — renews its own seat instead of consuming a second one.
+    const again = await presence('join', 'seat-A');
+    expect(again.code).toBe('REUSED');
+    expect(again.devices).toBe(first.devices);
+    const second = await presence('join', 'seat-B');
+    expect(second.devices).toBe(first.devices + 1);
+    // Only a deliberate exit frees a seat, so an unanswered detach can never throw
+    // a watching phone out of the ten seats it holds.
+    const left = await presence('leave', 'seat-B');
+    expect(left.devices).toBe(second.devices - 1);
+    await presence('leave', 'seat-A');
   });
 
   it('rejects a command the role is not allowed to press', async () => {
@@ -82,30 +202,33 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
   it('14b/15. five connected phones converge; propagation is measured (G01)', async () => {
     const supervisor = stores.get('SUPERVISOR')!;
     const lobby = stores.get('LOBBY')!;
+    const observer = stores.get('OBSERVER')!;
     const readers = (['GATE', 'CORRIDOR', 'ROOM305'] as Role[]).map((r) => stores.get(r)!);
-    const all = [supervisor, lobby, ...readers];
+    const all = [supervisor, lobby, observer, ...readers];
 
     // Drive a full round and measure how long each *other* phone needs to apply
     // each committed revision. Loopback numbers, reported as measured.
-    const steps: [Role, 'CALL_TEAM' | 'TEAM_UPSTAIRS' | 'START_GAME' | 'HALLWAY_PROGRESS' | 'ROOM_REACHED' | 'PUZZLE_COMPLETE' | 'RETURN_START' | 'GAME_STOP' | 'RESET_DONE' | 'GATE_FINALIZE', Record<string, unknown>][] = [
-      ['LOBBY', 'CALL_TEAM', { team_name: 'Do 1' }],
-      ['LOBBY', 'TEAM_UPSTAIRS', {}],
-      ['GATE', 'START_GAME', {}],
-      ['CORRIDOR', 'HALLWAY_PROGRESS', {}],
-      ['ROOM305', 'ROOM_REACHED', {}],
-      ['ROOM305', 'PUZZLE_COMPLETE', {}],
-      ['ROOM305', 'RETURN_START', {}],
-      ['GATE', 'GAME_STOP', {}],
-      ['CORRIDOR', 'RESET_DONE', {}],
-      ['ROOM305', 'RESET_DONE', {}],
-      ['GATE', 'GATE_FINALIZE', {}],
+    const claimId = () => {
+      const snap = stores.get('ROOM305')!.getSnapshot().snapshot!;
+      return snap.attempts[snap.attempts.length - 1]?.id ?? '';
+    };
+    const steps: [Role, 'CALL_TEAM' | 'CONFIRM_FLOOR2' | 'START_GAME' | 'CLAIM_COMPLETE' | 'VERIFY_ATTEMPT' | 'CONFIRM_EXIT' | 'RESET_DONE' | 'GATE_FINALIZE', () => Record<string, unknown>][] = [
+      ['LOBBY', 'CALL_TEAM', () => ({ team_name: 'Do 1' })],
+      ['CORRIDOR', 'CONFIRM_FLOOR2', () => ({})],
+      ['GATE', 'START_GAME', () => ({})],
+      ['ROOM305', 'CLAIM_COMPLETE', () => ({})],
+      ['ROOM305', 'VERIFY_ATTEMPT', () => ({ attempt_id: claimId(), decision: 'VALID' })],
+      ['GATE', 'CONFIRM_EXIT', () => ({})],
+      ['GATE', 'RESET_DONE', () => ({})],
+      ['ROOM305', 'RESET_DONE', () => ({})],
+      ['GATE', 'GATE_FINALIZE', () => ({})],
     ];
     const lags: number[] = [];
     for (const [role, action, meta] of steps) {
       const store = stores.get(role)!;
       const target = store.getSnapshot().revision + 1;
       const ack = Date.now();
-      const res = await store.act(action, meta);
+      const res = await store.act(action, meta());
       expect(res?.ok, `${action} failed: ${res?.message}`).toBe(true);
       const watchers = all.filter((s) => s !== store);
       for (const watcher of watchers) {
@@ -128,7 +251,7 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
 
     const states = all.map((s) => s.getSnapshot().snapshot!);
     expect(new Set(states.map((s) => s.revision)).size).toBe(1);
-    expect(states.every((s) => s.rounds.length === 1 && s.rounds[0].status === 'GATE_CLEARED')).toBe(true);
+    expect(states.every((s) => s.rounds.length === 1 && s.rounds[0].status === 'CLOSED')).toBe(true);
     expect(states.every((s) => s.rounds[0].official_duration_ms === states[0].rounds[0].official_duration_ms)).toBe(true);
   });
 
@@ -212,11 +335,15 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
     expect(other.found).toBe(false); // scoped to the calling operator
   });
 
-  it('15b. a refresh mid-round recovers event time, game time and state', async () => {
+  it('15b. a refresh mid-round recovers the session, the deadline and the state', async () => {
+    await clearFloor();
     const gate = stores.get('GATE')!;
-    await gate.act('START_GAME');
+    expect(await press('LOBBY', 'CALL_TEAM', { team_name: 'Do 3' })).toBe(true);
+    expect(await press('CORRIDOR', 'CONFIRM_FLOOR2')).toBe(true);
+    expect(await press('GATE', 'START_GAME')).toBe(true);
     await expect.poll(() => gate.getSnapshot().snapshot?.phase, { timeout: 5000 }).toBe('RUNNING');
     const started = gate.getSnapshot().snapshot?.active_round?.game_started_at;
+    const deadline = gate.getSnapshot().snapshot?.active_round?.deadline_at;
     const eventStarted = gate.getSnapshot().snapshot?.event.event_started_at;
 
     // simulate a phone reload: brand new gateway + store over the same token
@@ -225,11 +352,15 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
     const snap = reloaded.getSnapshot().snapshot!;
     expect(snap.phase).toBe('RUNNING');
     expect(snap.active_round?.game_started_at).toBe(started);
+    // The countdown is the stored deadline, not something the phone recomputes.
+    expect(snap.active_round?.deadline_at).toBe(deadline);
     expect(snap.event.event_started_at).toBe(eventStarted);
     expect(Math.abs(reloaded.serverNow() - Date.now())).toBeLessThan(1000);
+    await clearFloor();
   });
 
   it('20b. the controlled fake clock drives the full event over HTTP too', async () => {
+    await clearFloor();
     const supervisor = stores.get('SUPERVISOR')!;
     const lobby = stores.get('LOBBY')!;
     const token = tokens.get('SUPERVISOR')!;
@@ -239,6 +370,12 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
       body: JSON.stringify({ advance_ms: 1000 }),
     });
     expect(forbidden.status).toBe(403);
+
+    // Put a team on the clock, then jump 76 minutes: the event stays live while the
+    // 5:00 window expires on its own stored deadline.
+    expect(await press('LOBBY', 'CALL_TEAM', { team_name: 'Do 4' })).toBe(true);
+    expect(await press('CORRIDOR', 'CONFIRM_FLOOR2')).toBe(true);
+    expect(await press('GATE', 'START_GAME')).toBe(true);
 
     // jump 76 minutes: the event remains live, while the 5-minute game expires
     const res = await fetch(`${baseUrl}/api/dev/clock`, {
@@ -251,13 +388,16 @@ describe('PASS 4 — real HTTP synchronisation between five phones', () => {
     await supervisor.refresh();
     const snap = supervisor.getSnapshot().snapshot!;
     expect(snap.event_status).toBe('LIVE');
-    expect(snap.phase).toBe('GAME_OVERTIME'); // the team is still inside
-    expect(snap.active_round?.game_stopped_at).toBeNull();
+    // Nobody pressed anything: the expiry is derived from the stored deadline, so the
+    // round is already in the exit-waiting state with a TIME UP result.
+    expect(snap.phase).toBe('WAITING_FOR_EXIT');
+    expect(snap.active_round?.exit_confirmed_at).toBeNull();
     // and the lobby can no longer be offered a new team
     await lobby.refresh();
     const dispatch = await lobby.act('CALL_TEAM');
     expect(dispatch?.code).toBe('INVALID_STATE');
-    expect(dispatch?.message).toContain('đội');
+    expect(dispatch?.message).toContain('Giai đoạn');
+    await clearFloor();
   });
 
   it('serves the supervisor CSV export and blocks it for other roles', async () => {

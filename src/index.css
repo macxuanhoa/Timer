@@ -35,14 +35,28 @@
 .home-pin-note { font-size: 11px; line-height: 1.55; color: #8b8b94; margin: -14px 0 18px; }
 .home-pin-backdrop form { max-height: calc(100dvh - 44px); overflow-y: auto; }
 
-/* Organiser escape hatch: frees every occupied station, so it stays deliberately
-   quiet next to the five bright station rows and never looks tappable by mistake. */
-.home-reset { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; margin-top: 12px; padding: 0 15px; border: 1px dashed #4a3134; border-radius: 11px; background: #e1362c0a; color: #b9564f; font-size: 10px; font-weight: 700; letter-spacing: .12em; cursor: pointer; }
-.home-reset:hover:not(:disabled) { border-color: #e1362c88; color: #e1362c; }
-.home-reset:focus-visible { outline: 2px solid #f2f2f4; outline-offset: 4px; }
-.home-reset:disabled { opacity: .45; cursor: default; }
-.home-reset-mark { font-size: 15px; }
+/* Peek control inside the secret field: a 46px touch target on the right edge,
+   with the text stopping short of it so a long secret never hides under the eye. */
+.home-pin-field { position: relative; }
+.home-pin-field input { padding-right: 58px; }
+/* Revealed, the secret is meant to be read: the dot spacing would push a 64-character
+   secret off the field, so the readable state drops to normal tracking and size. */
+.home-pin-field input[type=text] { font-size: 16px; letter-spacing: .02em; }
+.home-pin-peek { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 9px; background: transparent; color: #8b8b94; cursor: pointer; }
+.home-pin-peek:hover:not(:disabled) { color: #f2f2f4; background: #2a2a31; }
+.home-pin-peek:focus-visible { outline: 2px solid #f2f2f4; outline-offset: 2px; }
+.home-pin-peek:disabled { opacity: .5; cursor: default; }
+
+/* Organiser escape hatch: it sits on the board heading as a quiet icon, never as a
+   sixth station row, and it is only reachable when the server says no team is on the
+   5:00 clock. */
+.home-board-tools { display: flex; align-items: center; gap: 10px; }
+.home-board-reset { display: grid; place-items: center; width: 36px; height: 36px; border: 1px dashed #4a3134; border-radius: 9px; background: #e1362c0a; color: #b9564f; font-size: 17px; line-height: 1; cursor: pointer; }
+.home-board-reset:hover:not(:disabled) { border-color: #e1362c88; color: #e1362c; }
+.home-board-reset:focus-visible { outline: 2px solid #f2f2f4; outline-offset: 3px; }
+.home-board-reset:disabled { opacity: .35; cursor: default; }
 .home-ok { color: #1fb96e; }
+.home-pin-blocked { font-size: 11px; line-height: 1.55; color: #f0a12a; margin: -4px 0 14px; }
 
 @theme {
   --color-ink: #131316;
@@ -378,45 +392,143 @@
   }
 }
 
-/* ------------------------------------------------------------- big screen */
+/* ------------------------------------------------------------- countdown */
 
-/* Time is up: the whole wall display flashes red. Kept visible without motion so
-   the alarm is never only an animation. */
-.alarm-flash {
-  background-color: #3a0705;
+/* The locked screen puts minutes and seconds in the visual centre and keeps the
+   hundredths an order of magnitude smaller, so the fraction can never compete with
+   the main clock. Tabular numerals stop the digits from shifting as they tick. */
+.countdown-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.18em;
+  font-size: clamp(3.4rem, 19vw, 5.6rem);
+  line-height: 0.95;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: -0.01em;
 }
 
-.alarm-blink {
-  opacity: 1;
+.countdown-fraction {
+  font-size: 0.26em;
+  font-weight: 600;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.wall-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.16em;
+  font-size: clamp(4rem, 18vw, 22rem);
+  line-height: 0.92;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.wall-fraction {
+  font-size: 0.18em;
+  font-weight: 600;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-height: 700px) {
+  .countdown-main {
+    font-size: clamp(2.8rem, 14vh, 4.4rem);
+  }
+}
+
+/* --------------------------------------------------------------- pre-start */
+
+/* The one waiting state that must be unmistakable: amber illumination and a slow
+   breathing glow. Deliberately no strobe — operators still have to read the rest
+   of the screen while the team is being briefed. */
+.prestart-block {
+  border: 1px solid rgb(240 161 42 / 0.45);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgb(240 161 42 / 0.1) 0%, rgb(20 20 23 / 0.9) 70%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 26px -6px rgb(240 161 42 / 0.45);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .alarm-flash {
-    animation: alarm-flash 0.8s steps(1, end) infinite;
-  }
-  .alarm-blink {
-    animation: alarm-blink 0.55s steps(1, end) infinite;
+  .prestart-block {
+    animation: prestart-breathe 2.6s ease-in-out infinite;
   }
 }
 
-@keyframes alarm-flash {
+@keyframes prestart-breathe {
   0%,
-  49% {
-    background-color: var(--color-ink);
-  }
-  50%,
   100% {
-    background-color: #6d0b07;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 20px -8px rgb(240 161 42 / 0.35);
+  }
+  50% {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0 34px -4px rgb(240 161 42 / 0.6);
   }
 }
 
-@keyframes alarm-blink {
+/* ------------------------------------------------------------ big screen */
+
+/* Time is up: the wall display settles into a deep red wash with a slow pulse.
+   It stays visible without motion, so the alarm is never only an animation, and it
+   no longer strobes in front of players who are walking out. */
+.alarm-glow {
+  background-color: #1d0705;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .alarm-glow {
+    animation: alarm-glow 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes alarm-glow {
   0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
   100% {
-    opacity: 0.2;
+    background-color: #1d0705;
   }
+  50% {
+    background-color: #330906;
+  }
+}
+
+/* ------------------------------------------------------------------ picker */
+
+/* The open viewing seat is deliberately not styled like a duty station: it is not
+   a role that owns part of the game, and the picker should say so at a glance. */
+.home-station-observer {
+  border-style: dashed;
+}
+
+.home-admin-line {
+  display: flex;
+  justify-content: center;
+  padding-top: 14px;
+}
+
+.home-admin-line button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid #323238;
+  border-radius: 9px;
+  background: transparent;
+  color: #8b8b94;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+.home-admin-line button:hover:not(:disabled) {
+  color: #d1d1d6;
+  border-color: #4c4c55;
+}
+
+.home-admin-line button:focus-visible {
+  outline: 2px solid #f2f2f4;
+  outline-offset: 3px;
+}
+
+.home-admin-line button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

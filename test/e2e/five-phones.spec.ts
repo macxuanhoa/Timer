@@ -1,21 +1,28 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
-type Phone = 'lobby' | 'gate' | 'corridor' | 'room305' | 'supervisor';
+type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor' | 'observer';
+
+/** What each phone wears in its header pill. */
 const ROLE_TAG: Record<Phone, string> = {
-  lobby: 'LOBBY',
+  lobby: '01',
+  corridor: '02',
   gate: 'NPC 1',
-  corridor: 'NPC 2',
-  room305: 'NPC 3',
-  supervisor: 'SUP',
+  room305: 'NPC 2',
+  supervisor: 'TRỊ',
+  observer: 'XEM',
 };
 
 /**
  * The self-hosted engine has no Supabase to redeem an invitation against, so a
- * station link (`?station=lobby`) is its stand-in for the real `/i/<token>`.
+ * station link (`?station=lobby`) is its stand-in for the real board selection.
  */
 async function signIn(context: BrowserContext, phone: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${phone}`);
+  if (phone === 'observer') {
+    await expect(page.getByTestId('observer')).toBeVisible();
+    return page;
+  }
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[phone]);
   await expect(page.getByTestId('connection')).toHaveAttribute('data-status', 'CONNECTED');
@@ -28,425 +35,542 @@ async function phone(browser: Browser, which: Phone) {
 }
 
 const primary = (page: Page) => page.getByTestId('primary-action');
-const heroLabel = (page: Page) =>
-  page.evaluate(() => document.querySelector('[data-testid="hero-label"]')?.textContent ?? '');
-const teamStatus = (page: Page) =>
-  page.evaluate(() => document.querySelector('[data-testid="team-status"]')?.textContent ?? '');
+const dashboard = (page: Page) => page.getByTestId('dashboard');
 
-test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
-  test.beforeAll(async ({ browser }) => {
-    // Deterministic start: ask the dev engine for a brand new session, so a
-    // reused dev server left over from an earlier run cannot bias the suite.
-    const { context, page } = await phone(browser, 'supervisor');
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-    const res = await context.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${token}` } });
-    expect(res.ok()).toBe(true);
-    await context.close();
-  });
+/** MM:SS as the hero clock renders it. */
+const formatCs = (ms: number) => {
+  const total = Math.max(0, Math.floor(ms / 10) * 10);
+  return `${String(Math.floor(total / 60_000)).padStart(2, '0')}:${String(Math.floor((total % 60_000) / 1000)).padStart(2, '0')}`;
+};
 
-  test('runs a complete round and ranks the result', async ({ browser }) => {
+/** Resets every phone to a brand-new session through the dev-only endpoint. */
+async function freshSession(sup: { page: Page; context: BrowserContext }, pages: Page[]) {
+  const token = await sup.page.evaluate(
+    () => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string,
+  );
+  const res = await sup.context.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${token}` } });
+  expect(res.ok()).toBe(true);
+  for (const page of pages) await page.reload();
+  for (const page of pages) {
+    await expect(page.getByTestId('dashboard')).toBeVisible();
+  }
+}
+
+/** Reception → floor 2 → START: the three presses that put a clock on the floor. */
+async function toCountdown(lobby: Page, corridor: Page, gate: Page) {
+  await expect(primary(lobby)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+  await primary(lobby).click();
+  await expect(primary(corridor)).toHaveText('XÁC NHẬN ĐÃ ĐẾN TẦNG 2');
+  await primary(corridor).click();
+  await expect(primary(gate)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
+  await primary(gate).click();
+  await expect(gate.getByTestId('countdown-screen')).toBeVisible();
+}
+
+async function snapshotOf(sup: { page: Page; context: BrowserContext }) {
+  const token = await sup.page.evaluate(
+    () => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string,
+  );
+  return (await (await sup.context.request.get('/api/snapshot', { headers: { authorization: `Bearer ${token}` } })).json()) as {
+    revision: number;
+    phase: string;
+    active_round: Record<string, string | number | null> | null;
+    attempts: { id: string; seq: number; claimed_at: number; elapsed_ms: number; status: string; in_time: boolean }[];
+    log: { action: string; metadata?: Record<string, unknown> }[];
+  };
+}
+
+test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
+  test('runs a complete round: reception, floor 2, countdown, claim, exit, closure', async ({ browser }) => {
     const lobby = await phone(browser, 'lobby');
-    const gate = await phone(browser, 'gate');
     const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
     const room = await phone(browser, 'room305');
     const sup = await phone(browser, 'supervisor');
+    const pages = [lobby.page, corridor.page, gate.page, room.page, sup.page];
+    await freshSession(sup, pages);
 
-    // Reset through the live server after all five clients are connected. This
-    // makes the first scenario deterministic even when a prior run was aborted.
-    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-    const reset = await sup.context.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${token}` } });
-    expect(reset.ok()).toBe(true);
-    await Promise.all([lobby, gate, corridor, room, sup].map(({ page }) => page.reload()));
-    await Promise.all([lobby, gate, corridor, room, sup].map(({ page }) => expect(page.getByTestId('dashboard')).toBeVisible()));
+    // §5 Before the first team: one control on one phone, a grey lock everywhere else.
+    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+    await expect(gate.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
+    await expect(sup.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
+    await expect(corridor.page.getByTestId('waiting-state')).toBeDisabled();
 
-    // §5/§7 before the first team: LOBBY owns the start, everyone else waits
-    await expect(lobby.page.getByTestId('event-bar')).toHaveCount(0);
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await expect(sup.page.getByTestId('waiting-state')).toContainText('CHỜ LOBBY GỌI ĐỘI');
-    await expect(gate.page.getByTestId('waiting-state')).toContainText('CHỜ LOBBY GỌI ĐỘI');
-
+    // The optional label is drafted before the press and travels with it.
     await lobby.page.getByTestId('team-edit').click();
     await lobby.page.getByTestId('team-name').fill('Ma Tro');
     await primary(lobby.page).click();
-    await expect(gate.page.getByTestId('event-bar')).toHaveCount(0);
+    await expect(lobby.page.getByTestId('team-status')).toContainText('Ma Tro');
+    // OPERATOR_01 is done for this team: sending up and confirming arrival differ.
+    await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
 
-    // §5 the hero shows no number while the team walks up: only the 5:00 window is a clock
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
-    await expect(room.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
+    // §6 Only OPERATOR_02 confirms arrival, and no clock has started anywhere.
+    await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐÃ ĐẾN TẦNG 2');
+    // NPC1 holds the documented exception for this phase, and it asks why first.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2');
+    await corridor.page.getByTestId('primary-action').click();
+    const confirmed = await snapshotOf(sup);
+    expect(confirmed.active_round?.floor2_confirmed_at).not.toBeNull();
+    expect(confirmed.active_round?.floor2_bypassed_at).toBeNull();
+    expect(confirmed.active_round?.floor2_confirmed_by_role).toBe('CORRIDOR');
+    // Confirmation of arrival is not the start: 02 has no clock authority at all.
+    expect(confirmed.active_round?.game_started_at).toBeNull();
+    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
 
-    // The journey strip shows the walk: LOBBY owns the first press, then the team is
-    // reported at the third-floor entrance and GATE owns the clock.
-    await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'up');
-    // The area the guests are walking into leads: the gate tile carries the light.
-    await expect(lobby.page.getByTestId('journey-node-gate')).toHaveAttribute('data-lead', '1');
-    await expect(primary(lobby.page)).toHaveText('ĐÃ LÊN TẦNG 3');
-    await primary(lobby.page).click();
-    await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐỘI ĐANG Ở CỬA VÀO TẦNG 3');
-    await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '1');
-    await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'at');
-
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
+    // §8 Pre-start: the same loud alert on every phone, one START permission.
+    await expect(room.page.getByTestId('prestart-alert')).toBeVisible();
+    await expect(room.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
     await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
-    await expect(gate.page.getByTestId('hero-clock')).toHaveText(/^0[45]:\d\d\.\d\d$/);
 
-    await expect(primary(corridor.page)).toHaveText('ĐÃ SETUP XONG');
-    await primary(corridor.page).click();
-    await expect(room.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '2');
-    await expect(primary(room.page)).toHaveText('ĐÃ ĐẾN 305');
-    await primary(room.page).click();
-    await expect(room.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '3');
-    await expect(primary(room.page)).toHaveText('XÁC NHẬN HOÀN THÀNH');
-    await primary(room.page).click();
-    await expect(primary(room.page)).toHaveText('ĐỘI RỜI PHÒNG 305');
-    await expect(room.page.getByTestId('journey-node-room')).toHaveAttribute('data-state', 'lead');
+    // §9 The countdown locks every screen: no navigation, no editing, no old buttons.
+    for (const page of pages) await expect(dashboard(page)).toHaveAttribute('data-locked', '1');
+    await expect(gate.page.getByTestId('countdown-screen')).toBeVisible();
+    await expect(gate.page.getByTestId('hero-clock')).toHaveText(/^0[45]:\d\d/);
+    await expect(gate.page.getByTestId('open-details')).toHaveCount(0);
+    await expect(gate.page.getByTestId('journey-strip')).toHaveCount(0);
+    await expect(gate.page.getByTestId('clock-controls')).toHaveCount(0);
+    // V3.1 §IV: the operator surface is Vietnamese end-to-end; `resolveCountdown.statusLine`
+    // now reads `● ĐANG CHẠY MM:SS`, never the raw `RUNNING` enum.
+    await expect(gate.page.getByTestId('countdown-status')).toContainText('ĐANG CHẠY');
+    // The hundredths exist as their own, much smaller field beside the main clock.
+    const fraction = gate.page.locator('.countdown-fraction');
+    await expect(fraction).toBeVisible();
+    const mainPx = await gate.page.getByTestId('hero-clock').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const fractionPx = await fraction.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(fractionPx).toBeLessThan(mainPx / 2);
 
-    // The floor map opens from any phone and shows the real press times.
-    await room.page.getByTestId('journey-strip').click();
-    await expect(room.page.getByTestId('journey-board')).toBeVisible();
-    await expect(room.page.getByTestId('journey-where')).toContainText('PHÒNG 305');
-    await expect(room.page.getByTestId('journey-stop-room')).toHaveAttribute('data-state', 'lead');
-    await room.page.getByTestId('journey-close').click();
-    await expect(room.page.getByTestId('journey-board')).toBeHidden();
-
-    // §1 confirming the puzzle does not stop the official clock
+    // §10 NPC2 records the announcement; the countdown deliberately keeps running.
+    await expect(room.page.getByTestId('record-claim')).toHaveText('GHI NHẬN BÁO HOÀN THÀNH');
+    await room.page.getByTestId('record-claim').click();
+    await expect(room.page.getByTestId('attempt-label')).toContainText('Lần 1');
+    await expect(room.page.getByTestId('attempt-label')).toContainText('Chờ kiểm tra');
+    const claimed = await snapshotOf(sup);
+    const claim = claimed.attempts[0];
+    expect(claim.status).toBe('PENDING');
+    expect(claim.in_time).toBe(true);
     await expect(room.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
-    await expect(primary(room.page)).toHaveText('ĐỘI RỜI PHÒNG 305');
-    await primary(room.page).click();
-    await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'down');
-    await expect(gate.page.getByTestId('journey-node-gate')).toHaveAttribute('data-lead', '1');
-    await expect(primary(gate.page)).toHaveText('KHÁCH ĐÃ RA — CHỐT GIỜ');
-    await primary(gate.page).click();
-    await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '1');
 
-    // §3 reset tasks activate immediately and run concurrently
-    await expect(primary(corridor.page)).toHaveText('ĐÃ RESET XONG');
-    await expect(primary(room.page)).toHaveText('ĐÃ RESET XONG');
-    await expect(gate.page.getByTestId('waiting-state')).toContainText('CHỜ RESET HOÀN TẤT');
-    await primary(corridor.page).click();
+    // Reject once: the claim keeps its own timestamp and the clock keeps running.
+    await room.page.getByTestId('attempt-invalid-1').click();
+    await expect.poll(async () => (await snapshotOf(sup)).attempts[0].status).toBe('INVALID');
+    await room.page.getByTestId('record-claim').click();
+    await expect.poll(async () => (await snapshotOf(sup)).attempts.length).toBe(2);
 
-    // §5 live NPC readiness, inspected on another phone through “Xem thêm”
-    await lobby.page.getByTestId('open-details').click();
-    await lobby.page.getByTestId('section-npc').locator('summary').click();
-    await expect(lobby.page.getByTestId('npc-CORRIDOR')).toContainText('XONG');
-    await expect(lobby.page.getByTestId('npc-ROOM305')).toContainText('ĐANG LÀM');
-    await lobby.page.getByTestId('close-details').click();
+    // Verify the second claim: the score is that claim's instant, not this press.
+    const second = (await snapshotOf(sup)).attempts[1];
+    await room.page.getByTestId('attempt-valid-2').click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
+    const won = await snapshotOf(sup);
+    // The score is the second claim's own instant…
+    expect(won.active_round?.official_duration_ms).toBe(second.elapsed_ms);
+    // …never the instant NPC2 finished checking, which is audited apart.
+    const audit = won.log.filter((l) => l.action === 'VERIFY_ATTEMPT').at(-1)?.metadata;
+    expect(audit?.claimed_at).toBe(second.claimed_at);
+    expect((audit?.verification_delay_ms as number) ?? 0).toBeGreaterThanOrEqual(0);
+    await expect(room.page.getByTestId('countdown-official')).toContainText('KẾT QUẢ CHÍNH THỨC');
+    // §10 step B: the countdown display stops the moment the round is decided, and the
+    // number it keeps is the official one rather than a timer running to nothing.
+    await expect(room.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
+    const hero = await room.page.getByTestId('hero-clock').textContent();
+    const official = formatCs(second.elapsed_ms);
+    expect(hero).toBe(official);
+    await room.page.waitForTimeout(1_300);
+    await expect(room.page.getByTestId('hero-clock')).toHaveText(official);
 
-    await primary(room.page).click();
-    await expect(primary(gate.page)).toHaveText('XÁC NHẬN SẴN SÀNG');
-    await primary(gate.page).click();
+    // §12 The exit is a second, separate event that cannot move the score.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    await gate.page.getByTestId('primary-action').click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.status).toBe('EXIT_CONFIRMED');
+    const exited = await snapshotOf(sup);
+    expect(exited.active_round?.official_duration_ms).toBe(second.elapsed_ms);
+    expect(exited.active_round?.exit_by_role).toBe('GATE');
 
-    // §3 the lobby may call the next team as soon as the area is cleared
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
-    // …and the route is back at tầng 1, where LOBBY presses first.
+    // §13 The physical checks are confirmed by the staff who own them, then closed.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
+    await expect(room.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
+    await gate.page.getByTestId('primary-action').click();
+    await room.page.getByTestId('primary-action').click();
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN SẴN SÀNG');
+    await gate.page.getByTestId('primary-action').click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round).toBeNull();
+
+    // §5 The lobby may receive the next team as soon as the area is cleared.
+    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
     await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '0');
-    await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'idle');
 
-    // §8 the leaderboard ranks the finished, successful team
+    // The ranking carries the claim-based time, and the wall clock shows ms detail.
     await lobby.page.getByTestId('open-details').click();
-    const sheet = lobby.page.getByTestId('details-sheet');
-    await expect(sheet).toBeVisible();
     await lobby.page.getByTestId('section-leaderboard').locator('summary').click();
     await expect(lobby.page.getByTestId('leaderboard-table')).toContainText('#001');
     await lobby.page.getByTestId('section-rounds').locator('summary').click();
     await expect(lobby.page.getByTestId('round-detail-1')).toContainText('Điểm chính thức');
-    await expect(lobby.page.getByTestId('round-detail-1')).toContainText('THÀNH CÔNG');
-    await expect(lobby.page.getByTestId('round-detail-1')).toContainText('Reset phòng 305');
-    await lobby.page.getByTestId('section-npc').locator('summary').click();
-    await expect(lobby.page.getByTestId('npc-ROOM305')).toContainText('—'); // idle again
-    await expect(lobby.page.getByTestId('npc-SUPERVISOR')).toBeVisible();
+    await expect(lobby.page.getByTestId('claims-1')).toContainText('Lần 1');
+    // V3.1 §IV: the attempt decision reads `CHƯA ĐÚNG` (from ATTEMPT_LABEL.INVALID),
+    // never the raw `INVALID` key. The uppercase is the deliberate visual weight of
+    // the label layer, matching the operator's "seen as a decision" style.
+    await expect(lobby.page.getByTestId('claims-1')).toContainText('CHƯA ĐÚNG');
     await lobby.page.getByTestId('section-history').locator('summary').click();
-    await expect(lobby.page.getByTestId('history')).toContainText('Chốt giờ đội #001');
-    await expect(lobby.page.getByTestId('history')).toContainText('ROOM305');
+    // The audit line is written for a human on the floor, not as an action id.
+    await expect(lobby.page.getByTestId('history')).toContainText('ghi nhận báo hoàn thành');
+    await expect(lobby.page.getByTestId('history')).toContainText('đã rời tầng 3');
+    // V3.1 §IV: the actor column wears `ROLE_SHORT` ("NPC 2"), never the raw key.
+    await expect(lobby.page.getByTestId('history')).toContainText('NPC 2');
+    await expect(lobby.page.getByTestId('history')).not.toContainText('ROOM305');
     await lobby.page.getByTestId('close-details').click();
-    await expect(sheet).toBeHidden();
 
-    for (const { context } of [lobby, gate, corridor, room, sup]) await context.close();
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('16. “Xem thêm” never pauses or disturbs the live dashboard', async ({ browser }) => {
-    const gate = await phone(browser, 'gate');
+  test('§7 the floor-2 bypass keeps its own audit and refuses a stale confirmation', async ({ browser }) => {
     const lobby = await phone(browser, 'lobby');
-
-    await gate.page.getByTestId('open-details').click();
-    const sheet = gate.page.getByTestId('details-sheet');
-    await expect(sheet).toBeVisible();
-
-    // the sheet shows round history without an event countdown
-    const header = gate.page.getByTestId('details-sheet').locator('header');
-    await expect(header).toContainText('1 LƯỢT CHƠI');
-
-    // another phone advances the shared state; the covered dashboard still updates
-    const statusBefore = await teamStatus(gate.page);
-    expect(statusBefore).toContain('Chờ gọi đội');
-    await primary(lobby.page).click(); // CHO ĐỘI LÊN
-    await expect.poll(() => teamStatus(gate.page), { timeout: 10_000 }).not.toBe(statusBefore);
-    await expect(header).toContainText('2 LƯỢT CHƠI');
-    expect(await teamStatus(gate.page)).toContain('Đang lên tầng');
-    expect(await heroLabel(gate.page)).toBe('CHƯA TÍNH GIỜ');
-
-    // closing returns instantly to the current live dashboard, no reload
-    await gate.page.getByTestId('close-details').click();
-    await expect(sheet).toBeHidden();
-    await expect(gate.page.getByTestId('dashboard')).toBeVisible();
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('BẮT ĐẦU');
-    await expect(gate.page.getByTestId('journey-strip')).toHaveAttribute('data-movement', 'up');
-
-    await lobby.context.close();
-    await gate.context.close();
-  });
-
-  test('11. the game clock expiring is an alarm, not an automatic clear', async ({ browser }) => {
-    const gate = await phone(browser, 'gate');
     const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
     const room = await phone(browser, 'room305');
     const sup = await phone(browser, 'supervisor');
-    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
 
-    // a team is already upstairs (dispatched in the previous case)
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
+    await primary(lobby.page).click();
+    // An exception without a reason cannot be sent, and without a second press
+    // either: an accidental tap must never skip a floor.
+    await expect(primary(gate.page)).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2');
+    await gate.page.getByTestId('primary-action').click();
+    await expect(gate.page.getByTestId('reason-input')).toBeVisible();
+    await expect(gate.page.getByTestId('primary-action')).toBeDisabled();
+    await gate.page.getByTestId('reason-input').fill('Đội đã lên thẳng tầng 3');
+    await expect(gate.page.getByTestId('primary-action')).toBeEnabled();
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN BỎ QUA TẦNG 2');
+    await gate.page.getByTestId('primary-action').click();
+
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.status).toBe('READY_AT_FLOOR3');
+    const bypassed = await snapshotOf(sup);
+    // The integrity rule: a bypass is not a fabricated floor-2 confirmation.
+    expect(bypassed.active_round?.floor2_confirmed_at).toBeNull();
+    expect(bypassed.active_round?.floor2_bypassed_at).not.toBeNull();
+    expect(bypassed.active_round?.floor2_bypassed_by_role).toBe('GATE');
+    expect(bypassed.active_round?.floor2_bypass_reason).toBe('Đội đã lên thẳng tầng 3');
+    expect(bypassed.active_round?.needs_review).toBe(true);
+
+    // The late OPERATOR_02 press is refused safely and the workflow does not revert.
+    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    expect((await snapshotOf(sup)).active_round?.floor2_confirmed_at).toBeNull();
+    // The game continues normally from the bypass.
     await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
+    await expect(gate.page.getByTestId('countdown-screen')).toBeVisible();
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
+  });
 
-    // let the 5-minute limit lapse without anyone pressing anything
+  test('a claim before the deadline stays a win when it is checked afterwards', async ({ browser }) => {
+    const lobby = await phone(browser, 'lobby');
+    const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
+    const room = await phone(browser, 'room305');
+    const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+    await toCountdown(lobby.page, corridor.page, gate.page);
+
+    await room.page.getByTestId('record-claim').click();
+    const claim = (await snapshotOf(sup)).attempts[0];
+    // Let the 5:00 lapse while NPC2 is still at the arrangement.
+    const token = await sup.page.evaluate(
+      () => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string,
+    );
     await sup.context.request.post('/api/dev/clock', {
-      data: { advance_ms: 5 * 60 * 1000 + 10_000 },
+      data: { advance_ms: 300_000 + 8_000 },
       headers: { authorization: `Bearer ${token}` },
     });
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME_OVERTIME');
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('QUÁ GIỜ');
-    await expect(gate.page.getByTestId('alert-OVERTIME')).toContainText('Hết 5:00');
-    await expect(primary(gate.page)).toHaveText('KHÁCH ĐÃ RA — CHỐT GIỜ'); // still GATE's call
-
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
-    await expect(primary(corridor.page)).toHaveText('ĐÃ RESET XONG');
-    await expect(primary(room.page)).toHaveText('ĐÃ RESET XONG');
-    await primary(corridor.page).click();
-    await primary(room.page).click();
-    await expect(primary(gate.page)).toHaveText('XÁC NHẬN SẴN SÀNG');
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
-
-    for (const { context } of [gate, corridor, room, sup]) await context.close();
+    // The provisional state, on the phone that owns the decision.
+    await expect(room.page.getByTestId('countdown-status')).toContainText('ĐANG CHỜ XÁC MINH');
+    await room.page.getByTestId(`attempt-valid-${claim.seq}`).click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
+    const won = await snapshotOf(sup);
+    // Success at the claim instant — the eight seconds of checking cost nothing.
+    expect(won.active_round?.official_duration_ms).toBe(claim.elapsed_ms);
+    // The claim never became the exit instant either: the round is still open.
+    expect(won.active_round?.exit_confirmed_at).toBeNull();
+    // NPC1 may still let the team out afterwards, without touching the score.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('G03 / Scenario F. losing the network during STOP never fabricates a score', async ({ browser }) => {
+  test('the clock running out is TIME UP, and nobody may pause or restart it', async ({ browser }) => {
     const lobby = await phone(browser, 'lobby');
+    const corridor = await phone(browser, 'corridor');
     const gate = await phone(browser, 'gate');
+    const room = await phone(browser, 'room305');
     const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+    await toCountdown(lobby.page, corridor.page, gate.page);
 
-    // The dev engine keeps one session; start a clean one so this case is
-    // independent of the elapsed clock in earlier cases.
-    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-    const headers = { authorization: `Bearer ${token}` };
-    expect((await sup.context.request.post('/api/dev/reset', { headers })).ok()).toBe(true);
-    await lobby.page.reload();
-    await gate.page.reload();
-    await sup.page.reload();
+    const token = await sup.page.evaluate(
+      () => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string,
+    );
+    await sup.context.request.post('/api/dev/clock', {
+      data: { advance_ms: 300_000 + 15_000 },
+      headers: { authorization: `Bearer ${token}` },
+    });
+    // The display stops at zero instead of counting into negative digits.
+    await expect(gate.page.getByTestId('hero-clock')).toHaveText('00:00');
+    await expect(gate.page.getByTestId('countdown-label')).toHaveText('HẾT GIỜ');
+    const expired = await snapshotOf(sup);
+    expect(expired.active_round?.game_stopped_at).toBeNull();
+    expect(expired.active_round?.official_duration_ms).toBeNull();
+    expect(expired.phase).toBe('WAITING_FOR_EXIT');
 
-    // The first dispatch is recorded, then GATE starts the per-round 5:00 clock.
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await primary(lobby.page).click();
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
-
-    // GATE walks into dead Wi-Fi and presses STOP
-    await gate.context.setOffline(true);
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('message')).toContainText(/XÁC MINH|CHƯA ĐƯỢC GHI NHẬN|MẤT KẾT NỐI/, { timeout: 20_000 });
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME'); // clock still running
-    const unread = await (await sup.context.request.get('/api/snapshot', { headers })).json();
-    expect(unread.active_round.game_stopped_at).toBeNull(); // no invented score on the server
-
-    // back online: the same press is applied once, and only once
-    await gate.context.setOffline(false);
-    await expect(gate.page.getByTestId('connection')).not.toHaveAttribute('data-status', 'OFFLINE', { timeout: 20_000 });
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-label')).toHaveText('CHƯA TÍNH GIỜ');
-    const after = await (await sup.context.request.get('/api/snapshot', { headers })).json();
-    expect(after.active_round.game_stopped_at).not.toBeNull();
-    const stops = after.log.filter((l: { action: string }) => l.action === 'GAME_STOP').length;
-    expect(stops).toBeGreaterThanOrEqual(1);
-
-    for (const { context } of [lobby, gate, sup]) await context.close();
+    // §9 Nobody holds a pause, resume or reset control any more.
+    await expect(gate.page.getByTestId('clock-pause')).toHaveCount(0);
+    await expect(gate.page.getByTestId('clock-reset')).toHaveCount(0);
+    await expect(gate.page.getByTestId('big-reset')).toHaveCount(0);
+    // A late announcement is recorded as information and cannot win.
+    await room.page.getByTestId('record-claim').click();
+    await expect.poll(async () => (await snapshotOf(sup)).attempts.length).toBe(1);
+    const late = (await snapshotOf(sup)).attempts[0];
+    expect(late.in_time).toBe(false);
+    expect(late.status).toBe('LATE');
+    await expect(room.page.getByTestId(`attempt-valid-${late.seq}`)).toBeDisabled();
+    // The guarded safety path stays available to NPC1, and it is secondary.
+    await expect(gate.page.getByTestId('emergency-open')).toBeVisible();
+    await gate.page.getByTestId('primary-action').click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.status).toBe('EXIT_CONFIRMED');
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('TIME_UP');
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('17. every dashboard fits 360px without horizontal scrolling', async ({ browser }) => {
-    for (const which of ['lobby', 'gate', 'corridor', 'room305', 'supervisor'] as Phone[]) {
+  test('an early exit needs a reason and never fabricates a successful time', async ({ browser }) => {
+    const lobby = await phone(browser, 'lobby');
+    const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
+    const room = await phone(browser, 'room305');
+    const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+    await toCountdown(lobby.page, corridor.page, gate.page);
+
+    // Only NPC1 holds the path out, and it is not the primary control.
+    await expect(room.page.getByTestId('emergency-open')).toHaveCount(0);
+    await expect(gate.page.getByTestId('primary-action')).toHaveCount(0);
+    await gate.page.getByTestId('emergency-open').click();
+    await expect(gate.page.getByTestId('emergency-confirm')).toBeDisabled();
+    await gate.page.getByTestId('emergency-reason').fill('Khách cần y tế');
+    await gate.page.getByTestId('emergency-confirm').click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('ABORTED');
+    const aborted = await snapshotOf(sup);
+    expect(aborted.active_round?.official_duration_ms).toBeNull();
+    expect(aborted.active_round?.exit_reason).toBe('Khách cần y tế');
+    expect(aborted.active_round?.exit_confirmed_at).not.toBeNull();
+    // The area still has to be put back ready before the next team.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
+  });
+
+  test('the observer watches, and can change nothing', async ({ browser }) => {
+    const lobby = await phone(browser, 'lobby');
+    const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
+    const room = await phone(browser, 'room305');
+    const sup = await phone(browser, 'supervisor');
+    const viewer = await phone(browser, 'observer');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+    await viewer.page.reload();
+    await expect(viewer.page.getByTestId('observer')).toBeVisible();
+
+    await toCountdown(lobby.page, corridor.page, gate.page);
+    await expect(viewer.page.getByTestId('observer-clock')).toHaveText(/^0[45]:\d\d/);
+    // V3.1 §IV: viewer status reads the same Vietnamese string as the operator screen.
+    await expect(viewer.page.getByTestId('observer-status')).toContainText('ĐANG CHẠY');
+    await expect(viewer.page.getByTestId('observer-team')).toBeVisible();
+    // No control at all: not a primary button, not a lock, not a settings entry.
+    await expect(viewer.page.getByTestId('primary-action')).toHaveCount(0);
+    await expect(viewer.page.getByTestId('record-claim')).toHaveCount(0);
+    await expect(viewer.page.getByTestId('emergency-open')).toHaveCount(0);
+    await expect(viewer.page.getByTestId('open-details')).toHaveCount(0);
+    await expect(viewer.page.getByTestId('observer-connection')).toHaveAttribute('data-status', 'CONNECTED');
+    // The seat survives a reload, because the viewer identity is kept on the device.
+    await viewer.page.reload();
+    await expect(viewer.page.getByTestId('observer')).toBeVisible();
+    await expect(viewer.page.getByTestId('observer-clock')).toHaveText(/^0[45]:\d\d/);
+    // The claim and the official time reach the viewer; the claim list does not.
+    await room.page.getByTestId('record-claim').click();
+    const claim = (await snapshotOf(sup)).attempts[0];
+    await room.page.getByTestId(`attempt-valid-${claim.seq}`).click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
+    await expect.poll(() => viewer.page.getByTestId('observer-status').textContent()).toContain('THÀNH CÔNG');
+    await viewer.page.getByTestId('observer-leave').click();
+    await expect(viewer.page.getByTestId('scream-home')).toBeVisible();
+
+    for (const { context } of [lobby, corridor, gate, room, sup, viewer]) await context.close();
+  });
+
+  test('every screen fits 360px, including the locked countdown', async ({ browser }) => {
+    const lobby = await phone(browser, 'lobby');
+    const corridor = await phone(browser, 'corridor');
+    const gate = await phone(browser, 'gate');
+    const room = await phone(browser, 'room305');
+    const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+
+    for (const which of ['lobby', 'corridor', 'gate', 'room305', 'supervisor', 'observer'] as Phone[]) {
       const context = await browser.newContext({ viewport: { width: 360, height: 640 } });
       const page = await signIn(context, which);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(overflow, `${which} overflows by ${overflow}px`).toBeLessThanOrEqual(0);
-
-      await page.getByTestId('open-details').click();
-      const sheetOverflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(sheetOverflow, `${which} sheet overflows`).toBeLessThanOrEqual(0);
-      await page.getByTestId('close-details').click();
+      if (which !== 'observer') {
+        await page.getByTestId('open-details').click();
+        const sheetOverflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        );
+        expect(sheetOverflow, `${which} sheet overflows`).toBeLessThanOrEqual(0);
+        await page.getByTestId('close-details').click();
+      } else {
+        // A viewer has no sheet to open, only its own read-only board.
+        await expect(page.getByTestId('observer-phase')).toBeVisible();
+      }
       await context.close();
     }
+
+    // The locked screen is the one that must never scroll sideways: the clock, the
+    // NPC 2 panel and the emergency control all have to fit a 360 px phone.
+    await toCountdown(lobby.page, corridor.page, gate.page);
+    for (const [name, page] of [
+      ['room305', room.page],
+      ['gate', gate.page],
+      ['lobby', lobby.page],
+    ] as const) {
+      await expect(page.getByTestId('countdown-screen')).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${name} countdown overflows by ${overflow}px`).toBeLessThanOrEqual(0);
+    }
+    // NPC 2 records an announcement so its two decision buttons are on screen.
+    await room.page.getByTestId('record-claim').click();
+    await expect(room.page.getByTestId('attempt-list')).toBeVisible();
+    const claimOverflow = await room.page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(claimOverflow).toBeLessThanOrEqual(0);
+    // NPC 1 opens the guarded path so its reason row is measured too.
+    await gate.page.getByTestId('emergency-open').click();
+    await expect(gate.page.getByTestId('emergency-reason')).toBeVisible();
+    const emergencyOverflow = await gate.page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(emergencyOverflow).toBeLessThanOrEqual(0);
   });
 
-  test('9. lobby can admit and start another team after the old 90-minute duration', async ({ browser }) => {
+  test('the same flow on a desktop screen keeps the countdown the dominant number', async ({ browser }) => {
+    const desktop = async (which: Phone) => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      return { context, page: await signIn(context, which) };
+    };
+    const lobby = await desktop('lobby');
+    const corridor = await desktop('corridor');
+    const gate = await desktop('gate');
+    const room = await desktop('room305');
+    const viewer = await desktop('observer');
     const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
+    await viewer.page.reload();
+    await expect(viewer.page.getByTestId('observer')).toBeVisible();
+
+    // Nothing may run sideways at 1280 either — the same rule as the smallest phone.
+    const fits = async (name: string, page: Page) => {
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${name} overflows by ${overflow}px`).toBeLessThanOrEqual(0);
+    };
+    for (const [name, p] of [
+      ['lobby', lobby], ['corridor', corridor], ['gate', gate], ['room305', room], ['observer', viewer],
+    ] as const) await fits(name, p.page);
+
+    await toCountdown(lobby.page, corridor.page, gate.page);
+    for (const [name, p] of [['gate', gate], ['room305', room], ['observer', viewer]] as const) {
+      await fits(`${name} countdown`, p.page);
+    }
+    // Minutes and seconds carry the wide screen too, and the hundredths stay an
+    // order of magnitude smaller so they never compete with the clock.
+    const mainPx = await gate.page.getByTestId('hero-clock').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const fractionPx = await gate.page.locator('.countdown-fraction').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(mainPx).toBeGreaterThanOrEqual(54);
+    expect(fractionPx).toBeLessThan(mainPx / 2);
+    await expect(gate.page.getByTestId('hero-clock')).toHaveText(/^0[45]:\d\d/);
+
+    // The wall display is the desktop surface: one enormous number, no controls.
+    await gate.page.getByTestId('countdown-big').click();
+    await expect(gate.page.getByTestId('big-screen')).toBeVisible();
+    const wallPx = await gate.page.getByTestId('big-clock').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(wallPx).toBeGreaterThan(mainPx * 2);
+    await expect(gate.page.getByTestId('clock-pause')).toHaveCount(0);
+    await gate.page.keyboard.press('Escape');
+
+    for (const { context } of [lobby, corridor, gate, room, viewer, sup]) await context.close();
+  });
+
+  test('the wall display mirrors the same clock and holds no clock control', async ({ browser }) => {
     const lobby = await phone(browser, 'lobby');
-    const gate = await phone(browser, 'gate');
     const corridor = await phone(browser, 'corridor');
-    const room = await phone(browser, 'room305');
-
-    // Start from a known-clean session, run one full round so the area is READY,
-    // then move the simulated clock past the old 90-minute duration.
-    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-    const headers = { authorization: `Bearer ${token}` };
-    expect((await sup.context.request.post('/api/dev/reset', { headers })).ok()).toBe(true);
-    await sup.page.reload();
-    await lobby.page.reload();
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await primary(lobby.page).click();
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
-    await primary(gate.page).click();
-    await expect(primary(gate.page)).toHaveText('KHÁCH ĐÃ RA — CHỐT GIỜ');
-    await primary(gate.page).click();
-    await expect(primary(corridor.page)).toHaveText('ĐÃ RESET XONG');
-    await primary(corridor.page).click();
-    await expect(primary(corridor.page)).toHaveCount(0);
-    await expect(room.page.getByTestId('dashboard')).toHaveAttribute('data-revision',
-      (await corridor.page.getByTestId('dashboard').getAttribute('data-revision'))!);
-    await primary(room.page).click();
-    await expect(primary(gate.page)).toHaveText('XÁC NHẬN SẴN SÀNG');
-    await primary(gate.page).click();
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-
-    const readSnapshot = async () =>
-      (await (await sup.context.request.get('/api/snapshot', { headers })).json()) as {
-        event: { event_started_at: number | null; config: { event_duration_ms: number } };
-      };
-    const live = await readSnapshot();
-    expect(live.event.event_started_at).not.toBeNull();
-    const pushed = await sup.context.request.post('/api/dev/clock', {
-      data: { set_ms: (live.event.event_started_at as number) + live.event.config.event_duration_ms + 1 },
-      headers,
-    });
-    expect(pushed.ok()).toBe(true);
-
-    // The old event duration no longer blocks dispatch or game start.
-    await lobby.page.reload();
-    await sup.page.reload();
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await primary(lobby.page).click();
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
-    await primary(gate.page).click();
-    await expect(gate.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
-
-    await sup.page.getByTestId('open-details').click();
-    await sup.page.getByTestId('section-admin').locator('summary').click();
-    await expect(sup.page.getByTestId('management')).toBeVisible();
-    await sup.page.getByTestId('close-details').click();
-
-    for (const { context } of [lobby, sup, gate, corridor, room]) await context.close();
-  });
-
-  test('18. the wall display takes the lobby phone over for the 5-minute countdown', async ({ browser }) => {
-    const sup = await phone(browser, 'supervisor');
-    const lobby = await phone(browser, 'lobby');
     const gate = await phone(browser, 'gate');
-    const token = await sup.page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-    const headers = { authorization: `Bearer ${token}` };
+    const room = await phone(browser, 'room305');
+    const sup = await phone(browser, 'supervisor');
+    await freshSession(sup, [lobby.page, corridor.page, gate.page, room.page, sup.page]);
 
-    expect((await sup.context.request.post('/api/dev/reset', { headers })).ok()).toBe(true);
-    await sup.page.reload();
-    await lobby.page.reload();
-    await gate.page.reload();
-    await expect(primary(lobby.page)).toHaveText('CHO ĐỘI LÊN');
-    await primary(lobby.page).click(); // record the first dispatch
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
-
-    // Nobody touches the lobby phone: the 5-minute countdown becomes the whole screen.
-    await primary(gate.page).click();
+    // A station with nothing left to press becomes the wall by itself.
+    await toCountdown(lobby.page, corridor.page, gate.page);
     const big = lobby.page.getByTestId('big-screen');
     await expect(big).toBeVisible();
-    await expect(lobby.page.getByTestId('big-clock')).toHaveText(/^0[45]:\d\d$/);
-    await expect(lobby.page.getByTestId('big-clock')).toHaveCSS('color', 'rgb(225, 54, 44)');
+    await expect(lobby.page.getByTestId('big-clock')).toHaveText(/^0[45]:\d\d/);
+    await expect(lobby.page.getByTestId('big-team')).toContainText('· 05:00');
     const digitPx = await lobby.page.getByTestId('big-clock').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(digitPx).toBeGreaterThanOrEqual(52);
+    // The fraction is on screen but visibly subordinate to MM:SS.
+    const fractionPx = await lobby.page.locator('.wall-fraction').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(fractionPx).toBeLessThan(digitPx / 3);
     const first = await lobby.page.getByTestId('big-clock').innerText();
     await expect.poll(() => lobby.page.getByTestId('big-clock').innerText(), { timeout: 8_000 }).not.toBe(first);
-    // the event clock is still on the phones that need it, and the countdown is not it
-    await expect(lobby.page.getByTestId('big-team')).toContainText('· 05:00');
+    // No pause, no reset: the wall cannot touch the authoritative clock.
+    await expect(lobby.page.getByTestId('big-pause')).toHaveCount(0);
+    await expect(lobby.page.getByTestId('big-reset')).toHaveCount(0);
 
-    // RESET is an authoritative command: only the clock owner may send it, and it
-    // restarts the official 5:00 (the round then waits for a supervisor decision).
-    await expect(lobby.page.getByTestId('big-reset')).toBeDisabled();
-    await gate.page.getByTestId('open-details').click();
-    await gate.page.getByTestId('sheet-big-screen').click();
-    await gate.page.getByTestId('big-reset').click();
-    await gate.page.getByTestId('big-reset-confirm').click();
-    await expect(gate.page.getByTestId('big-clock')).toHaveText(/^0[45]:\d\d$/);
-    await expect(gate.page.getByTestId('big-reset-count')).toContainText('RESET 1');
-    // the wall display mirrors the same authoritative clock, not a local copy
-    await expect(lobby.page.getByTestId('big-clock')).toHaveText(/^0[45]:\d\d$/);
-    await gate.page.getByTestId('big-close').click();
-
-    // Digits-only mode: the number alone, and a tap brings the controls back.
-    await lobby.page.getByTestId('big-focus').click();
-    await expect(lobby.page.getByTestId('big-controls')).toBeHidden();
-    await expect(lobby.page.getByTestId('big-team')).toBeHidden();
-    await lobby.page.getByTestId('big-screen').click();
-    await expect(lobby.page.getByTestId('big-controls')).toBeVisible();
-
-    // Out of time: the screen flashes and the alarm is armed — but nothing is cleared.
+    // Out of time: calm red state, 00:00, and no automatic clear.
+    const token = await sup.page.evaluate(
+      () => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string,
+    );
     await sup.context.request.post('/api/dev/clock', {
-      data: { advance_ms: 5 * 60 * 1000 + 20_000 },
-      headers,
+      data: { advance_ms: 300_000 + 10_000 },
+      headers: { authorization: `Bearer ${token}` },
     });
-    await expect(big).toHaveAttribute('data-expired', 'true');
-    await expect(big).toHaveClass(/alarm-flash/);
+    await expect(big).toHaveClass(/alarm-glow/);
     await expect(lobby.page.getByTestId('big-clock')).toHaveText('00:00');
     await expect(lobby.page.getByTestId('big-expired')).toContainText('HẾT GIỜ');
-    // only GATE ends the countdown, and its own phone kept its button
-    await expect(primary(gate.page)).toHaveText('KHÁCH ĐÃ RA — CHỐT GIỜ');
-
-    await primary(gate.page).click();
+    await expect.poll(async () => (await snapshotOf(sup)).active_round?.exit_confirmed_at).toBeNull();
+    // Only NPC1 ends it, from its own phone.
+    await gate.page.getByTestId('primary-action').click();
     await expect(big).toBeHidden();
-    await expect(lobby.page.getByTestId('dashboard')).toBeVisible();
 
-    for (const { context } of [sup, lobby, gate]) await context.close();
+    for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('19. root Home offers five stations and supervisor PIN', async ({ page }) => {
+  test('19. root Home offers four stations plus an open viewer seat', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTestId('scream-home')).toBeVisible();
 
-    // Nothing that looks like a login screen is offered any more.
-    await expect(page.locator('input')).toHaveCount(0);
-    await expect(page.getByTestId('passcode')).toHaveCount(0);
-    await expect(page.getByTestId('role-LOBBY')).toHaveCount(0);
-
-    // The gate paints the five-seat board before any link is opened.
+    // Nothing that looks like a login screen is offered for a station or a seat.
+    await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/);
+    await expect(page.getByTestId('observer-count')).toHaveText(/\/10/);
     await expect(page.locator('.home-station')).toHaveCount(5);
-    await expect(page.getByTestId('station-count')).toHaveText('0/6');
-    await expect(page.getByTestId('station-GATE')).toHaveAttribute('data-state', 'available');
-    await expect(page.getByTestId('station-lock')).toHaveCount(0);
-
-    // The double-staffed seat announces its own capacity instead of being guessed.
-    await expect(page.getByTestId('station-SUPERVISOR')).toContainText('0/2');
-
-    // Minimal by design: no essay, no retry button, one short instruction line.
-    await expect(page.getByTestId('invite-retry')).toHaveCount(0);
-    await expect(page.getByText(/Máy này chưa được cấp vị trí/)).toHaveCount(0);
-
-    // The self-hosted build still exposes its five stations to the suite.
-    await page.getByTestId('station-SUPERVISOR').click();
+    for (const role of ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'OBSERVER']) {
+      await expect(page.getByTestId(`station-${role}`)).toHaveAttribute('data-state', /available|unknown|full/);
+    }
+    // The retained admin is not offered as a station; it opens a PIN sheet.
+    await expect(page.getByTestId('station-SUPERVISOR')).toHaveCount(0);
+    await expect(page.locator('input')).toHaveCount(0);
+    await page.getByTestId('home-admin-open').click();
     await page.getByLabel('PIN quản trị', { exact: true }).fill('12345678');
-    await page.getByRole('button', { name: 'VÀO GIÁM SÁT' }).click();
+    await page.getByRole('button', { name: 'VÀO QUẢN TRỊ' }).click();
     await expect(page.getByTestId('dashboard')).toBeVisible();
-    await expect(page.getByTestId('role-tag')).toHaveText('SUP');
+    await expect(page.getByTestId('role-tag')).toHaveText('TRỊ');
   });
 
   test('20. a redeemed station survives reopening without the link', async ({ browser }) => {
@@ -456,11 +580,11 @@ test.describe.serial('SCREAM CONTROL V2 — five phones, one event', () => {
     // Back to the bare origin: only the stored session can restore the station.
     await page.goto('/');
     await expect(page.getByTestId('dashboard')).toBeVisible();
-    await expect(page.getByTestId('role-tag')).toHaveText('LOBBY');
+    await expect(page.getByTestId('role-tag')).toHaveText('01');
 
     await page.reload();
     await expect(page.getByTestId('dashboard')).toBeVisible();
-    await expect(page.getByTestId('role-tag')).toHaveText('LOBBY');
+    await expect(page.getByTestId('role-tag')).toHaveText('01');
 
     await context.close();
   });

@@ -66,6 +66,9 @@ export class SupabaseGateway implements Gateway {
       event: raw.event,
       rounds: raw.rounds,
       reset_tasks: raw.reset_tasks,
+      // Completion claims travel with the snapshot, so both backends derive the same
+      // phase and the same provisional result with no extra round trip.
+      attempts: raw.attempts ?? [],
       operators: raw.operators,
       log: raw.log,
     });

@@ -40,11 +40,17 @@ export interface ClaimResult {
 /** What the person holding the phone needs to read, not the RPC code. */
 const CLAIM_ERROR: Record<string, string> = {
   ROLE_TAKEN: 'VỊ TRÍ ĐANG CÓ NGƯỜI TRỰC',
+  OBSERVER_FULL: 'ĐÃ ĐỦ 10 NGƯỜI THEO DÕI — VUI LÒNG THỬ LẠI SAU',
   ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG GIỮ VỊ TRÍ KHÁC — VỀ HOME TRƯỚC KHI CHUYỂN',
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
   PIN_INVALID: 'PIN KHÔNG ĐÚNG',
   PIN_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
-  PIN_NOT_CONFIGURED: 'SUPERVISOR CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
+  PIN_NOT_CONFIGURED: 'QUẢN TRỊ CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
+  // Crew codes guard the four operating positions (V3.1 §5).
+  CODE_INVALID: 'SAI MÃ VỊ TRÍ',
+  CODE_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ NGƯỜI PHỤ TRÁCH',
+  CODE_NOT_CONFIGURED: 'MÃ VỊ TRÍ CHƯA ĐƯỢC CẤP — LIÊN HỆ NGƯỜI PHỤ TRÁCH SỰ KIỆN',
+  CODE_REQUIRED: 'VỊ TRÍ NÀY CẦN MÃ — HÃY NHẬP MÃ DO NGƯỜI PHỤ TRÁCH CẤP',
   INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
 };
 
@@ -59,12 +65,17 @@ export interface ResetResult {
   freed?: number;
 }
 
-/** The board reset is checked inside PostgreSQL; these are its refusal reasons. */
+/** The board release is checked inside PostgreSQL; these are its refusal reasons. */
 const RESET_ERROR: Record<string, string> = {
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
   RESET_INVALID: 'MẬT KHẨU RESET KHÔNG ĐÚNG',
   RESET_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
   RESET_NOT_CONFIGURED: 'RESET CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
+  // Only a bound supervisor may release the whole board (V3.1 §6.1).
+  RESET_NOT_AUTHORIZED: 'CHỈ QUẢN TRỊ ĐÃ ĐĂNG NHẬP PIN MỚI ĐƯỢC GIẢI PHÓNG TOÀN BỘ BẢNG',
+  RESET_GAME_RUNNING: 'VẪN CÒN ĐỘI TRONG KHU VỰC — NPC 1 CẦN XÁC NHẬN ĐÃ RỜI TẦNG 3 TRƯỚC',
+  RESET_PENDING_CLAIM: 'CÒN LẦN BÁO HOÀN THÀNH CHỜ NPC 2 XÁC MINH — KHÔNG GIẢI PHÓNG BẢNG LÚC NÀY',
+  RESET_AREA_OPEN: 'KHU VỰC CHƯA XÁC NHẬN RESET XONG — KHÔNG GIẢI PHÓNG BẢNG LÚC NÀY',
 };
 
 export function resetErrorMessage(result: ResetResult | null): string {
@@ -146,7 +157,9 @@ export async function leaveStation(): Promise<void> {
  * Organiser sweep: free every occupied station at once. The secret is sent to
  * PostgreSQL and compared against a bcrypt hash there — the app never knows
  * whether a secret is configured beyond the server's own refusal, and the typed
- * secret is not kept in storage. Event, round and timer data are untouched.
+ * secret is not kept in storage. This is an access action only: it never stops a
+ * clock, closes a round or marks a physical reset, and PostgreSQL refuses it
+ * outright while a team is inside the 5:00 window.
  */
 export async function resetAllStations(secret: string): Promise<ResetResult> {
   await ensureAnonymousSession();

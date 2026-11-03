@@ -115,6 +115,15 @@ export function CheckIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   );
 }
 
+/** The refusal half of a verification decision, mirrored against CheckIcon. */
+export function CrossIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, strokeWidth: 2.8, ...rest })}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
 export function StopIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   return (
     <svg {...filled({ className, ...rest })}>
@@ -182,6 +191,31 @@ export function FlagIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
     <svg {...stroke({ className, ...rest })}>
       <path d="M5.5 21V4" />
       <path d="M5.5 4.6h10.8l-2 3.4 2 3.4H5.5z" />
+    </svg>
+  );
+}
+
+/**
+ * The secret peek pair. The open eye is shown while the value is hidden ("tap to
+ * see"), the barred eye while it is visible ("tap to hide"), so the icon always
+ * names the next action rather than the current state.
+ */
+export function EyeIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M4 4l16 16" />
+      <path d="M9.7 6A9.7 9.7 0 0 1 12 5.8c6 0 9.4 6.2 9.4 6.2a17.4 17.4 0 0 1-3.4 4.1" />
+      <path d="M6.3 7.9A16.9 16.9 0 0 0 2.6 12S6 18.2 12 18.2c1.5 0 2.9-.4 4.1-1" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
     </svg>
   );
 }

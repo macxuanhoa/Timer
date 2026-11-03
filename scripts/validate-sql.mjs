@@ -78,6 +78,12 @@ try {
   run('036 team label scenario', ['supabase/tests/036_team_name.sql']);
   run('014 secret-gated board reset', ['supabase/migrations/0014_station_reset.sql']);
   run('037 board reset scenario', ['supabase/tests/037_station_reset.sql']);
+  run('015 reset guard + area-staff-only checks', ['supabase/migrations/0015_reset_guard.sql']);
+  run('038 reset guard scenario', ['supabase/tests/038_reset_guard.sql']);
+  run('016 unified flow + observer seats', ['supabase/migrations/0016_unified_flow.sql']);
+  run('039 unified flow scenario', ['supabase/tests/039_unified_flow.sql']);
+  run('017 v3.1 hardening', ['supabase/migrations/0017_v31_hardening.sql']);
+  run('040 v3.1 scenario', ['supabase/tests/040_v31_hardening.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MIN, SEC, TestHub, entries, latest, playRound } from './helpers/harness';
-import { analytics, leaderboard, roundMetrics } from '../src/shared/metrics';
-import { evaluateDispatch } from '../src/shared/machine';
-import { resolveAlerts, resolveHero } from '../src/client/selectors';
+import { leaderboard, roundMetrics } from '../src/shared/metrics';
+import { evaluateDispatch, flowStatus, resultOf } from '../src/shared/machine';
+import { resolveAlerts, resolveCountdown } from '../src/client/selectors';
 import type { CommandRequest } from '../src/shared/types';
 
 /** A press that reached the server late, as a real phone on bad Wi-Fi would send. */
@@ -12,11 +12,23 @@ const latePress = (hub: TestHub, ms: number): CommandRequest['press'] => ({
   rtt_ms: ms,
 });
 
+async function settle(times = 8) {
+  for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+/** Reception → floor 2 → START, the three presses that put a clock on the floor. */
+function onTheClock(hub: TestHub, press?: (id: string, action: CommandRequest['action'], meta?: Record<string, unknown>, key?: string, p?: CommandRequest['press']) => unknown) {
+  const cmd = press ?? ((id, action, meta, key, p) => hub.command(id, action, meta ?? {}, undefined, key ?? `k-${action}`, p));
+  cmd('lobby', 'CALL_TEAM');
+  cmd('corridor', 'CONFIRM_FLOOR2');
+  cmd('gate', 'START_GAME');
+}
+
 describe('hardening — disputes, recovery and concurrency', () => {
-  it('H1. a slow STOP is recorded, disputed and withheld from the ranking (P0-01, P0-05)', () => {
+  it('H1. a slow press is recorded, disputed and withheld from the ranking', () => {
     const hub = new TestHub();
     hub.command('lobby', 'CALL_TEAM');
-    hub.advance(60 * SEC);
+    hub.command('corridor', 'CONFIRM_FLOOR2');
     hub.command('gate', 'START_GAME', {}, undefined, 'start-key', latePress(hub, 1800));
     const started = hub.snapshot().active_round!;
     expect(started.start_transport_ms).toBeGreaterThanOrEqual(1800);
@@ -27,26 +39,26 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(started.start_press_ms).toBeLessThan(started.game_started_at!);
 
     hub.advance(100 * SEC);
-    hub.command('room305', 'ROOM_REACHED');
-    hub.command('room305', 'PUZZLE_COMPLETE');
-    hub.command('gate', 'GAME_STOP', {}, undefined, 'stop-key', latePress(hub, 1500));
+    hub.command('room305', 'CLAIM_COMPLETE', {}, undefined, 'claim-key', latePress(hub, 1500));
+    const claim = hub.attempts()[0];
+    expect(claim.claim_transport_ms).toBeGreaterThanOrEqual(1500);
+    expect(claim.claimed_at).toBe(hub.now());
+    hub.command('room305', 'VERIFY_ATTEMPT', { attempt_id: claim.id, decision: 'VALID' });
     const round = hub.snapshot().rounds.at(-1)!;
-    expect(round.stop_transport_ms).toBeGreaterThanOrEqual(1500);
-    expect(round.review_reasons).toContain('STOP_TRANSPORT');
-    expect(round.outcome).toBe('WON'); // the measurement is preserved …
+    expect(round.review_reasons).toContain('CLAIM_TRANSPORT');
+    expect(round.official_duration_ms).toBe(100 * SEC); // the measurement is preserved …
+    hub.command('gate', 'CONFIRM_EXIT');
     expect(leaderboard(hub.snapshot())).toHaveLength(0); // … but no prize from disputed data
 
     // a disputed finish is visible on the operator screen, not buried in the sheet
-    const alerts = resolveAlerts(hub.snapshot(), hub.now(), false);
-    expect(alerts.map((a) => a.id)).toContain('REVIEW');
+    expect(resolveAlerts(hub.snapshot(), hub.now(), false).map((a) => a.id)).toContain('REVIEW');
 
     // the supervisor has to decide explicitly
     expect(hub.command('gate', 'REVIEW_RESOLVE', { round_id: round.id, decision: 'ACCEPT', reason: 'x' }).code).toBe(
       'PERMISSION_DENIED',
     );
     expect(hub.command('supervisor', 'REVIEW_RESOLVE', { round_id: round.id, decision: 'ACCEPT' }).code).toBe('BLOCKED');
-    hub.advance(30 * SEC);
-    hub.command('corridor', 'RESET_DONE');
+    hub.command('gate', 'RESET_DONE');
     hub.command('room305', 'RESET_DONE');
     hub.command('gate', 'GATE_FINALIZE');
     const resolved = hub.command('supervisor', 'REVIEW_RESOLVE', {
@@ -56,60 +68,54 @@ describe('hardening — disputes, recovery and concurrency', () => {
     });
     expect(resolved.ok).toBe(true);
     expect(leaderboard(hub.snapshot()).map((r) => r.team_number)).toEqual([1]);
-    const audit = latest(hub, 'REVIEW_RESOLVE')!;
-    expect(audit.metadata).toMatchObject({ decision: 'ACCEPT', reason: 'Da xem lai nhat ky' });
+    expect(latest(hub, 'REVIEW_RESOLVE')!.metadata).toMatchObject({ decision: 'ACCEPT', reason: 'Da xem lai nhat ky' });
   });
 
   it('H2. a finish within the review window of 5:00 is disputed, not auto-decided', () => {
     const hub = new TestHub();
-    hub.command('lobby', 'CALL_TEAM');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'START_GAME');
+    onTheClock(hub);
     hub.advance(300 * SEC - 200); // 200 ms short of the limit
-    hub.command('room305', 'ROOM_REACHED');
-    hub.command('room305', 'PUZZLE_COMPLETE');
-    hub.command('gate', 'GAME_STOP');
+    hub.command('room305', 'CLAIM_COMPLETE');
+    const claim = hub.attempts()[0];
+    expect(claim.in_time).toBe(true);
+    hub.command('room305', 'VERIFY_ATTEMPT', { attempt_id: claim.id, decision: 'VALID' });
     const round = hub.snapshot().rounds.at(-1)!;
     expect(round.official_duration_ms).toBe(299_800);
     expect(round.review_reasons).toContain('CLOSE_FINISH');
     expect(leaderboard(hub.snapshot())).toHaveLength(0);
 
-    // and a full 200 ms outside the window is an ordinary, rankable result
+    // and a full 200 ms inside the window is an ordinary, rankable result
     const hub2 = new TestHub();
-    playRound(hub2, { prepMs: 60 * SEC, gameMs: 299_400 });
+    playRound(hub2, { claimMs: 299_400 });
     const clean = hub2.snapshot().rounds.at(-1)!;
     expect(clean.review_reasons).toEqual([]);
     expect(leaderboard(hub2.snapshot())).toHaveLength(1);
   });
 
-  it('H3. reopening a reset revokes READY and forces all three confirmations (P0-06)', () => {
+  it('H3. reopening a reset revokes readiness and forces every confirmation again', () => {
     const hub = new TestHub();
-    hub.command('lobby', 'CALL_TEAM');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'START_GAME');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'GAME_STOP');
-    hub.command('corridor', 'RESET_DONE');
+    onTheClock(hub);
+    hub.advance(301 * SEC);
+    hub.command('gate', 'CONFIRM_EXIT');
+    hub.command('gate', 'RESET_DONE');
     hub.command('room305', 'RESET_DONE');
     expect(hub.command('room305', 'REOPEN_RESET', { reason: 'nham' }).code).toBe('PERMISSION_DENIED');
     expect(hub.command('supervisor', 'REOPEN_RESET', { reason: 'nham' }).code).toBe('INVALID_STATE'); // no round_id
     const roundId = hub.snapshot().active_round!.id;
-    const before = hub.snapshot().reset_tasks.filter((t) => t.completed_at !== null).length;
-    expect(before).toBe(3);
-    const reopen = hub.command('supervisor', 'REOPEN_RESET', { round_id: roundId, task_key: 'room', reason: 'Manocung chua dat lai' });
-    expect(reopen.ok).toBe(true);
+    expect(hub.snapshot().reset_tasks.filter((t) => t.completed_at !== null)).toHaveLength(3);
+    expect(hub.command('supervisor', 'REOPEN_RESET', { round_id: roundId, task_key: 'room', reason: 'Manocung chua dat lai' }).ok).toBe(true);
 
     const after = hub.snapshot();
     expect(after.reset_tasks.every((t) => t.completed_at === null)).toBe(true);
     expect(after.active_round!.reset_cycle).toBe(2);
     expect(after.active_round!.system_ready_at).toBeNull();
-    expect(after.phase).toBe('RESETTING');
+    expect(flowStatus(after.active_round!)).toBe('EXIT_CONFIRMED');
     // dispatch is refused again — the old DONE marks cannot authorise a team
     expect(hub.command('lobby', 'CALL_TEAM').code).toBe('INVALID_STATE');
     expect(hub.command('gate', 'GATE_FINALIZE').code).toBe('BLOCKED');
 
     // re-confirm the new cycle only
-    hub.command('corridor', 'RESET_DONE');
+    hub.command('gate', 'RESET_DONE');
     hub.command('room305', 'RESET_DONE');
     const tasks = hub.snapshot().reset_tasks;
     expect(tasks.filter((t) => t.completed_at !== null).map((t) => t.cycle)).toEqual([2, 2, 2]);
@@ -118,7 +124,7 @@ describe('hardening — disputes, recovery and concurrency', () => {
     const audit = latest(hub, 'REOPEN_RESET')!;
     expect(audit.metadata).toMatchObject({ reason: 'Manocung chua dat lai', task: 'room', cycle: 2 });
     // the invalidated timestamps stay in history, never rewritten
-    expect(hub.snapshot().reset_tasks.filter((t) => t.reopen_count === 1).length).toBe(3);
+    expect(hub.snapshot().reset_tasks.filter((t) => t.reopen_count === 1)).toHaveLength(3);
   });
 
   it('H4. a reset confirmation from a previous round can never be reused (G07)', () => {
@@ -127,41 +133,48 @@ describe('hardening — disputes, recovery and concurrency', () => {
     const first = hub.snapshot().rounds[0];
     expect(first.system_ready_at).not.toBeNull();
     hub.command('lobby', 'CALL_TEAM'); // round 2
-    hub.advance(60 * SEC);
+    hub.command('corridor', 'CONFIRM_FLOOR2');
     hub.command('gate', 'START_GAME');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'GAME_STOP');
+    hub.advance(301 * SEC);
+    hub.command('gate', 'CONFIRM_EXIT');
     const second = hub.snapshot().rounds[1];
     expect(second.id).not.toBe(first.id);
     // round 2 has its own untouched task rows
     expect(hub.snapshot().reset_tasks.filter((t) => t.round_id === second.id && t.completed_at === null)).toHaveLength(3);
     expect(hub.command('gate', 'GATE_FINALIZE').code).toBe('BLOCKED');
     const metrics = roundMetrics(second, hub.snapshot().reset_tasks);
-    expect(metrics.corridor_reset_ms).toBeNull(); // not inherited from round 1
+    expect(metrics.room_reset_ms).toBeNull(); // not inherited from round 1
+    // The claims of round 1 cannot be re-decided as if they belonged to round 2.
+    const firstClaim = hub.snapshot().attempts.find((a) => a.round_id === first.id)!;
+    expect(hub.command('room305', 'VERIFY_ATTEMPT', { attempt_id: firstClaim.id, decision: 'INVALID' }).code).toBe('INVALID_STATE');
   });
 
-  it('H5. hiding layout is owned by one operator and recorded per team (Scenario C)', () => {
+  it('H5. the hiding layout belongs to one floor-3 operator and is recorded per team', () => {
     const hub = new TestHub();
-    expect(hub.command('room305', 'SET_LAYOUT', { layout: 'B' }).code).toBe('PERMISSION_DENIED');
-    expect(hub.command('corridor', 'SET_LAYOUT', { layout: 'Z' }).code).toBe('INVALID_STATE');
-    expect(hub.command('corridor', 'SET_LAYOUT', { layout: 'B' }).ok).toBe(true);
+    // CORRIDOR is the second-floor position now: it no longer prepares props.
+    expect(hub.command('corridor', 'SET_LAYOUT', { layout: 'B' }).code).toBe('PERMISSION_DENIED');
+    expect(hub.command('lobby', 'SET_LAYOUT', { layout: 'B' }).code).toBe('PERMISSION_DENIED');
+    expect(hub.command('room305', 'SET_LAYOUT', { layout: 'Z' }).code).toBe('INVALID_STATE');
+    expect(hub.command('room305', 'SET_LAYOUT', { layout: 'B' }).ok).toBe(true);
     hub.command('lobby', 'CALL_TEAM');
     expect(hub.snapshot().active_round!.hiding_layout).toBe('B');
-    hub.advance(60 * SEC);
+    hub.command('corridor', 'CONFIRM_FLOOR2');
     hub.command('gate', 'START_GAME');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'GAME_STOP');
-    hub.command('corridor', 'RESET_DONE');
+    // The layout cannot be swapped while a team is on the clock.
+    expect(hub.command('room305', 'SET_LAYOUT', { layout: 'C' }).code).toBe('INVALID_STATE');
+    hub.advance(301 * SEC);
+    hub.command('gate', 'CONFIRM_EXIT');
+    hub.command('room305', 'RESET_DONE');
     const stamped = hub.snapshot().reset_tasks.find((t) => t.task_key === 'hidden_objects')!;
     expect(stamped.layout).toBe('B');
-    // GATE can read what is prepared for the next team
-    const next = hub.command('corridor', 'SET_LAYOUT', { layout: 'C' });
-    expect(next.ok).toBe(true);
+    hub.command('gate', 'RESET_DONE');
+    hub.command('gate', 'GATE_FINALIZE');
+    expect(hub.command('room305', 'SET_LAYOUT', { layout: 'C' }).ok).toBe(true);
     expect(hub.snapshot().event.config.hiding_layout).toBe('C');
     expect(entries(hub).some((l) => l.action === 'SET_LAYOUT' && l.metadata?.to === 'C')).toBe(true);
   });
 
-  it('H6. committed action + lost response reconciles without duplication (G02, Scenario G)', async () => {
+  it('H6. committed action + lost response reconciles without duplication (G02)', async () => {
     const hub = new TestHub();
     const sup = hub.client('supervisor');
     await sup.store.start();
@@ -179,142 +192,134 @@ describe('hardening — disputes, recovery and concurrency', () => {
     // of inventing success or failure.
     const lobby2 = hub.client('lobby');
     await lobby2.store.start();
-    await lobby2.store.act('TEAM_UPSTAIRS');
-    hub.command('gate', 'START_GAME');
+    const corridor2 = hub.client('corridor');
+    await corridor2.store.start();
+    await corridor2.store.act('CONFIRM_FLOOR2');
+    const gate = hub.client('gate');
+    await gate.store.start();
+    await gate.store.act('START_GAME');
     hub.advance(60 * SEC);
-    hub.command('gate', 'GAME_STOP');
-    // close round 1 properly, otherwise a new dispatch is legitimately refused
-    hub.command('corridor', 'RESET_DONE');
-    hub.command('room305', 'RESET_DONE');
-    hub.command('gate', 'GATE_FINALIZE');
+    await gate.store.act('EARLY_EXIT', { reason: 'Don san' });
+    // close the round properly, otherwise a new dispatch is legitimately refused
+    const room305 = hub.client('room305');
+    await room305.store.start();
+    await gate.store.act('RESET_DONE');
+    await room305.store.act('RESET_DONE');
+    await gate.store.act('GATE_FINALIZE');
     await settle();
     const lost = await lobby2.store.act('CALL_TEAM', {}, { dropAllResponses: true });
     expect(lost?.ok).toBe(true);
     expect(lost?.message).toContain('đã xác minh');
     expect(lobby2.store.getSnapshot().verifying).toBeNull();
-    // a second team was created exactly once (round 2), never twice
+    // a second team was created exactly once, never twice
     expect(hub.snapshot().rounds).toHaveLength(2);
     expect(hub.snapshot().rounds[1].team_number).toBe(2);
 
     // (c) a command that really never reached the server is reported as unconfirmed
-    const broken = hub.client('corridor', { failCommands: true });
+    const broken = hub.client('room305', { failCommands: true });
     await broken.store.start();
-    const openTasks = () => hub.snapshot().reset_tasks.filter((t) => t.completed_at !== null).length;
-    const before = openTasks();
-    const failed = await broken.store.act('RESET_DONE');
+    const failed = await broken.store.act('CLAIM_COMPLETE');
     expect(failed?.ok).toBe(false);
     expect(failed?.message).toContain('CHƯA ĐƯỢC GHI NHẬN');
     expect(broken.store.getSnapshot().verifying).toBeNull();
-    // nothing was written: the completion count is untouched and no log row exists
-    expect(openTasks()).toBe(before);
-    expect(entries(hub).filter((l) => l.action === 'RESET_DONE' && l.actor_role === 'CORRIDOR')).toHaveLength(1);
-    // the last round is still the reconciled dispatch from (b): unchanged state
-    expect(hub.snapshot().rounds.at(-1)!.status).toBe('LOBBY_CALL');
+    // nothing was written: no claim row exists for the fresh round
+    expect(hub.attempts(hub.snapshot().rounds[1].id)).toHaveLength(0);
+    expect(hub.snapshot().rounds[1].status).toBe('WAITING_FLOOR2_CONFIRMATION');
   });
 
-  it('H7. concurrent presses cannot create two active teams or double-timestamp (G04, R01, R02)', async () => {
+  it('H7. concurrent presses cannot create two active teams or double-timestamp', async () => {
     const hub = new TestHub();
     const gateways = ['lobby', 'supervisor', 'lobby'].map((id) => hub.gateway(id));
-    const call = (gw: ReturnType<TestHub['gateway']>, actor: string, revision: number, key: string) =>
+    const call = (gw: ReturnType<TestHub['gateway']>, actor: string, role: string, revision: number, key: string) =>
       gw.command({
         action: 'CALL_TEAM',
-        actor: { id: actor, role: actor === 'lobby' ? 'LOBBY' : 'SUPERVISOR', display_name: actor },
+        actor: { id: actor, role: role as never, display_name: actor },
         expected_revision: revision,
         idempotency_key: key,
         meta: {},
       });
     const results = await Promise.all([
-      call(gateways[0], 'lobby', 0, 'race-a'),
-      call(gateways[1], 'supervisor', 0, 'race-b'),
-      call(gateways[2], 'lobby', 0, 'race-c'),
+      call(gateways[0], 'lobby', 'LOBBY', 0, 'race-a'),
+      call(gateways[1], 'supervisor', 'SUPERVISOR', 0, 'race-b'),
+      call(gateways[2], 'lobby', 'LOBBY', 0, 'race-c'),
     ]);
-    const okCount = results.filter((r) => r.ok).length;
-    expect(okCount).toBe(1);
-    expect(results.filter((r) => r.code === 'STALE_REVISION')).toHaveLength(2);
+    // Exactly one reception lands; the other two are refused — one for authority,
+    // one because the state had already moved.
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => r.code === 'PERMISSION_DENIED')).toHaveLength(1);
+    expect(results.filter((r) => r.code === 'STALE_REVISION')).toHaveLength(1);
     expect(hub.snapshot().rounds).toHaveLength(1);
     expect(hub.snapshot().rounds[0].team_number).toBe(1);
 
-    // racing the same logical STOP from two phones: one timestamp, one record
-    hub.advance(60 * SEC);
+    // Racing the same exit from two phones: one timestamp, one record.
+    hub.command('corridor', 'CONFIRM_FLOOR2');
     hub.command('gate', 'START_GAME');
-    hub.advance(60 * SEC);
+    hub.advance(301 * SEC);
     const revision = hub.snapshot().revision;
-    const stops = await Promise.all([
-      call(hub.gateway('gate'), 'gate', revision, 'stop-a'),
+    const exits = await Promise.all([
+      call(hub.gateway('gate'), 'gate', 'GATE', revision, 'exit-a'),
       hub.gateway('gate').command({
-        action: 'GAME_STOP',
+        action: 'CONFIRM_EXIT',
         actor: { id: 'gate', role: 'GATE', display_name: 'gate' },
         expected_revision: revision,
-        idempotency_key: 'stop-b',
+        idempotency_key: 'exit-b',
         meta: {},
       }),
     ]);
-    expect(stops.filter((s) => s.ok).length).toBeGreaterThanOrEqual(1);
+    expect(exits.filter((s) => s.ok).length).toBeGreaterThanOrEqual(1);
     const round = hub.snapshot().rounds.at(-1)!;
-    expect(entries(hub).filter((l) => l.action === 'GAME_STOP')).toHaveLength(1);
-    expect(round.game_stopped_at).not.toBeNull();
+    expect(entries(hub).filter((l) => l.action === 'CONFIRM_EXIT')).toHaveLength(1);
     // the later duplicate could not overwrite the first authoritative instant
-    const stoppedAt = round.game_stopped_at;
-    expect(entries(hub).filter((l) => l.action === 'GAME_STOP')[0].at_ms).toBe(stoppedAt);
+    expect(entries(hub).filter((l) => l.action === 'CONFIRM_EXIT')[0].at_ms).toBe(round.exit_confirmed_at);
+    void exits;
   });
 
-  it('H8. timeouts, alarms and stalled exits are surfaced without auto-stopping (G05, Scenario B)', () => {
+  it('H8. expiry, alarms and a stalled exit are surfaced without auto-stopping', () => {
     const hub = new TestHub();
-    hub.command('lobby', 'CALL_TEAM');
-    hub.advance(60 * SEC);
-    hub.command('gate', 'START_GAME');
-
+    onTheClock(hub);
     const limit = hub.snapshot().event.config.game_limit_ms;
     hub.advance(limit - 1); // immediately before
-    expect(resolveHero(hub.snapshot(), hub.now()).mode).toBe('GAME');
+    expect(resolveCountdown(hub.snapshot(), hub.now()).running).toBe(true);
     hub.advance(1); // exactly at 300 s
     const atLimit = hub.snapshot();
-    expect(resolveHero(atLimit, hub.now()).mode).toBe('GAME_OVERTIME');
-    expect(atLimit.active_round!.game_stopped_at).toBeNull(); // never auto-stopped
-    expect(resolveAlerts(atLimit, hub.now(), false).map((a) => a.id)).toContain('OVERTIME');
-    hub.advance(40 * SEC); // after
-    expect(hub.command('gate', 'GAME_STOP').ok).toBe(true);
-    expect(hub.snapshot().rounds.at(-1)!.official_duration_ms).toBe(limit + 40 * SEC);
-
-    // a stalled RETURNING team warns without touching the clock
-    const hub2 = new TestHub();
-    hub2.command('lobby', 'CALL_TEAM');
-    hub2.advance(60 * SEC);
-    hub2.command('gate', 'START_GAME');
-    hub2.advance(30 * SEC);
-    hub2.command('room305', 'ROOM_REACHED');
-    hub2.command('room305', 'PUZZLE_COMPLETE');
-    hub2.command('room305', 'RETURN_START');
-    expect(resolveAlerts(hub2.snapshot(), hub2.now(), false)).toHaveLength(0);
-    hub2.advance(90 * SEC);
-    const alert = resolveAlerts(hub2.snapshot(), hub2.now(), false).find((a) => a.id === 'STALL');
-    expect(alert?.text).toContain('GATE chưa chốt giờ');
-    expect(hub2.snapshot().active_round!.game_stopped_at).toBeNull();
+    expect(resolveCountdown(atLimit, hub.now()).expired).toBe(true);
+    expect(resolveCountdown(atLimit, hub.now()).remainingMs).toBe(0);
+    expect(flowStatus(atLimit.active_round!)).toBe('RUNNING'); // nothing was written
+    expect(leaderboard(atLimit)).toHaveLength(0);
+    hub.advance(40 * SEC);
+    expect(resolveCountdown(hub.snapshot(), hub.now()).expired).toBe(true);
+    expect(hub.snapshot().active_round!.exit_confirmed_at).toBeNull();
+    hub.advance(30 * SEC); // past the non-intrusive stall warning
+    expect(resolveAlerts(hub.snapshot(), hub.now(), false).map((a) => a.id)).toContain('STALL');
+    // The stored row keeps no result until someone writes one; the derived result is
+    // already unambiguous, which is exactly why no expiry task is needed.
+    expect(resultOf(hub.snapshot().active_round!, [], limit, hub.now())).toBe('TIME_UP');
+    expect(hub.snapshot().active_round!.official_duration_ms).toBeNull();
   });
 
-  it('H9. first-dispatch history survives later actions without imposing a deadline (P0-07)', () => {
+  it('H9. the first reception survives later actions and imposes no deadline', () => {
     const hub = new TestHub();
     const startedAt = hub.now();
-    for (let i = 0; i < 3; i++) playRound(hub, { prepMs: 50 * SEC, gameMs: 100 * SEC, resetMs: 30 * SEC });
+    for (let i = 0; i < 3; i++) playRound(hub, { prepMs: 50 * SEC, claimMs: 100 * SEC, resetMs: 30 * SEC });
     hub.advance(4 * MIN);
-    hub.command('supervisor', 'CONFIGURE', { prep_allowance_ms: 120_000, hidden_object_owner: 'GATE' });
-    hub.command('corridor', 'SET_LAYOUT', { layout: 'A' });
+    expect(hub.command('supervisor', 'CONFIGURE', { prep_allowance_ms: 120_000, hidden_object_owner: 'GATE' }).ok).toBe(true);
+    hub.command('gate', 'SET_LAYOUT', { layout: 'A' });
     expect(hub.snapshot().event.event_started_at).toBe(startedAt);
-    expect(hub.snapshot().event.config.event_duration_ms).toBe(90 * MIN);
-    // No event cutoff occurs; closing it stays a supervisor decision.
+    // No event cutoff occurs: closing stays a supervisor decision.
     hub.advance(91 * MIN);
     expect(hub.snapshot().event.event_ended_at).toBeNull();
     expect(hub.snapshot().event_status).toBe('LIVE');
     expect(evaluateDispatch(hub.snapshot().event, hub.now()).allowed).toBe(true);
     expect(hub.command('lobby', 'CALL_TEAM').ok).toBe(true);
   });
-  it('H10. a silent realtime channel is detected and repaired by verification (P0-02)', async () => {
+
+  it('H10. a silent realtime channel is detected and repaired by verification', async () => {
     const hub = new TestHub();
     const sup = hub.client('supervisor');
     await sup.store.start();
     await settle();
 
-    // this phone’s broadcast channel is dead, but its reads still work
+    // this phone's broadcast channel is dead, but its reads still work
     const blind = hub.client('lobby', { silentStream: true });
     await blind.store.start();
     expect(blind.store.getSnapshot().status).toBe('CONNECTED');
@@ -331,10 +336,8 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(blind.store.getSnapshot().status).toBe('CONNECTED');
   });
 
-  it('H11. an unreadable server degrades the state and blocks presses (P0-02, R08)', async () => {
+  it('H11. an unreadable server degrades the state and blocks presses', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
-    await sup.store.start();
     const dead = hub.client('lobby', { failSnapshot: true });
     await dead.store.start();
     expect(dead.store.getSnapshot().snapshot).toBeNull();
@@ -351,7 +354,7 @@ describe('hardening — disputes, recovery and concurrency', () => {
     stale.store.checkFreshness();
     expect(stale.store.getSnapshot().status).toBe('DEGRADED');
     // pressing while degraded is allowed (reads still work) and stays honest
-    expect(await stale.store.act('TEAM_UPSTAIRS')).not.toBeNull();
+    expect(await stale.store.act('CALL_TEAM')).not.toBeNull();
     stale.store.stop();
 
     // an unrecoverable read leaves the phone unable to authorise any action
@@ -361,15 +364,14 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(offline.store.getSnapshot().snapshot).toBeNull();
   });
 
-  it('H12. every official press carries press diagnostics, never browser scores (P0-01)', async () => {
+  it('H12. every official press carries press diagnostics, never browser scores', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
-    await sup.store.start();
     const lobby = hub.client('lobby');
-    await lobby.store.start();
-    await lobby.store.act('CALL_TEAM');
+    const corridor = hub.client('corridor');
     const gate = hub.client('gate');
-    await gate.store.start();
+    await Promise.all([lobby.store.start(), corridor.store.start(), gate.store.start()]);
+    await lobby.store.act('CALL_TEAM');
+    await corridor.store.act('CONFIRM_FLOOR2');
     hub.advance(30 * SEC);
     await gate.store.act('START_GAME');
     const round = hub.snapshot().active_round!;
@@ -378,9 +380,11 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(Math.abs((round.start_press_ms ?? 0) - round.game_started_at!)).toBeLessThan(50);
     expect(round.start_transport_ms).toBeLessThan(50);
     expect(round.needs_review).toBe(false);
+    // the deadline is the server's, not the phone's
+    expect(round.deadline_at).toBe(round.game_started_at! + 300 * SEC);
   });
 
-  it('H13. an idempotent replay of a committed press never re-timestamps (R01)', async () => {
+  it('H13. an idempotent replay of a committed press never re-timestamps (R01)', () => {
     const hub = new TestHub();
     const key = 'same-tap';
     const first = hub.command('lobby', 'CALL_TEAM', {}, undefined, key);
@@ -392,8 +396,18 @@ describe('hardening — disputes, recovery and concurrency', () => {
     expect(hub.snapshot().rounds).toHaveLength(1);
     expect(hub.snapshot().rounds[0].called_at).toBe(at);
   });
-});
 
-async function settle(times = 8) {
-  for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0));
-}
+  it('H14. a viewer can never author anything, even with a valid-looking request', async () => {
+    const hub = new TestHub();
+    const viewer = hub.client('observer');
+    await viewer.store.start();
+    await settle();
+    for (const action of ['CALL_TEAM', 'CONFIRM_FLOOR2', 'START_GAME', 'CLAIM_COMPLETE', 'VERIFY_ATTEMPT', 'CONFIRM_EXIT', 'EARLY_EXIT', 'GATE_FINALIZE'] as const) {
+      const res = await viewer.store.act(action);
+      expect(res?.ok, action).toBe(false);
+      expect(res?.code === 'READ_ONLY' || res?.code === 'PERMISSION_DENIED', `${action}:${res?.code}`).toBe(true);
+    }
+    expect(hub.snapshot().rounds).toHaveLength(0);
+    viewer.store.stop();
+  });
+});

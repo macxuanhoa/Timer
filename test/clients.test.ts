@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OPERATORS, SEC, TestHub } from './helpers/harness';
-import { resolveHero, resolvePrimary, activeRound } from '../src/client/selectors';
+import { activeRound, isLockedPhase, phaseOf, resolveCountdown, resolvePrimary } from '../src/client/selectors';
 import { LiveStore } from '../src/client/liveStore';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -8,20 +8,28 @@ async function settle(times = 8) {
   for (let i = 0; i < times; i++) await flush();
 }
 
-describe('PASS 2 — five synchronized operator clients', () => {
-  it('14. all five devices converge to the same revision', async () => {
+/**
+ * The four operator phones plus the retained admin and an open viewer, all reading
+ * one authoritative state. Convergence is asserted on revisions and phases, never on
+ * a rendered string, so a display change can never hide a synchronisation fault.
+ */
+describe('PASS 2 — synchronized clients on one authoritative state', () => {
+  it('14. every device converges to the same revision', async () => {
     const hub = new TestHub();
     const clients = OPERATORS.map((o) => hub.client(o.id));
     await Promise.all(clients.map((c) => c.store.start()));
 
-    for (const expected of [1, 2, 3]) {
-      // each step is pressed by exactly one phone
-      if (expected === 1) await clients[0].store.act('CALL_TEAM', { team_name: 'Team A' });
-      if (expected === 2) await clients[1].store.act('START_GAME');
-      if (expected === 3) {
+    const steps: [number, () => Promise<unknown>][] = [
+      [1, () => clients[0].store.act('CALL_TEAM', { team_name: 'Team A' })],
+      [2, () => clients[1].store.act('CONFIRM_FLOOR2')],
+      [3, () => clients[2].store.act('START_GAME')],
+      [4, async () => {
         hub.advance(40 * SEC);
-        await clients[3].store.act('ROOM_REACHED');
-      }
+        return clients[3].store.act('CLAIM_COMPLETE');
+      }],
+    ];
+    for (const [expected, press] of steps) {
+      await press(); // each step is pressed by exactly one phone
       await settle();
       const revisions = clients.map((c) => c.store.getSnapshot().revision);
       expect(new Set(revisions).size, `revs ${revisions.join(',')}`).toBe(1);
@@ -30,10 +38,11 @@ describe('PASS 2 — five synchronized operator clients', () => {
       expect(phases.size).toBe(1);
     }
 
-    // the same authoritative state is visible on every phone
     const states = clients.map((c) => c.store.getSnapshot().snapshot!);
     expect(states.every((s) => s.active_round?.id === states[0].active_round?.id)).toBe(true);
     expect(states.every((s) => s.rounds.length === 1)).toBe(true);
+    // One claim, visible identically on every phone, including the viewer's copy.
+    expect(states.every((s) => s.active_round?.status === 'RUNNING')).toBe(true);
     clients.forEach((c) => c.store.stop());
   });
 
@@ -71,47 +80,56 @@ describe('PASS 2 — five synchronized operator clients', () => {
       return resolvePrimary(role, snap, store.serverNow());
     };
 
+    // Nothing has been received yet: only OPERATOR 01 has a button.
     expect(label('SUPERVISOR').action).toBe(null);
-    expect(label('LOBBY').action).toBe('CALL_TEAM'); // LOBBY calls the first team
+    expect(label('OBSERVER').action).toBe(null);
+    expect(label('LOBBY').action).toBe('CALL_TEAM');
     expect(label('GATE').action).toBe(null);
-    expect(label('GATE').label).toContain('CHỜ LOBBY');
+    expect(label('CORRIDOR').label).toContain('ĐANG CHỜ TIẾP NHẬN');
 
     await stores.get('LOBBY')!.act('CALL_TEAM');
     await settle();
-    expect(label('GATE').action).toBe('START_GAME');
-    // LOBBY owns the first leg of the walk and confirms the team reached the door.
-    expect(label('LOBBY').action).toBe('TEAM_UPSTAIRS');
+    // 01 is done for this team; 02 must confirm and NPC 1 may bypass the floor.
+    expect(label('CORRIDOR').action).toBe('CONFIRM_FLOOR2');
+    expect(label('GATE').action).toBe('FLOOR2_BYPASS');
+    expect(label('GATE').reasonPrompt).toBeTruthy();
+    expect(label('LOBBY').action).toBe(null);
     expect(label('ROOM305').action).toBe(null);
 
-    await stores.get('LOBBY')!.act('TEAM_UPSTAIRS');
+    await stores.get('CORRIDOR')!.act('CONFIRM_FLOOR2');
     await settle();
-    expect(label('LOBBY').action).toBe(null); // nothing left to press while GATE holds the clock
+    // Pre-start: the whole room reads the same alert, only NPC 1 can start.
     expect(label('GATE').action).toBe('START_GAME');
+    expect(label('LOBBY').label).toBe('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    expect(label('CORRIDOR').label).toBe('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    expect(label('ROOM305').action).toBe(null);
 
     await stores.get('GATE')!.act('START_GAME');
     await settle();
-    expect(label('CORRIDOR').action).toBe('HALLWAY_PROGRESS');
-    expect(label('ROOM305').action).toBe('ROOM_REACHED');
-    expect(label('GATE').action).toBe('GAME_STOP');
+    expect(label('ROOM305').action).toBe('CLAIM_COMPLETE');
+    expect(label('GATE').action).toBe(null); // the emergency path is secondary, not primary
+    expect(label('LOBBY').action).toBe(null);
+    expect(label('CORRIDOR').action).toBe(null);
 
-    hub.advance(30 * SEC);
-    await stores.get('ROOM305')!.act('ROOM_REACHED');
+    await stores.get('ROOM305')!.act('CLAIM_COMPLETE');
     await settle();
-    expect(label('ROOM305').action).toBe('PUZZLE_COMPLETE');
-    await stores.get('ROOM305')!.act('PUZZLE_COMPLETE');
-    await settle();
-    expect(label('ROOM305').action).toBe('RETURN_START');
-    expect(label('GATE').action).toBe('GAME_STOP');
+    const claims = stores.get('ROOM305')!.getSnapshot().snapshot!.attempts;
+    expect(claims).toHaveLength(1);
 
     hub.advance(20 * SEC);
-    await stores.get('GATE')!.act('GAME_STOP');
+    await stores.get('ROOM305')!.act('VERIFY_ATTEMPT', { attempt_id: claims[0].id, decision: 'VALID' });
     await settle();
-    expect(label('CORRIDOR').action).toBe('RESET_DONE');
-    expect(label('ROOM305').action).toBe('RESET_DONE');
-    expect(label('GATE').action).toBe(null); // waiting for the NPCs it does not own
-    expect(label('LOBBY').action).toBe(null);
+    expect(label('GATE').action).toBe('CONFIRM_EXIT');
+    expect(label('ROOM305').action).toBe(null);
 
-    await stores.get('CORRIDOR')!.act('RESET_DONE');
+    await stores.get('GATE')!.act('CONFIRM_EXIT');
+    await settle();
+    expect(label('GATE').action).toBe('RESET_DONE');
+    expect(label('ROOM305').action).toBe('RESET_DONE');
+    expect(label('LOBBY').action).toBe(null);
+    expect(label('CORRIDOR').action).toBe(null);
+
+    await stores.get('GATE')!.act('RESET_DONE');
     await stores.get('ROOM305')!.act('RESET_DONE');
     await settle();
     expect(label('GATE').action).toBe('GATE_FINALIZE');
@@ -122,58 +140,59 @@ describe('PASS 2 — five synchronized operator clients', () => {
     stores.forEach((s) => s.stop());
   });
 
-  it('15. a reconnecting phone restores event time, game time and state', async () => {
+  it('15. a reconnecting phone restores the session, the deadline and the state', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
-    await sup.store.start();
-    await settle();
-    const gate = hub.client('gate');
     const lobby = hub.client('lobby');
-    await gate.store.start();
-    await lobby.store.start();
+    const corridor = hub.client('corridor');
+    const gate = hub.client('gate');
+    await Promise.all([lobby.store.start(), corridor.store.start(), gate.store.start()]);
 
     await lobby.store.act('CALL_TEAM');
     await settle();
     hub.advance(50 * SEC);
+    await corridor.store.act('CONFIRM_FLOOR2');
     await gate.store.act('START_GAME');
     await settle();
 
-    // GATE loses the network: it stops receiving hints
+    // GATE loses the network entirely: it stops receiving hints.
     gate.store.stop();
     hub.advance(70 * SEC);
-    const supervisor = hub.client('supervisor');
-    await supervisor.store.start();
-    await supervisor.store.act('ROOM_REACHED');
+    const room = hub.client('room305');
+    await room.store.start();
+    await room.store.act('CLAIM_COMPLETE');
     await settle();
-    supervisor.store.stop();
+    room.store.stop();
 
-    // reopening the app must recover from the server, not from local memory
+    // Reopening the app recovers from the server, not from local memory.
     const gate2 = hub.client('gate');
     await gate2.store.start();
     const snap = gate2.store.getSnapshot().snapshot!;
     expect(snap.phase).toBe('RUNNING');
-    expect(activeRound(snap)?.status).toBe('ROOM_REACHED');
+    expect(activeRound(snap)?.status).toBe('RUNNING');
     expect(snap.event.event_started_at).toBe(hub.snapshot().event.event_started_at);
     expect(Math.abs(gate2.store.serverNow() - hub.now())).toBeLessThan(50);
-    const hero = resolveHero(snap, gate2.store.serverNow());
-    expect(hero.mode).toBe('GAME');
-    // 5:00 limit minus the 70 s already played = 230 s still on the official clock
-    expect(Math.abs((hero.valueMs ?? 0) - 230 * SEC)).toBeLessThan(5 * SEC);
+    const clock = resolveCountdown(snap, gate2.store.serverNow());
+    expect(isLockedPhase(snap.phase)).toBe(true);
+    // 5:00 minus the 70 s already played = 230 s still on the official clock.
+    expect(Math.abs(clock.remainingMs - 230 * SEC)).toBeLessThan(5 * SEC);
+    // The claim the other phone recorded is part of the same authoritative state.
+    expect(snap.attempts).toHaveLength(1);
     gate2.store.stop();
   });
 
   it('stale phones are reconciled instead of being allowed to force a transition', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
     const lobby = hub.client('lobby');
+    const corridor = hub.client('corridor');
     const room = hub.client('room305');
-    await sup.store.start();
     await lobby.store.start();
+    await corridor.store.start();
     await room.store.start();
     await lobby.store.act('CALL_TEAM');
+    await corridor.store.act('CONFIRM_FLOOR2');
     await settle();
 
-    // ROOM305 holds a stale view (its subscription was dropped)
+    // ROOM305 holds a stale view: its subscription was dropped before NPC 1 started.
     room.store.stop();
     const fresh = hub.client('gate');
     await fresh.store.start();
@@ -183,14 +202,13 @@ describe('PASS 2 — five synchronized operator clients', () => {
     const before = hub.snapshot().revision;
     const staleView = room.store.getSnapshot().snapshot!;
     expect(staleView.revision).toBeLessThan(before);
-    const res = await room.store.act('ROOM_REACHED');
+    const res = await room.store.act('CLAIM_COMPLETE');
     expect(res?.code).toBe('STALE_REVISION');
     await settle();
     expect(room.store.getSnapshot().revision).toBe(hub.snapshot().revision);
     expect(room.store.getSnapshot().notice).toContain('đồng bộ lại');
-    // ...and now the same action succeeds against the fresh revision
-    const ok = await room.store.act('ROOM_REACHED');
-    expect(ok?.ok).toBe(true);
+    // …and now the same press succeeds against the fresh revision.
+    expect((await room.store.act('CLAIM_COMPLETE'))?.ok).toBe(true);
   });
 
   it('16. opening “Xem thêm” never pauses or mutates the live dashboard', async () => {
@@ -205,16 +223,17 @@ describe('PASS 2 — five synchronized operator clients', () => {
     await lobby.act('CALL_TEAM');
     await settle();
     hub.advance(30 * SEC);
-    await clients[1].store.act('START_GAME');
+    await clients[1].store.act('CONFIRM_FLOOR2');
+    await clients[2].store.act('START_GAME');
     await settle();
-    expect(hub.snapshot().revision).toBe(before + 2);
-    // every other phone kept advancing while the sheet would be open
-    expect(clients[3].store.getSnapshot().revision).toBe(before + 2);
-    expect(clients[3].store.getSnapshot().snapshot?.phase).toBe('RUNNING');
-    // reading the sheet data does not write anything
-    const hero = resolveHero(clients[3].store.getSnapshot().snapshot!, clients[3].store.serverNow());
-    expect(hero.mode).toBe('GAME');
-    expect(hub.snapshot().revision).toBe(before + 2);
+    expect(hub.snapshot().revision).toBe(before + 3);
+    // every other phone kept advancing while the sheet would have been open
+    expect(clients[3].store.getSnapshot().revision).toBe(before + 3);
+    expect(phaseOf(clients[3].store.getSnapshot().snapshot!, clients[3].store.serverNow())).toBe('RUNNING');
+    const clock = resolveCountdown(clients[3].store.getSnapshot().snapshot!, clients[3].store.serverNow());
+    expect(clock.running).toBe(true);
+    expect(hub.snapshot().revision).toBe(before + 3);
+    clients.forEach((c) => c.store.stop());
   });
 
   it('the client clock estimate tracks the authoritative clock', async () => {
@@ -231,8 +250,11 @@ describe('PASS 2 — five synchronized operator clients', () => {
   it('a press instant reaches the wire as a whole millisecond', async () => {
     const hub = new TestHub();
     const lobby = hub.client('lobby');
+    const corridor = hub.client('corridor');
     await lobby.store.start();
+    await corridor.store.start();
     await lobby.store.act('CALL_TEAM');
+    await corridor.store.act('CONFIRM_FLOOR2');
     await settle();
 
     const inner = hub.gateway('gate');
@@ -262,13 +284,12 @@ describe('PASS 2 — five synchronized operator clients', () => {
     expect(hub.snapshot().active_round?.start_press_ms).toBe(sent[0]);
     store.stop();
     lobby.store.stop();
+    corridor.store.stop();
   });
 
   it('double taps from one phone produce one server action', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
     const lobby = hub.client('lobby');
-    await sup.store.start();
     await lobby.store.start();
     await settle();
     const a = lobby.store.act('CALL_TEAM');
@@ -280,13 +301,32 @@ describe('PASS 2 — five synchronized operator clients', () => {
     lobby.store.stop();
   });
 
+  it('two taps on the claim button record one attempt, not two', async () => {
+    const hub = new TestHub();
+    const lobby = hub.client('lobby');
+    const corridor = hub.client('corridor');
+    const gate = hub.client('gate');
+    const room = hub.client('room305');
+    await Promise.all([lobby, corridor, gate, room].map((c) => c.store.start()));
+    await lobby.store.act('CALL_TEAM');
+    await corridor.store.act('CONFIRM_FLOOR2');
+    await gate.store.act('START_GAME');
+    await settle();
+
+    await Promise.all([room.store.act('CLAIM_COMPLETE'), room.store.act('CLAIM_COMPLETE')]);
+    await settle();
+    expect(hub.attempts()).toHaveLength(1);
+    [lobby, corridor, gate, room].forEach((c) => c.store.stop());
+  });
+
   it('network failure never marks a state as done', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
-    await sup.store.start();
     const lobby = hub.client('lobby');
+    const corridor = hub.client('corridor');
     await lobby.store.start();
+    await corridor.store.start();
     await lobby.store.act('CALL_TEAM');
+    await corridor.store.act('CONFIRM_FLOOR2');
     await settle();
 
     const broken = hub.client('gate', { failCommands: true });
@@ -310,13 +350,30 @@ describe('PASS 2 — five synchronized operator clients', () => {
 
   it('an unreadable server is reported as OFFLINE instead of showing a stale action', async () => {
     const hub = new TestHub();
-    const sup = hub.client('supervisor');
-    await sup.store.start();
     const lobby = hub.client('lobby', { failSnapshot: true });
     await lobby.store.start();
     expect(lobby.store.getSnapshot().status).toBe('OFFLINE');
     expect(lobby.store.getSnapshot().snapshot).toBeNull();
     expect(await lobby.store.act('CALL_TEAM')).toBeNull();
     expect(hub.snapshot().rounds).toHaveLength(0);
+  });
+
+  it('a silent realtime channel still converges through the periodic check', async () => {
+    const hub = new TestHub();
+    const lobby = hub.client('lobby');
+    // No broadcast ever arrives, but the state stays readable.
+    const watcher = hub.client('room305', { silentStream: true });
+    await lobby.store.start();
+    await watcher.store.start();
+    await settle();
+    await lobby.store.act('CALL_TEAM');
+    await settle();
+    // Without hints the watcher must recover by verifying on its own cadence.
+    expect(watcher.store.getSnapshot().revision).toBeLessThan(hub.snapshot().revision);
+    await watcher.store.verifyNow();
+    expect(watcher.store.getSnapshot().revision).toBe(hub.snapshot().revision);
+    expect(watcher.store.getSnapshot().snapshot?.phase).toBe('WAITING_FLOOR2_CONFIRMATION');
+    lobby.store.stop();
+    watcher.store.stop();
   });
 });

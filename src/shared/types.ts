@@ -1,6 +1,6 @@
-import type { HiddenObjectOwner, HidingLayout, ResetTaskKey, Role } from './constants.ts';
+import type { AbortKind, HiddenObjectOwner, HidingLayout, ResetBlockReason, ResetTaskKey, Role } from './constants.ts';
 
-export type { HidingLayout };
+export type { HidingLayout, AbortKind, ResetBlockReason };
 
 /* ------------------------------------------------------------------ clock */
 
@@ -104,7 +104,21 @@ export interface EventSession {
 
 /* ------------------------------------------------------------------ round */
 
-export type RoundStatus =
+/**
+ * The one authoritative lifecycle. A round is created when OPERATOR_01 receives
+ * the team and terminal only at `CLOSED`, so exactly one of these can be active.
+ */
+export type FlowStatus =
+  | 'WAITING_FLOOR2_CONFIRMATION'
+  | 'READY_AT_FLOOR3'
+  | 'RUNNING'
+  | 'TIME_EXPIRED_PENDING_VALIDATION'
+  | 'WAITING_FOR_EXIT'
+  | 'EXIT_CONFIRMED'
+  | 'CLOSED';
+
+/** Statuses written by earlier releases; readable, never reachable again. */
+export type LegacyRoundStatus =
   | 'LOBBY_CALL'
   | 'TEAM_PREPARING'
   | 'GAME_STARTED'
@@ -118,7 +132,16 @@ export type RoundStatus =
   | 'GATE_CLEARED'
   | 'ABORTED';
 
+export type RoundStatus = FlowStatus | LegacyRoundStatus;
+
+/** Retained vocabulary for historical rows. New rows write `result` only. */
 export type Outcome = 'IN_PROGRESS' | 'WON' | 'TIMEOUT' | 'NO_PUZZLE' | 'ABORTED';
+
+/**
+ * Gameplay outcome, kept separate from the lifecycle so a phase transition can
+ * never lose it: `PENDING_VALIDATION` is provisional, not an irreversible failure.
+ */
+export type RoundResult = 'IN_PROGRESS' | 'PENDING_VALIDATION' | 'WON' | 'TIME_UP' | 'ABORTED';
 
 export interface Round {
   id: string;
@@ -127,30 +150,79 @@ export interface Round {
   team_number: number;
   team_name: string | null;
   status: RoundStatus;
-  /** Highest lifecycle stage reached (1..6) — used for the progress line. */
+  /** Highest lifecycle stage reached — used for the progress line. */
   stage: number;
+  /** OPERATOR_01's reception instant: the team exists in the venue from here. */
   called_at: number;
-  game_started_at: number | null;
+  received_by_role: Role | null;
+  received_by: string | null;
+  /** OPERATOR_02's physical arrival confirmation at floor 2. */
+  floor2_confirmed_at: number | null;
+  floor2_confirmed_by_role: Role | null;
+  floor2_confirmed_by: string | null;
   /**
-   * Start of the currently running segment of the 5-minute clock, or null while
-   * GATE has paused it. Only the per-round window is timed, and every pause or
-   * reset keeps its own accumulated time.
+   * A bypass is never a fabricated confirmation: these fields stay distinct from
+   * `floor2_confirmed_*` so the audit can tell the two situations apart.
    */
+  floor2_bypassed_at: number | null;
+  floor2_bypassed_by_role: Role | null;
+  floor2_bypassed_by: string | null;
+  floor2_bypass_reason: string | null;
+  game_started_at: number | null;
+  /** NPC1 who pressed START. */
+  started_by_role: Role | null;
+  started_by: string | null;
+  /**
+   * The duration this round was actually started with, snapshotted from the
+   * configuration at START (V3.1 §7.5). `null` on rows written before the duration
+   * became configurable: those rounds keep their own stored `deadline_at`, and the
+   * fallback for a round with neither is the current configuration default.
+   */
+  round_duration_ms: number | null;
+  /**
+   * The authoritative end of the round's window. It is stored, not recomputed, so a
+   * refresh, a sleep or a reconnect can never extend or restart the countdown.
+   */
+  deadline_at: number | null;
+  /** @deprecated flexible-window remnant; new rounds leave these at their start values. */
   game_anchor_ms: number | null;
-  /** Playing time already banked before the current segment; 0 after a game reset. */
+  /** @deprecated playing time banked before a pause; the countdown no longer pauses. */
   game_elapsed_ms: number;
   game_stopped_at: number | null;
-  /** How many times GATE restarted this 5-minute window (audited, prize-relevant). */
+  /** @deprecated how many times the 5-minute window was restarted (history). */
   game_reset_count: number;
-  /** How many times GATE paused this 5-minute window. */
+  /** @deprecated how many times the 5-minute window was paused (history). */
   game_pause_count: number;
-  /** Official score, persisted once at GATE STOP. Never recomputed later. */
+  /**
+   * Official score: the validated claim's `claimed_at - game_started_at`. Never the
+   * verification instant and never the exit instant.
+   */
   official_duration_ms: number | null;
+  /** The attempt whose time became official. */
+  validated_attempt_id: string | null;
+  /** @deprecated legacy single-confirmation stamp; mirrors the validated claim time. */
   puzzle_completed_at: number | null;
+  /** NPC1's confirmation that the team physically left floor 3. */
   exit_confirmed_at: number | null;
+  exit_by_role: Role | null;
+  exit_by: string | null;
+  /** Reason recorded for an early or emergency departure. */
+  exit_reason: string | null;
   gate_finalized_at: number | null;
+  finalized_by_role: Role | null;
   system_ready_at: number | null;
   aborted_at: number | null;
+  /**
+   * Why the round was cancelled. `misconduct` disqualifies the result and locks the
+   * verification path; `technical` / `safety` leave a pending in-time claim still
+   * verifiable (V3.1 §4.4). `null` on rounds that were never cancelled, and on
+   * history written before the distinction existed.
+   */
+  abort_kind: AbortKind | null;
+  /** Reason recorded for the cancellation, kept apart from the exit reason. */
+  abort_reason: string | null;
+  result: RoundResult;
+  /** @deprecated legacy outcome column; kept for rows written before this release. */
   outcome: Outcome;
   /** True when admission happened after the cutoff with an audited override. */
   admission_override: boolean;
@@ -174,6 +246,40 @@ export interface Round {
   created_revision: number;
 }
 
+/**
+ * One completion claim by the players, recorded by NPC2.
+ *
+ * The claim time and the verification decision are deliberately two separate
+ * facts: only the claim time can become the official score.
+ */
+export type AttemptStatus = 'PENDING' | 'VALID' | 'INVALID' | 'LATE';
+
+export interface CompletionAttempt {
+  id: string;
+  round_id: string;
+  /** 1-based within the round, for “Lần 1 — 03:42.35 — Chờ kiểm tra”. */
+  seq: number;
+  /** Server instant of the claim. Never trusted from the client. */
+  claimed_at: number;
+  /** claimed_at - game_started_at, in ms. */
+  elapsed_ms: number;
+  /** Time left when the claim was recorded; negative once past the deadline. */
+  remaining_ms: number;
+  /** claimed_at < deadline_at: the only boundary that can produce a win. */
+  in_time: boolean;
+  status: AttemptStatus;
+  claimed_by_role: Role;
+  claimed_by: string;
+  verified_by_role: Role | null;
+  verified_by: string | null;
+  verified_at: number | null;
+  decision_note: string | null;
+  /** Press diagnostics; never scored. */
+  claim_press_ms: number | null;
+  claim_transport_ms: number | null;
+  revision: number;
+}
+
 export interface ResetTask {
   round_id: string;
   task_key: ResetTaskKey;
@@ -192,21 +298,20 @@ export interface ResetTask {
 
 export type ActionType =
   | 'CONFIGURE'
+  /* ---------------------------------------------------------------- live flow */
   | 'CALL_TEAM'
-  | 'TEAM_UPSTAIRS'
+  | 'CONFIRM_FLOOR2'
+  | 'FLOOR2_BYPASS'
   | 'START_GAME'
-  | 'GAME_PAUSE'
-  | 'GAME_RESUME'
-  | 'GAME_RESET'
-  | 'HALLWAY_PROGRESS'
-  | 'ROOM_REACHED'
-  | 'PUZZLE_COMPLETE'
-  | 'RETURN_START'
-  | 'GAME_STOP'
+  | 'CLAIM_COMPLETE'
+  | 'VERIFY_ATTEMPT'
+  | 'CONFIRM_EXIT'
+  | 'EARLY_EXIT'
   | 'RESET_DONE'
   | 'GATE_FINALIZE'
   | 'SET_LAYOUT'
   | 'SET_TEAM_NAME'
+  /* ------------------------------------------------------------- admin & event */
   | 'REOPEN_RESET'
   | 'REVIEW_RESOLVE'
   | 'END_EVENT'
@@ -215,7 +320,18 @@ export type ActionType =
   | 'OVERRIDE_ADMIT'
   | 'OVERTIME_STARTED'
   | 'EVENT_CLOSED'
-  | 'SESSION_RESTORE';
+  | 'SESSION_RESTORE'
+  /* --------------------------------------------- retired, kept so history parses */
+  | 'TEAM_UPSTAIRS'
+  | 'GAME_PAUSE'
+  | 'GAME_RESUME'
+  | 'GAME_RESET'
+  | 'HALLWAY_PROGRESS'
+  | 'ROOM_REACHED'
+  | 'PUZZLE_COMPLETE'
+  | 'RETURN_START'
+  | 'GAME_STOP'
+  | 'START_EVENT';
 
 export interface LogEntry {
   seq: number;
@@ -235,15 +351,13 @@ export interface LogEntry {
 
 /* ---------------------------------------------------------------- snapshot */
 
-export type SystemPhase =
-  | 'PRE_EVENT'
-  | 'READY'
-  | 'PREPARING'
-  | 'RUNNING'
-  | 'EXITED'
-  | 'RESETTING'
-  | 'ENDED'
-  | 'GAME_OVERTIME';
+/**
+ * The single derived phase every screen reads. `WAITING_FOR_TEAM` and `ENDED` are
+ * event-level positions (no round in play); everything else is a `FlowStatus`.
+ * The retired 'PREPARING' | 'RUNNING' | 'EXITED' | 'RESETTING' | 'GAME_OVERTIME'
+ * values are gone: one phase means one screen state, everywhere.
+ */
+export type SystemPhase = 'PRE_EVENT' | 'WAITING_FOR_TEAM' | 'ENDED' | FlowStatus;
 
 export interface OperatorState {
   role: Role;
@@ -262,8 +376,15 @@ export interface Snapshot {
   active_round: Round | null;
   rounds: Round[];
   reset_tasks: ResetTask[];
+  /** Every completion claim of this event, grouped by round in the UI. */
+  attempts: CompletionAttempt[];
   operators: OperatorState[];
   log: LogEntry[];
+  /**
+   * True when this snapshot was produced for an OBSERVER: operational detail is
+   * redacted and no action can be taken with it.
+   */
+  redacted?: boolean;
 }
 
 /* ------------------------------------------------------------- station board */
@@ -280,20 +401,48 @@ export interface StationSlot {
 }
 
 /**
- * Public five-seat board. It carries station roles and counters only — never an
+ * Public seat board. It carries station roles and counters only — never an
  * operator name or device id, so an unbound phone may read it at the root URL.
+ *
+ * Operator seats and observer seats are counted separately: filling the ten
+ * viewing seats must never turn away an operator, and vice versa.
  */
 export interface StationBoard {
+  /** Board contract version; 2 adds the observer counters. */
+  board_version?: number;
   capacity: number;
   occupied: number;
-  /** All six device slots are full. */
+  /** All operator device slots are full. */
   locked: boolean;
-  /** Total device slots across the five seats (6 since 0008). */
+  /** Total operator device slots across the seats (6 since 0008). */
   device_capacity?: number;
-  /** Devices currently bound (up to device_capacity). */
+  /** Operator devices currently bound (up to device_capacity). */
   devices?: number;
+  /** Concurrency limit for read-only observers. */
+  observer_capacity?: number;
+  /** Observer seats currently held. */
+  observer_devices?: number;
   /** No seat has room left: every new phone will be turned away. */
   full?: boolean;
+  /**
+   * A team is still inside the round's window (from NPC1's BẮT ĐẦU until the team is
+   * confirmed out). The board release is an access action and must never run over a
+   * live floor, so the picker disables it while this is true. Undefined means an
+   * older board that cannot say — treated as not allowed.
+   */
+  game_running?: boolean;
+  /**
+   * Whether the board release may run right now, and the single authoritative reason
+   * it may not. Both the button state and `reset_all_stations` read this same
+   * predicate, so the UI can never offer what the RPC is going to refuse (V3.1 §6.2).
+   */
+  reset_allowed?: boolean;
+  reset_block_reason?: ResetBlockReason | null;
+  /**
+   * True when the four operating positions require a crew code. The board never
+   * carries a code or a hash — only whether codes are in force.
+   */
+  codes_required?: boolean;
   stations: StationSlot[];
 }
 
@@ -337,7 +486,15 @@ export interface RevisionHintResponse {
 
 export interface CommandResult {
   ok: boolean;
-  code: 'OK' | 'STALE_REVISION' | 'PERMISSION_DENIED' | 'INVALID_STATE' | 'BLOCKED' | 'UNKNOWN_ACTION';
+  code:
+    | 'OK'
+    | 'STALE_REVISION'
+    | 'PERMISSION_DENIED'
+    | 'INVALID_STATE'
+    | 'BLOCKED'
+    | 'UNKNOWN_ACTION'
+    /** A viewer has no operational authority at all. */
+    | 'READ_ONLY';
   message: string;
   revision: number;
   snapshot?: Snapshot;

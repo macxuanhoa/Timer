@@ -36,7 +36,8 @@ export class AccessError extends Error {
 }
 
 const ACCOUNT_BY_ROLE: Record<Role, string> = {
-  LOBBY: 'lobby', GATE: 'gate', CORRIDOR: 'corridor', ROOM305: 'room305', SUPERVISOR: 'supervisor',
+  LOBBY: 'lobby', CORRIDOR: 'corridor', GATE: 'gate', ROOM305: 'room305', SUPERVISOR: 'supervisor',
+  OBSERVER: 'observer',
 };
 const DEV_PASSCODE = (import.meta.env.VITE_DEV_PASSCODE as string | undefined) ?? '3110';
 export function readStationParam(): Role | null {
@@ -44,9 +45,11 @@ export function readStationParam(): Role | null {
   return role && ROLES.includes(role) ? role : null;
 }
 export async function localStationLogin(station: Role): Promise<StoredSession> {
+  // The observer seat has no passcode server-side; an empty string keeps the
+  // password-free promise honest instead of shipping a shared duty code to viewers.
   const res = await fetch('/api/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ account: ACCOUNT_BY_ROLE[station], passcode: DEV_PASSCODE }),
+    body: JSON.stringify({ account: ACCOUNT_BY_ROLE[station], passcode: station === 'OBSERVER' ? '' : DEV_PASSCODE }),
   });
   if (!res.ok) throw new Error('KHÔNG VÀO ĐƯỢC VỊ TRÍ NÀY');
   const session = await res.json() as StoredSession;

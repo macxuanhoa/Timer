@@ -20,17 +20,18 @@ export const ACCENT_HEX: Record<Accent, string> = {
 /** Station colours: the role pill in the header. */
 export const ROLE_ACCENT: Record<Role, Accent> = {
   LOBBY: 'red',
-  GATE: 'amber',
   CORRIDOR: 'blue',
+  GATE: 'amber',
   ROOM305: 'violet',
   SUPERVISOR: 'slate',
+  OBSERVER: 'green',
 };
 
 /** Area colours: the stepper ring and the status dot under it. */
 export const STOP_ACCENT: Record<JourneyStopDef['key'], Accent> = {
   lobby: 'red',
-  gate: 'red',
-  hall: 'blue',
+  floor2: 'blue',
+  gate: 'amber',
   room: 'violet',
   end: 'slate',
 };

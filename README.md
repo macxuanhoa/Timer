@@ -3,31 +3,74 @@
 One production root URL for all staff: **https://timer-smoky-seven.vercel.app**.
 The existing Vercel project is timer; timer.vercel.app is not assigned to this project.
 
+## One flow, five positions
+
+The night runs as a single authoritative sequence, and every device shows the same
+phase of it. Each step belongs to exactly one position, and no step can be pressed
+twice or out of order:
+
+```text
+01 (sảnh tầng 1) nhận đội & cho lên tầng 2
+ → 02 (tầng 2) xác nhận đội đã đến tầng 2       [hoặc NPC 1 bỏ qua tầng 2 có lý do]
+  → NPC 1 (cửa vào tầng 3) phổ biến luật và BẮT ĐẦU 5:00
+   → 5:00 chạy, mọi máy khoá vào màn hình đồng hồ
+    → NPC 2 (phòng 305) ghi nhận báo hoàn thành, rồi kiểm tra trận đồ
+     → khớp: chốt THÀNH CÔNG theo đúng mốc báo · hết giờ: HẾT GIỜ
+      → NPC 1 xác nhận đội đã rời tầng 3 (mốc hoàn thành không đổi)
+       → nhân viên tầng 3 xác nhận reset, NPC 1 đóng lượt, chờ đội kế tiếp
+```
+
+**The official time of a successful team is the instant its validated completion
+announcement was recorded** (`claimed_at - started_at`) — not the moment NPC2 finished
+checking the arrangement, and not the moment the team walked out. Every announcement is
+kept as its own attempt (Lần 1, Lần 2, …) with its own timestamp and its own decision.
+
+| Identity | Stored id | Position | Authority |
+| --- | --- | --- | --- |
+| OPERATOR 01 | `LOBBY` | Tầng 1 / sảnh | Receive the team, name the team, nothing else |
+| OPERATOR 02 | `CORRIDOR` | Tầng 2 | Confirm physical arrival at floor 2, then read-only |
+| NPC 1 | `GATE` | Cửa vào tầng 3 | Bypass floor 2 (reason), START, confirm exit, early exit |
+| NPC 2 | `ROOM305` | Phòng 305 | Record announcements, verify the arrangement |
+| Quản trị | `SUPERVISOR` | Không trực tại sàn | Disputes, corrections, reopened resets, closure |
+| Người theo dõi | `OBSERVER` | Bất kỳ máy nào | Read-only live view, no password, 10 seats |
+
 ## Staff access
 
 Open the root URL → choose an available station → dashboard → **VỀ HOME SCREAM ROOM**.
-No account registration, email, invitation token or second confirmation for NPC roles.
+No account registration, email, invitation token or second confirmation for the four
+stations or the viewing seat.
 
-| Station | Label | Device capacity |
+| Tile | Label | Device capacity |
 | --- | --- | --- |
-| LOBBY | SẢNH TẦNG 1 | 1 |
-| GATE | NPC 1 / CỬA VÀO | 1 |
-| CORRIDOR | NPC 2 / HÀNH LANG | 1 |
-| ROOM305 | NPC 3 / PHÒNG 305 | 1 |
-| SUPERVISOR | GIÁM SÁT | 2 |
+| 01 · SẢNH TẦNG 1 | OPERATOR 01 | 1 |
+| 02 · TẦNG 2 | OPERATOR 02 | 1 |
+| NPC 1 · CỬA VÀO TẦNG 3 | NPC1 / FLOOR3_GATE | 1 |
+| NPC 2 · PHÒNG 305 | NPC2 / PUZZLE_CHECKER | 1 |
+| XEM TRỰC TIẾP | OBSERVER — no password | 10 concurrent seats |
+
+The retained **QUẢN TRỊ · GIÁM SÁT** entry is deliberately not a tile on the board: it
+opens the same PIN sheet from a quiet management line, so the operator side stays
+authenticated while the audience side stays open. One identity holds one role; switching
+requires releasing first, and the database refuses either direction.
 
 Home reads actual server occupancy. Available stations are green; full stations are grey
-and disabled. SUPERVISOR shows 0/2, 1/2 or 2/2 and requires the administrator PIN once
-when claiming. Unknown, stale or offline occupancy is neutral and disabled. A PostgreSQL
-Realtime subscription refetches the public board on updates; a 3-second poll and foreground/
-online refetch recover missed hints. The server always rechecks capacity at claim time.
+and disabled. The viewer seat shows `n/10` and is claimed with no credential at all.
+Unknown, stale or offline occupancy is neutral and disabled. A PostgreSQL Realtime
+subscription refetches the public board on updates; a 3-second poll and foreground/
+online refetch recover missed hints. The server always rechecks capacity at claim time,
+so two phones can never take the same seat — including the tenth viewing seat.
 
-Under the board, **RESET TẤT CẢ VỊ TRÍ** is the organiser escape hatch for a stuck board:
-after the administrator secret is typed in, PostgreSQL revokes every live binding at once,
-so all six seats return to CÒN TRỐNG and each kicked phone lands back on this picker within
-its next 5-second authority recheck. The sweep touches access only — events, rounds, reset
-tasks, the 90:00 and 5:00 clocks and the audit log keep their values — and a seat freed this
-way is immediately re-claimable. A repeat reset on an empty board is a safe no-op.
+On the board heading line, the **↺ RESET BẢNG VỊ TRÍ** icon is the organiser escape hatch for a
+stuck board: after the administrator secret is typed in, PostgreSQL revokes every live binding at
+once, so all six seats return to CÒN TRỐNG and each kicked phone lands back on this picker within
+its next 5-second authority recheck. It is an **access action only** — it never stops a clock,
+closes a round, deletes a result or marks a physical check, and the freed seats are immediately
+re-claimable. It is refused while a team is inside the 5:00 window: the icon greys out (the board
+publishes `game_running`) and the RPC answers `RESET_GAME_RUNNING`, because cancelling a live
+round is the separate KẾT THÚC SỚM / HỦY LƯỢT action, which keeps its own history.
+The secret field starts masked; the eye button in it switches between readable and
+hidden so a long secret can be checked before committing, and closing the sheet always
+masks it again.
 
 Supabase Anonymous Auth runs in the background on selection and persists across refresh,
 screen lock, network loss and PWA restart. Every boot resolves authority with whoami;
@@ -45,125 +88,183 @@ The historical mint tool refuses operation on the new access model.
 
 ## How the rules are implemented
 
-- **The 90-minute clock is a fixed timeline.** It is anchored by the very first `CHO ĐỘI … LÊN`
-  press from LOBBY — there is no separate “start event” button — and it never restarts, pauses or
-  stops per team. It keeps running through prep, play, resets and idle, and past 90:00 it simply
-  keeps counting **negative** (`-1:23`). Warnings at 15 and 5 minutes; closing the event stays an
-  explicit, reasoned supervisor decision (`ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT`), never a timer side effect.
-- **The 5-minute game clock is the one flexible window**, and it always counts inside that timeline.
-  It starts only on GATE's `BẮT ĐẦU` (walking upstairs and the briefing are excluded), keeps running
-  after `TRẬN ĐỒ HOÀN THÀNH`, and stops only when GATE confirms the last player is out. GATE (or the
-  supervisor) may **tạm dừng** it — the 5:00 freezes and the paused gap is excluded from the score,
-  while the 90:00 keeps running — or **reset 5:00** for a team hit by a fault: the window restarts
-  from 5:00, the discarded time is logged, and the round is flagged `CHỜ XÉT` because a restarted
-  clock is a prize decision. Both presses are authoritative, so every phone sees the same state.
-  Past 300 s the game is *overtime*: alarms plus a controlled-exit state, never an automatic clear.
-- **Two numbers, no more**: the corner of every phone shows the fixed `SỰ KIỆN 90:00` timeline
-  (negative after the deadline) and the hero shows the 5:00 window only while a team is on the
-  clock. Prep, reset and idle are status lines, not extra stopwatches; millisecond detail lives in
-  `Xem thêm` and on the official result.
-- **Admission**: dispatch requires `game limit + preparation allowance` (default 5:00 + 0:90) on the
-  event clock; below that the lobby sees `SẮP KẾT THÚC — KHÔNG NHẬN ĐỘI MỚI`. A supervisor may
-  override only with a typed reason, which is written to the audit log and flagged on the round.
-  Once the event clock reaches zero, admission is refused with no override.
-- **Timing is derived, never typed**: every press writes one immutable server-timestamped log row
-  (`event`, `round`, `team`, `action`, `actor`, `from`/`to` state, revision, idempotency key,
-  metadata). Preparation, game, total/Corridor/Room/GATE reset, inter-team, start-to-start and
-  idle-after-ready durations all come from those timestamps. Countdown frames never write to storage.
-- **Rendering vs scoring**: phones sync an estimated server clock using RTT probes and a monotonic
-  local clock, and re-verify the authoritative revision every 10 s even when realtime is silent.
-  The status reads `TRỰC TIẾP` only while a fresh read is recent, otherwise `ĐANG ĐỒNG BỘ`,
-  `DỮ LIỆU CŨ` or `MẤT KẾT NỐI` — and no action is offered while unreadable. Official scores
-  always come from persisted server-side durations, never from displayed digits.
+- **One countdown, stored as two instants.** NPC1's `BẮT ĐẦU` writes `started_at` and
+  `deadline_at = started_at + 300 s`. Nothing else stores or derives a clock: the 5:00
+  cannot be paused, restarted, edited or advanced by any role, including the admin, and
+  there is no event-level countdown any more. Every device renders the same remaining
+  time from the stored deadline plus its synchronised server-clock estimate, so a
+  refresh, a screen sleep or a minute offline neither restarts nor extends it.
+- **Expiry is derived, never scheduled.** The phase and the result are computed from
+  immutable facts (start, deadline, each announcement's own instant and decision, exit,
+  abort), so a device that reconnects after the deadline, a phone with no stream and the
+  database all agree without any timer task to win a race against NPC2's decision. At the
+  deadline the display stops at `00:00`; it never shows negative digits.
+- **Announcement and decision are separate facts.** `CLAIM_COMPLETE` records a row in
+  `sc.completion_attempts` with the server instant, the elapsed and remaining time, the
+  recorder and `PENDING`, and leaves the countdown running. `VERIFY_ATTEMPT` then judges
+  *that one attempt* (`attempt_id`): `CHƯA ĐÚNG` closes it as `INVALID` and keeps every
+  earlier row; `CHÍNH XÁC` finalises the round atomically with
+  `official_duration_ms = claimed_at - started_at`. An announcement recorded at or after
+  the deadline is stored as `LATE`, is visible for the record, and can never be validated
+  into a win. A round past its deadline with an open in-time announcement reads
+  `HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ`, not as a failure.
+- **Completion and departure are separate events.** NPC1's `XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3`
+  records `exit_confirmed_at` and never touches the score. If an announcement is still
+  open, the team is not held in the room: the exit is recorded and the review stays open,
+  and the round cannot be closed until NPC2 has settled it. `KẾT THÚC SỚM / RỜI KHU VỰC`
+  is the guarded safety path — reason required, second confirmation, result `ABORTED`,
+  and no winning time is ever invented.
+- **The floor-2 bypass is audited as a bypass.** NPC1 may skip the second-floor
+  confirmation when the team is visibly already on floor 3. It writes
+  `floor2_bypassed_at/by/reason` and leaves `floor2_confirmed_at` null, flags the round
+  for review, and a later press from OPERATOR_02 is refused without reverting anything.
+  It cannot be used to skip the reception itself: with no team received there is nothing
+  to bypass onto.
+- **A locked game screen, not an overlay.** While `5:00` runs (or the clock has run out
+  and a milestone awaits verification) every role's phone renders the countdown as the
+  whole screen: navigation, the journey editor, the previous phase's buttons and the
+  ranking are not rendered at all, session data cannot be edited, and the only controls
+  left are NPC2's announcement/verification panel and NPC1's secondary emergency path.
+  `MM:SS` carries the screen; the hundredths are a separate, much smaller field; digits
+  are tabular so the layout never shifts. At `00:00` the countdown stops rather than
+  counting into negative digits, and the moment a round is decided the hero stops
+  ticking altogether: it then carries the official time (`THỜI GIAN HOÀN THÀNH`) or, for
+  an early exit, the time that was left when NPC1 pressed it (`KẾT THÚC SỚM`) — never an
+  invented finishing time.
+- **Observers are open and powerless.** No password, no repeated challenge, natural
+  entry and exit, ten concurrent seats enforced atomically in PostgreSQL against a
+  heartbeat with a timeout, and a viewer identity that reuses its own seat after a
+  refresh. A seat is given up only by the viewer's own `THOÁT XEM` (or by a closed tab
+  timing out): a screen re-rendering never throws a watching phone out of a seat it is
+  sitting in. A viewer's snapshot is redacted *on the server* (`redacted: true`): no action
+  log, no claim list, no operator identities, no dispute flags, no hidden-object layout.
+  Every command from an `OBSERVER` binding is refused with `READ_ONLY`, and filling the
+  ten seats never blocks a station phone (or vice versa).
+- **Rendering vs scoring**: phones sync an estimated server clock using RTT probes and a
+  monotonic local clock, and re-verify the authoritative revision every 10 s even when
+  realtime is silent. The status reads `TRỰC TIẾP` only while a fresh read is recent,
+  otherwise `ĐANG ĐỒNG BỘ`, `DỮ LIỆU CÓ THỂ CŨ` or `MẤT KẾT NỐI` — and no action is
+  offered while unreadable. Official scores always come from persisted server-side
+  instants, never from displayed digits.
 - **Disputes are never resolved silently**: a press whose commit arrived more than
-  `review_threshold_ms` (default 500 ms) after the physical tap, a finish within 500 ms of 5:00, or a
-  hand-corrected timestamp marks the round `CHỜ XÉT`. It stays in history with its numbers intact,
-  is excluded from the ranking, and only a supervisor's reasoned `CHẤP NHẬN` / `LOẠI BỎ` decides.
-  `Xem thêm → Kết nối & cảnh báo` shows measured RTT, data age and audio readiness.
-- **Reset integrity**: each confirmation stores round, cycle, actor and server time. `MỞ LẠI RESET`
-  (supervisor, reason required) advances the round's reset cycle, clears every confirmation and
-  revokes READY, so a reopened round needs all three confirmations again before any dispatch.
-- **Wall display (màn hình lớn)**: the moment the official 5-minute clock starts, the LOBBY phone —
-  the one station with nothing left to press during a game — turns itself into a full-screen red
-  countdown of *that* clock, with the fixed 90:00 timeline in the corner. Any other station can open
-  the same view from `Xem thêm → Màn hình lớn`. `RESET 5:00` and `TẠM DỪNG` on the display send the
-  same audited commands as the GATE phone (disabled for stations that do not own the clock), so the
-  number on the wall can never disagree with the score. `CHỈ SỐ TO` shows the number and nothing else,
-  a tap brings the controls back, `Esc` leaves. At `00:00` the screen flashes red with `HẾT GIỜ`,
-  the critical alarm sounds (with `TẮT TIẾNG` to silence it) and vibrate fires where supported —
-  still no automatic clear. The display closes itself when GATE stops the clock.
+  `review_threshold_ms` (default 500 ms) after the physical tap, a validated result
+  within 500 ms of 5:00, a bypassed floor, or a hand-corrected timestamp marks the round
+  `CHỜ XÉT`. It stays in history with its numbers intact, is excluded from the ranking,
+  and only the retained supervisor's reasoned `CHẤP NHẬN` / `LOẠI BỎ` decides. Corrections
+  may touch start, deadline, floor-2 and exit instants with a reason — never an
+  announcement row, which is why the score can only move by judging the right attempt.
+- **Reset integrity**: the three physical checks — hallway and the hidden-object layout on
+  floor 3, plus room 305 — are confirmed only by the floor-3 staff who own them (`GATE`,
+  `ROOM305`); OPERATOR_02 confirms nothing because it is no longer on that floor.
+  `MỞ LẠI RESET` (supervisor, reason required) advances the reset cycle, clears every
+  confirmation and revokes readiness. Closure additionally requires the confirmed
+  departure and a finalised result.
+- **Wall display (màn hình lớn)**: a phone with nothing left to press during the game —
+  OPERATOR 01 or OPERATOR 02 — turns itself into the full-screen countdown of the same
+  authoritative clock; any other station can open it from `Xem thêm → Màn hình lớn`. It
+  offers **no** control over the clock at all, so the number on the wall can never
+  disagree with the score, and it closes itself once the round is settled. `CHỈ SỐ TO`
+  shows the number alone, a tap brings the buttons back, `Esc` leaves. At `00:00` the
+  screen settles into a deep red wash with `HẾT GIỜ`, sounds the critical alarm (with
+  `TẮT TIẾNG`) and vibrates where supported — no strobe, no automatic clear.
 - **Journey map (hành trình)**: every phone draws the same five-node rail the team walks —
-  `SẢNH TẦNG 1 → CỬA VÀO → HÀNH LANG → PHÒNG 305 → KẾT THÚC`. Finished legs are red checks; the area
-  the team is in or walking into wears its own colour as a glowing ring; stops ahead stay grey. Under
-  the rail one status pill carries the sentence all five stations read (`Đội đang ở hành lang`), and
-  tapping it opens the floor map with the server time of every press and the reset checklist. The
-  rail is derived only from round timestamps and the audit log, so it cannot invent a leg; when GATE
-  clears the area the route resets to SẢNH, where LOBBY presses first for the next team.
-  The five-station relay strip lives in `Xem thêm → Trạng thái NPC`, next to `Màn hình lớn` and
-  `Đổi máy`, so the operator screen says one thing at a time.
+  `SẢNH TẦNG 1 → TẦNG 2 → CỬA VÀO TẦNG 3 → PHÒNG 305 → KẾT THÚC`. Finished legs are red
+  checks; the area the team is in or walking into wears its own colour as a glowing ring;
+  stops ahead stay grey. Under the rail one status pill carries the sentence all devices
+  read, and tapping it opens the floor map with the server time of every press and the
+  reset checklist. The rail is derived only from round timestamps, so it cannot invent a
+  leg. Observers see the same rail with no tap target at all.
 
 ## Operator runbook
 
-1. **Before the doors open**: supervisor sets the preparation allowance and the reset target in
-   `Xem thêm → Quản lý` and confirms all five phones show `TRỰC TIẾP`. There is no start button: the
-   90:00 stays frozen at `90:00` until LOBBY sends the first team up. Each phone must tap once
-   anywhere (that unlocks its alarm audio); the screen then stays awake via Wake Lock where the
-   browser supports it.
-2. **Normal cycle**: LOBBY `CHO ĐỘI LÊN` → LOBBY `ĐÃ LÊN TẦNG 3` (the team reached the
-   third-floor entrance) → GATE `BẮT ĐẦU` → (optional) CORRIDOR `ĐÃ SETUP XONG` → ROOM305
-   `ĐÃ ĐẾN 305`, `XÁC NHẬN HOÀN THÀNH`, `ĐỘI RỜI PHÒNG 305` → GATE `KHÁCH ĐÃ RA — CHỐT GIỜ` →
-   CORRIDOR/ROOM305 `ĐÃ RESET XONG` (and GATE too if it owns the hidden objects) → GATE `XÁC NHẬN
-   SẴN SÀNG`. Only then may LOBBY call the next team — and the journey rail starts again at SẢNH.
-3. **Wrong puzzle confirmation**: supervisor uses `HIỆU CHỈNH` with the field `Trận đồ xong` and an
-   empty value (undo) plus a reason. The original timestamp is kept in the audit log, and the result
-   is flagged for review — never quietly deleted.
-4. **GATE forgets STOP**: the dashboard shows `Đội #… rời 305 được …s — GATE chưa chốt giờ`. The
-   software never stops the official clock by itself. GATE presses `KHÁCH ĐÃ RA — CHỐT GIỜ` when the
-   last player is out; if the delay was long, the round appears under `KẾT QUẢ CHỜ XÉT`.
-5. **Premature DONE**: `MỞ LẠI RESET` in `Quản lý` re-opens the cycle (reason required). All three
-   operators confirm again; READY is revoked until they do.
-6. **Hidden-object mismatch (Scenario C)**: the assigned operator (CORRIDOR or GATE) picks the
-   prepared layout A/B/C in `Xem thêm → Trạng thái NPC`; the layout is recorded on the round and on
-   the placement confirmation, and everyone (including GATE, for hints) can read it.
-7. **Network loss**: phones show `MẤT KẾT NỐI`; presses are not sent, and a lost reply is reconciled
-   with the server (`ĐANG XÁC MINH…` → `ĐÃ GHI NHẬN (đã xác minh)` or `CHƯA ĐƯỢC GHI NHẬN`). A
-   `STOP` that never reached the server leaves the game clock running — nothing is scored twice.
-   If the event must continue without the app: use the paper backup (below), then enter the times with
-   `HIỆU CHỈNH` (reason required) once connectivity returns; the round will be flagged for review.
-8. **Physical backup timer (independent of the app)**: keep one analogue or phone stopwatch at the
-   third-floor entrance, started by GATE on `BẮT ĐẦU` and stopped when the last player exits, plus a
-   wall clock for the 90-minute event. Record team number, start, stop and the exit confirmation on
-   paper for every round. This is the fallback of record for scoring disputes; the app is the
-   authoritative system whenever it is reachable.
-9. **Room display**: the LOBBY phone (or any phone via `Màn hình lớn`) is the audience countdown.
-   Tap it once early so its alarm is unlocked, then leave it — it opens and closes with the game
-   clock by itself. If it is a TV or tablet, open the LOBBY link on it: the display is read-only and
-   changes no score, so it is safe to aim at the players.
-10. **Board stuck full** (a crew left mid-shift, phones were handed over, or a station shows
+1. **Before the doors open**: the retained admin sets the preparation allowance, the reset target
+   and the hidden-object owner in `Xem thêm → Quản lý`, and confirms every station phone shows
+   `TRỰC TIẾP`. There is no start button anywhere: the countdown exists only per team, opened by
+   NPC 1. Each phone must tap once anywhere (that unlocks its alarm audio); the screen then stays
+   awake via Wake Lock where the browser supports it.
+2. **Normal cycle**: OPERATOR 01 `NHẬN ĐỘI & CHO LÊN TẦNG 2` → OPERATOR 02 `XÁC NHẬN ĐÃ ĐẾN
+   TẦNG 2` → NPC 1 `BẮT ĐẦU TRÒ CHƠI — 05:00` (after the briefing and the hints) → NPC 2
+   `GHI NHẬN BÁO HOÀN THÀNH`, then `CHÍNH XÁC — CHỐT THỜI GIAN` or `CHƯA ĐÚNG — TIẾP TỤC` →
+   NPC 1 `XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3` → NPC 1 and NPC 2 `ĐÃ RESET XONG` → NPC 1 `XÁC NHẬN
+   SẴN SÀNG`. Only then may OPERATOR 01 receive the next team, and the rail starts again at SẢNH.
+   While the countdown runs, all four phones are locked onto the clock: OPERATOR 01 and 02 have
+   nothing left to press, so one of them is the wall display.
+3. **Team straight to floor 3**: NPC 1 presses `ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2`,
+   types why, and confirms. The audit records a bypass, never a floor-2 confirmation, and a later
+   press by OPERATOR 02 is refused without rewinding the game.
+4. **Wrong announcement**: NPC 2 judges that one attempt `CHƯA ĐÚNG`; its row and its timestamp
+   stay, the players keep playing, and a new announcement can be recorded. Nothing is ever
+   overwritten. A mis-timed press is corrected by judging the *right* attempt, not by editing time.
+5. **GAP AFTER THE LAST PLAYER LEAVES**: the screen shows `… ở lại khu vực được …s — NPC 1 chưa
+   xác nhận rời tầng 3`. The software never decides a departure by itself; NPC 1 presses
+   `XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3` when the area is empty. That press cannot change the score.
+6. **A claim still open when the clock dies**: the round reads `HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC
+   HỢP LỆ`. NPC 1 may still let the team out; the closure stays blocked (`Kết quả trận chưa chốt`)
+   until NPC 2 settles the announcement, which then wins at its own recorded instant.
+7. **Premature DONE**: `MỞ LẠI RESET` in `Quản lý` re-opens the cycle (reason required). Both
+   floor-3 operators confirm again; readiness is revoked until they do.
+8. **Hidden-object mismatch**: the assigned floor-3 operator (NPC 1 or NPC 2) picks the prepared
+   layout A/B/C in `Xem thêm → Trạng thái NPC`; it is recorded on the round and on the placement
+   confirmation, and every station (including NPC 1, for hints) can read it. Observers cannot.
+9. **Safety or an early walk-out**: NPC 1 uses `KẾT THÚC SỚM / RỜI KHU VỰC`, with a reason and a
+   second confirmation. The result is `HỦY / RỜI KHU VỰC SỚM`, no winning time is produced, and
+   physical egress never depends on the app agreeing to anything.
+10. **Network loss**: phones show `MẤT KẾT NỐI`; presses are not sent, and a lost reply is
+   reconciled with the server (`ĐANG XÁC MINH…` → `ĐÃ GHI NHẬN (đã xác minh)` or
+   `CHƯA ĐƯỢC GHI NHẬN`). The countdown is stored, so a phone that reconnects resumes at the same
+   instant, and an announcement that never reached the server simply does not exist — nothing is
+   scored twice. If the event must continue without the app: use the paper backup (below), then
+   enter the times with `HIỆU CHỈNH` (reason required) once connectivity returns; the round will be
+   flagged for review.
+11. **Physical backup timer (independent of the app)**: keep one stopwatch at the third-floor
+   entrance, started by NPC 1 on `BẮT ĐẦU`, plus a wall clock, and record on paper the team number,
+   the start, each "xong" announcement and the exit confirmation. This is the fallback of record for
+   scoring disputes; the app is the authoritative system whenever it is reachable.
+12. **Room display**: the OPERATOR 01 phone (or any phone via `Màn hình lớn`) is the audience
+   countdown. Tap it once early so its alarm is unlocked, then leave it — it opens and closes with
+   the game clock by itself. If it is a TV or tablet, open the OPERATOR 01 link on it, or give the
+   audience the observer seat: both are read-only and change no score.
+13. **Board stuck full** (a crew left mid-shift, phones were handed over, or a station shows
    ĐÃ ĐỦ NGƯỜI with nobody on duty): open the root URL on any phone that is not holding a station,
-   tap **RESET TẤT CẢ VỊ TRÍ** under the board, and type the administrator secret. Every seat
+   tap the **↺** icon on the `VỊ TRÍ TRỰC` line, and type the administrator secret. Every seat
    returns to CÒN TRỐNG, every on-duty phone drops back to this picker, and the crew re-selects its
-   station. Scores and clocks are untouched. If nobody is trusted with the secret, an administrator
-   may instead revoke one lost `user_id` in `sc.operators` from a trusted SQL session.
+   station. Clocks, results, claims and history are untouched. This is refused while a team is on
+   the 5:00 — NPC 1 has to confirm the departure (or the early exit) first. If nobody is
+   trusted with the secret, an administrator may instead revoke one lost `user_id` in `sc.operators`
+   from a trusted SQL session.
 
 ## Security and administration
 
-Migration **0011_command_press_integer.sql** follows 0010_single_url_roles.sql,
-0009_board_capacity.sql and 0008_supervisor_pair.sql. Applied migration files 0001–0010 are
-unchanged. All active bindings, events, rounds, reset tasks and action logs survive the upgrade.
-The migration ledger decides which forward files remain pending; never reset bindings for this
-upgrade. 0014_station_reset.sql is forward-only in the same manner: it adds the reset secret
-column and functions and revokes no binding by itself — only a typed, correct secret sweeps.
+Migration **0016_unified_flow.sql** carries the V3 flow into the production authority: it adds the
+reception/handover/bypass/deadline/exit columns and the `sc.completion_attempts` table, widens every
+check before rewriting the live statuses onto the single vocabulary, replaces `sc.role_permissions`
+with the V3 matrix, replaces `sc.handle_command` and `sc.snapshot`, and opens the observer seat.
+It is forward-only: no table or column is dropped, no historical row loses a timestamp, and rounds
+that are still on the floor keep exactly the time they had left (a stored deadline is reconstructed
+from the retired banked-time fields, so nobody gains or loses a millisecond from the upgrade).
+Rounds that a newer round demonstrably superseded are marked `CLOSED`; their own stamps are kept and
+no clearance is claimed for them. Applied migration files 0001–0015 are unchanged.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
-The user primary key, partial unique index on (role, seat_slot) and slot CHECK constraints
-provide additional enforcement: four single slots plus two supervisor slots, never seven devices.
-Every command still resolves its live binding, role permission, state, revision and actor-scoped
-idempotency key on the server. Claim/release do not call _ensure_event, tick, START or RESET.
+The user primary key, the partial unique index on (role, seat_slot) and the slot CHECK constraints
+provide additional enforcement: four single station slots plus two supervisor slots, never seven
+devices, and ten observer slots claimed the same atomic way. A heartbeat row in
+`sc.observer_seats` keeps a viewing seat live; `sc._observer_sweep()` revokes OBSERVER bindings
+whose beat is older than 45 s, so an abandoned browser cannot lock the audience out. Every command
+still resolves its live binding, role permission, phase, revision and actor-scoped idempotency key
+on the server; a phase answer is only given after the revision check, so a device that is merely
+behind receives `STALE_REVISION` and resynchronises. Claim/release and the presence endpoints never
+touch a round, a clock or a reset task.
 Access changes have a separate private audit table and do not alter the scoring history.
-handle_command truncates the optional `_press` diagnostic instant to whole milliseconds and drops
-it when it cannot be read, so a fractional browser clock can never abort START, STOP or PUZZLE.
-Committed press and transport values stay whole milliseconds either way.
+`handle_command` truncates the optional `_press` diagnostic instant to whole milliseconds and drops
+it when it cannot be read, so a fractional browser clock can never abort a reception, a START, an
+announcement or a verification. Committed press and transport values stay whole milliseconds.
+
+An `OBSERVER` binding is refused every action by the permission table (there is no OBSERVER row) and
+by `sc.handle_command` itself (`READ_ONLY`), and it can only ever receive the redacted view built by
+`sc.snapshot()`/`sc._redact()`: no action log, no claim list, no operator identities, no dispute
+flags and no hidden-object layout. RLS additionally denies a viewer SELECT on `sc.rounds`,
+`sc.reset_tasks` and `sc.action_log`, so the read-only rule does not depend on the client at all.
 
 PIN hashes use pgcrypto bcrypt with cost 10. No plaintext PIN is stored in Postgres, frontend,
 logs or local storage. There are at most 5 PIN attempts per identity and 30 globally in a
@@ -201,17 +302,21 @@ can silently free a working phone. sc.configure_station_reset(secret) and sc.res
 are owner-only in the same way: the browser can reach only `public.reset_all_stations(text)`, and
 freeing the whole board is a deliberate, secret-gated human action rather than an automatic sweep.
 
-Public station_occupancy contains only five role/capacity/device counters. RLS permits SELECT
-for anon/authenticated and no client writes. Operator identities, access audit, PIN hashes and
-rate-limit counters stay private; internal helpers and retired invitation RPC grants are revoked.
+Public `station_occupancy` keeps the five operator role/capacity/device counters (the administrator
+PIN is now entered from the management line rather than from a tile). `sc.station_board()` reports
+`board_version: 2` and counts the operator seats and the ten viewing seats separately, so filling
+the audience never makes a station look full. Operator identities, the presence table, the access
+audit, PIN hashes and rate-limit counters stay private; internal helpers and retired invitation RPC
+grants are revoked.
 
-**NPC access trade-off:** the root URL intentionally allows anyone to request an available NPC
+**Station access trade-off:** the root URL intentionally allows anyone to request an available
 station. Capacity prevents a duplicate claim; it does not prove staff membership. One-time crew
 codes, hashed server-side and atomically consumed with the claim, would prevent casual outsiders
-from occupying NPC roles. They require distributing a fresh code per new device and add one
-entry step. They are not enabled in this release to preserve immediate station selection; for a
-publicly advertised event URL, enable such codes in a future forward migration or limit network
-access. A supervisor PIN does not protect NPC slots.
+from occupying the four operator roles. They require distributing a fresh code per new device and
+add one entry step. They are not enabled in this release to preserve immediate station selection;
+for a publicly advertised event URL, enable such codes in a future forward migration or limit
+network access. The admin PIN protects only the retained management entry, and the viewing seat is
+open by design.
 
 ## Validation
 
@@ -226,19 +331,29 @@ npm run build
 ~~~
 
 SQL validation uses a disposable local PostgreSQL 16 Docker container. Historical access
-scenarios run before 0010; scenario 033 then checks the new capacity, binding, preservation,
-PIN and RLS contract. 0011 then normalises press instants and scenario 034 checks that a
-fractional or malformed press still commits the command. Never run the local auth stub against
-hosted Supabase.
+scenarios run before 0010; scenario 033 then checks the capacity, binding, preservation,
+PIN and RLS contract of that release. 0011 normalises press instants and scenario 034 checks that a
+fractional or malformed press still commits the command; scenarios 035–038 check the round-only
+clock, team labels, the secret-gated board sweep and the area-staff-only reset checks. Scenario
+**039** then exercises the unified flow itself against the production RPCs: reception, the floor-2
+confirmation, the bypass and its stale-press refusal, announcement/announcement scoring, a claim
+verified after the deadline, a late claim that cannot win, TIME UP, exit, closure, the next team
+inheriting nothing, and the observer seat (no PIN, redacted view, `READ_ONLY` on every command,
+ten seats then the eleventh refused, a seat surviving a refresh and an abandoned seat expiring).
+Never run the local auth stub against hosted Supabase.
 
-The workflow browser suite uses the local authoritative engine and covers full rounds, ranking,
-timeout, admission cutoff, offline commands, the wall display and 360px layouts. The access suite
-runs the production Supabase client against real local PostgreSQL RPCs, with only Auth/HTTP
-transport adapted by the test harness. It checks all six slots, release/replacement, PWA session
-reuse, revoked permissions, stale/offline boards, concurrent database transactions and workflow
-cycles after the migration. Its fallback polling tests deliberately run without Realtime delivery.
-Hosted GoTrue, live Realtime and physical PWA behavior require separate production/read-only or
-venue checks; local tests do not certify physical phones or venue Wi-Fi.
+The workflow browser suite uses the local authoritative engine and covers the full round on four
+phones plus a viewer: locked countdown, claim and verification, exit, reset and closure, the bypass
+branch, expiry, the guarded early exit, the wall display, 360px layouts and a 1280×800 desktop pass
+(no sideways overflow, the hero clock still dominant, the hundredths still an order of magnitude
+smaller). The access suite runs
+the production Supabase client against real local PostgreSQL RPCs, with only Auth/HTTP transport
+adapted by the test harness. It checks the four station slots plus the admin pair and the ten
+viewing seats, release/replacement, PWA session reuse, revoked permissions, stale/offline boards,
+concurrent database transactions and the post-migration workflow cycles. Its fallback polling tests
+deliberately run without Realtime delivery. Hosted GoTrue, live Realtime and physical PWA behavior
+require separate production/read-only or venue checks; local tests do not certify physical phones or
+venue Wi-Fi.
 
 On 2026-10-31 the hosted access smoke passed anonymous auth, final-NPC-slot contention,
 whoami, identity exclusivity, revoked legacy access, release/reclaim and actual PostgreSQL
@@ -269,8 +384,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\db-push.ps1 -SingleUrl -Confi
 
 The terminal asks for the PostgreSQL password, supervisor PIN and reset secret using hidden
 prompts. Secrets exist only in process memory. No DATABASE_URL or password file is needed.
-The runner refuses missing 0001–0007 history, locks access changes, fingerprints the event
-and active roster before/after, and commits all pending migrations plus PIN configuration in
+The runner refuses missing 0001–0007 history, locks access changes, fingerprints the event,
+rounds, action log, reset tasks and the active roster before/after (and, from this release, the
+claim and observer-seat tables too), and commits all pending migrations — including
+**0016_unified_flow.sql**, which is on the reviewed allowlist — plus PIN configuration in
 one transaction. It rolls back on changed fingerprints or unsafe grants. A non-secret report is
 written to .git/production-migration.json. An 8-second lock timeout avoids an indefinite wait.
 No on-duty binding is revoked and no event command is sent.

@@ -13,8 +13,9 @@
  *   npm run db:push -- --baseline  record 0001_init.sql as already applied
  *
  * Env overrides: SUPABASE_PROJECT_REF, SUPABASE_REGION.
- * The supervisor PIN and the station reset secret are read from the environment
- * only when the matching flag is set, and are installed as bcrypt hashes.
+ * The supervisor PIN, the station reset secret and the four crew codes are read from
+ * the environment only when the matching flag is set, and are installed as bcrypt
+ * hashes — the values themselves never reach a table, a log, a file or the browser.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -27,6 +28,7 @@ const baseline = process.argv.includes('--baseline');
 const singleUrl = process.argv.includes('--single-url');
 const configurePin = process.argv.includes('--configure-supervisor-pin');
 const configureReset = process.argv.includes('--configure-station-reset');
+const configureCodes = process.argv.includes('--configure-station-codes');
 const reportPath = path.join(root, '.git', 'production-migration.json');
 
 async function fingerprint(client) {
@@ -93,6 +95,9 @@ async function main() {
       '0012_round_clock_only.sql',
       '0013_team_name.sql',
       '0014_station_reset.sql',
+      '0015_reset_guard.sql',
+      '0016_unified_flow.sql',
+      '0017_v31_hardening.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     const pin = configurePin ? process.env.SC_SUPERVISOR_PIN : null;
@@ -104,6 +109,23 @@ async function main() {
     if (configureReset && (resetLength < 10 || resetLength > 64)) {
       throw new Error('The station reset secret must be 10–64 characters, entered through the hidden prompt.');
     }
+    // Crew codes arrive as one JSON map from the hidden prompts; each value is a
+    // 4–12 character A–Z0–9 code for exactly one operating position (§5.3).
+    let codes = null;
+    if (configureCodes) {
+      const raw = process.env.SC_STATION_CODES;
+      delete process.env.SC_STATION_CODES;
+      try { codes = JSON.parse(raw ?? ''); } catch { codes = null; }
+      const entries = Object.entries(codes ?? {});
+      if (entries.length !== 4 || !['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'].every(r => entries.some(([k]) => k === r))) {
+        throw new Error('All four crew codes (LOBBY, CORRIDOR, GATE, ROOM305) must be provided.');
+      }
+      for (const [role, code] of entries) {
+        if (!/^[A-Z0-9]{4,12}$/.test(String(code ?? '').toUpperCase())) {
+          throw new Error(`The crew code for ${role} must be 4–12 characters of A-Z or 0-9.`);
+        }
+      }
+    }
     const report = { status: 'pending', at: new Date().toISOString(), pending };
     await client.query('begin');
     try {
@@ -113,7 +135,11 @@ async function main() {
         const { rows: flags } = await client.query('select allow_test_clock from sc.runtime_flags where id');
         if (flags[0]?.allow_test_clock !== false) throw new Error('Production test clock is enabled; review required.');
         await client.query('lock table sc.operators in share row exclusive mode');
-        await client.query('lock table sc.events, sc.rounds, sc.action_log, sc.reset_tasks, sc.state in share mode');
+        // The unified flow adds two tables the upgrade itself rewrites: reading them in
+        // share mode proves the fingerprint covers the claims and seats that must survive.
+        await client.query(
+          'lock table sc.events, sc.rounds, sc.action_log, sc.reset_tasks, sc.state, sc.completion_attempts, sc.observer_seats in share mode',
+        );
         report.before = await fingerprint(client);
         console.log('Production baseline:', JSON.stringify(report.before));
       }
@@ -128,6 +154,11 @@ async function main() {
       if (configurePin) await client.query('select sc.configure_station_access($1, false)', [pin]);
       // Hashes only: the secret itself is never written to a table, log or file.
       if (configureReset) await client.query('select sc.configure_station_reset($1)', [resetSecret]);
+      // Hashes only, and never the same code twice in the same statement text.
+      for (const [role, code] of Object.entries(codes ?? {})) {
+        await client.query('select sc.configure_station_code($1, $2)', [role, String(code).toUpperCase()]);
+        console.log(`staged crew code for ${role}`);
+      }
       if (singleUrl) {
         report.after = await fingerprint(client);
         if (JSON.stringify(report.before) !== JSON.stringify(report.after)) throw new Error('Event data or duty bindings changed; rolling back.');
@@ -136,9 +167,12 @@ async function main() {
           has_function_privilege('authenticated','public.redeem_invitation(text,text)','EXECUTE') as legacy,
           has_function_privilege('authenticated','sc.configure_station_access(text,boolean)','EXECUTE') as pin_exposed,
           has_function_privilege('authenticated','sc.reset_all_stations(text)','EXECUTE') as reset_exposed,
+          has_function_privilege('authenticated','sc.configure_station_code(text,text)','EXECUTE') as codes_exposed,
+          has_function_privilege('authenticated','sc.station_code_state()','EXECUTE') as codes_listed,
           has_function_privilege('anon','public.reset_all_stations(text)','EXECUTE') as reset_unsigned,
           has_function_privilege('authenticated','public.reset_all_stations(text)','EXECUTE') as reset_granted`);
-        if (rows[0].legacy || rows[0].pin_exposed || rows[0].reset_exposed || rows[0].reset_unsigned || !rows[0].reset_granted) {
+        if (rows[0].legacy || rows[0].pin_exposed || rows[0].reset_exposed || rows[0].reset_unsigned || !rows[0].reset_granted
+          || rows[0].codes_exposed || rows[0].codes_listed) {
           throw new Error('Unsafe access grants; rolling back.');
         }
       }

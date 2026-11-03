@@ -1,14 +1,15 @@
-import type { Outcome, ResetTask, Round, Snapshot } from './types.ts' ;
-import { gameElapsedMs } from './machine.ts';
+import type { CompletionAttempt, Outcome, ResetTask, Round, RoundResult, Snapshot } from './types.ts' ;
+import { gameElapsedMs, resultOf, roundLimitMs } from './machine.ts';
+import { DEFAULT_ROUND_DURATION_MS } from './constants.ts';
 
 /** Per-round operational measurements, derived only from persisted timestamps. */
 export interface RoundMetrics {
   team_number: number;
   round_number: number;
-  /** Official score. Null until GATE STOP. */
+  /** Official score: the validated claim's elapsed time. Null until NPC2 finalises. */
   game_ms: number | null;
   prep_ms: number | null;
-  /** Times GATE restarted / paused this 5-minute window. */
+  /** @deprecated how often the window was restarted/paused (history only). */
   game_reset_count: number;
   game_pause_count: number;
   reset_total_ms: number | null;
@@ -18,12 +19,19 @@ export interface RoundMetrics {
   gate_clear_ms: number | null;
   puzzle_completed: boolean;
   outcome: Outcome;
+  result: RoundResult;
+  /** Completion claims recorded on this round. */
+  claims: number;
+  /** Claims NPC2 judged incorrect, kept for traceability. */
+  rejected: number;
   admitted_by_override: boolean;
   needs_review: boolean;
   review_reasons: string[];
   /** Network component of the official STOP, for honest dispute handling. */
   stop_transport_ms: number | null;
   start_transport_ms: number | null;
+  floor2_confirmed: boolean;
+  floor2_bypassed: boolean;
 }
 
 function diff(from: number | null | undefined, to: number | null | undefined): number | null {
@@ -63,32 +71,64 @@ function taskDone(tasks: ResetTask[], round: Round, key: string): number | null 
 }
 
 /**
- * `nowMs` only matters for a round that is still on the clock: the running
- * measurement then follows the flexible 5-minute window (pauses excluded, resets
- * banked), never the raw wall distance from the first start.
+ * `nowMs` only matters for a round that is still on the clock; `attempts` only for
+ * the result derivation, so a report never re-decides a score that was already
+ * finalised from a validated claim.
  */
-export function roundMetrics(round: Round, tasks: ResetTask[], nowMs?: number): RoundMetrics {
-  const stop = round.game_stopped_at;
+export function roundMetrics(
+  round: Round,
+  tasks: ResetTask[],
+  nowMs?: number,
+  attempts: CompletionAttempt[] = [],
+  limitMs?: number,
+): RoundMetrics {
+  const resetFrom = round.exit_confirmed_at ?? round.game_stopped_at;
+  const claims = attempts.filter((a) => a.round_id === round.id);
+  // The round's own duration decides its expiry; the caller's value is only the
+  // fallback for rows that carry neither a snapshot nor a deadline.
+  const own = roundLimitMs(round, limitMs ?? DEFAULT_ROUND_DURATION_MS);
   return {
     team_number: round.team_number,
     round_number: round.round_number,
-    game_ms: round.official_duration_ms ?? (stop === null && nowMs !== undefined ? gameElapsedMs(round, nowMs) : null),
-    prep_ms: diff(round.called_at, round.game_started_at),
+    game_ms:
+      round.official_duration_ms ??
+      (round.game_stopped_at === null && nowMs !== undefined && limitMs !== undefined
+        ? Math.max(0, gameElapsedMs(round, nowMs))
+        : null),
+    prep_ms: elapsed(round, round.called_at, round.game_started_at, nowMs),
     game_reset_count: round.game_reset_count,
     game_pause_count: round.game_pause_count,
-    reset_total_ms: diff(stop, round.system_ready_at),
-    corridor_reset_ms: diff(stop, taskDone(tasks, round, 'hallway')),
-    room_reset_ms: diff(stop, taskDone(tasks, round, 'room')),
-    hidden_objects_reset_ms: diff(stop, taskDone(tasks, round, 'hidden_objects')),
-    gate_clear_ms: diff(stop, round.gate_finalized_at),
-    puzzle_completed: round.puzzle_completed_at !== null,
+    reset_total_ms: elapsed(round, resetFrom, round.system_ready_at, nowMs),
+    corridor_reset_ms: elapsed(round, resetFrom, taskDone(tasks, round, 'hallway'), nowMs),
+    room_reset_ms: elapsed(round, resetFrom, taskDone(tasks, round, 'room'), nowMs),
+    hidden_objects_reset_ms: elapsed(round, resetFrom, taskDone(tasks, round, 'hidden_objects'), nowMs),
+    gate_clear_ms: elapsed(round, resetFrom, round.gate_finalized_at, nowMs),
+    puzzle_completed: round.validated_attempt_id !== null || round.puzzle_completed_at !== null,
     outcome: round.outcome,
+    result: limitMs !== undefined && nowMs !== undefined ? resultOf(round, attempts, own, nowMs) : round.result,
+    claims: claims.length,
+    rejected: claims.filter((a) => a.status === 'INVALID').length,
     admitted_by_override: round.admission_override,
     needs_review: round.needs_review,
     review_reasons: round.review_reasons,
     stop_transport_ms: round.stop_transport_ms,
     start_transport_ms: round.start_transport_ms,
+    floor2_confirmed: round.floor2_confirmed_at !== null,
+    floor2_bypassed: round.floor2_bypassed_at !== null,
   };
+}
+
+/**
+ * A duration between two stamps. `nowMs` is only used for the one case that is
+ * genuinely still open — a round that has not been closed yet — so a published
+ * report keeps a stable number instead of growing with the clock.
+ */
+function elapsed(round: Round, from: number | null | undefined, to: number | null | undefined, nowMs?: number): number | null {
+  if (from === null || from === undefined || to === null || to === undefined) {
+    if (from === null || from === undefined || nowMs === undefined || round.system_ready_at !== null) return null;
+    return Math.max(0, nowMs - from);
+  }
+  return Math.max(0, to - from);
 }
 
 /** Cross-round metrics that require the previous round's timestamps. */
@@ -102,12 +142,13 @@ export interface CycleMetrics {
 }
 
 export function cycleMetrics(prev: Round, next: Round): CycleMetrics {
+  const prevEnd = prev.system_ready_at;
   return {
     team_number: next.team_number,
     prev_team_number: prev.team_number,
-    inter_team_ms: diff(prev.game_stopped_at, next.game_started_at),
+    inter_team_ms: diff(prevEnd, next.game_started_at),
     start_to_start_ms: diff(prev.game_started_at, next.game_started_at),
-    idle_after_ready_ms: diff(prev.system_ready_at, next.called_at),
+    idle_after_ready_ms: diff(prevEnd, next.called_at),
     next_prep_ms: diff(next.called_at, next.game_started_at),
   };
 }
@@ -115,16 +156,17 @@ export function cycleMetrics(prev: Round, next: Round): CycleMetrics {
 /* ------------------------------------------------------------- leaderboard */
 
 /**
- * A result ranks only when the puzzle was confirmed, GATE confirmed the physical
- * exit, the official duration is within the limit, and no dispute is open. A
- * flagged round is kept immutable and simply excluded until a supervisor decides.
+ * A result ranks only when an in-time claim was verified correct, the physical exit
+ * was confirmed, the official duration is within the round's own duration, and no
+ * dispute is open. A flagged round is kept immutable and simply excluded until a
+ * supervisor decides.
  */
 export function qualifiesForLeaderboard(r: Round, gameLimitMs: number): boolean {
   if (r.official_duration_ms === null) return false;
-  if (r.game_stopped_at === null || r.exit_confirmed_at === null) return false;
-  if (r.puzzle_completed_at === null) return false;
+  if (r.exit_confirmed_at === null) return false;
+  if (!(r.result === 'WON' || r.outcome === 'WON')) return false;
   if (r.needs_review || r.decertified) return false;
-  return r.outcome === 'WON' && r.official_duration_ms <= gameLimitMs;
+  return r.official_duration_ms <= roundLimitMs(r, gameLimitMs);
 }
 
 export interface LeaderRow {
@@ -165,6 +207,7 @@ export interface Analytics {
   teams_completed: number;
   teams_successful: number;
   timeouts: number;
+  aborted: number;
   disputed: number;
   avg_game_ms: number | null;
   avg_prep_ms: number | null;
@@ -173,9 +216,12 @@ export interface Analytics {
   longest_reset: { team_number: number; ms: number } | null;
   longest_prep: { team_number: number; ms: number } | null;
   total_idle_ms: number;
-  /** How often the flexible 5-minute window had to be restarted or paused. */
+  /** @deprecated how often the retired flexible window was restarted or paused. */
   clock_resets: number;
   clock_pauses: number;
+  /** Completion claims recorded and rejected across the event. */
+  claims: number;
+  claims_rejected: number;
   fastest: LeaderRow | null;
   cycles: CycleMetrics[];
 }
@@ -186,17 +232,20 @@ function mean(values: number[]): number | null {
 }
 
 export function analytics(
-  snapshot: Pick<Snapshot, 'rounds' | 'reset_tasks' | 'event'>,
+  snapshot: Pick<Snapshot, 'rounds' | 'reset_tasks' | 'event'> & Partial<Pick<Snapshot, 'attempts'>>,
   _nowMs: number,
 ): Analytics {
   const rounds = [...snapshot.rounds].sort((a, b) => a.round_number - b.round_number);
-  const metrics = rounds.map((r) => roundMetrics(r, snapshot.reset_tasks));
-  const completed = rounds.filter((r) => r.game_stopped_at !== null);
+  const attempts = snapshot.attempts ?? [];
+  const limit = snapshot.event.config.game_limit_ms;
+  const metrics = rounds.map((r) => roundMetrics(r, snapshot.reset_tasks, undefined, attempts, limit));
+  // A round is “done” once it was closed; the retired STOP press no longer defines it.
+  const completed = rounds.filter((r) => r.system_ready_at !== null);
   const cycles: CycleMetrics[] = [];
   for (let i = 1; i < rounds.length; i++) cycles.push(cycleMetrics(rounds[i - 1], rounds[i]));
 
   const rows = leaderboard({ rounds, event: snapshot.event });
-  const qualifying = rounds.filter((r) => qualifiesForLeaderboard(r, snapshot.event.config.game_limit_ms));
+  const qualifying = rounds.filter((r) => qualifiesForLeaderboard(r, limit));
   const resetValues = metrics.map((m) => m.reset_total_ms).filter((v): v is number => v !== null);
   const resetsWithTeam = metrics.filter((m) => m.reset_total_ms !== null);
   const longestReset = resetsWithTeam.reduce<{ team_number: number; ms: number } | null>((acc, m) => {
@@ -216,7 +265,8 @@ export function analytics(
     teams_completed: completed.length,
     teams_successful: rows.length,
     disputed: disputedRounds(snapshot.rounds).length,
-    timeouts: rounds.filter((r) => r.outcome === 'TIMEOUT').length,
+    timeouts: rounds.filter((r) => r.result === 'TIME_UP' || r.outcome === 'TIMEOUT' || r.outcome === 'NO_PUZZLE').length,
+    aborted: rounds.filter((r) => r.result === 'ABORTED' || r.aborted_at !== null).length,
     avg_game_ms: mean(qualifying.map((r) => r.official_duration_ms as number)),
     avg_prep_ms: mean(metrics.map((m) => m.prep_ms).filter((v): v is number => v !== null)),
     avg_reset_ms: mean(resetValues),
@@ -226,6 +276,8 @@ export function analytics(
     total_idle_ms: cycles.reduce((a, c) => a + (c.idle_after_ready_ms ?? 0), 0),
     clock_resets: metrics.reduce((a, m) => a + m.game_reset_count, 0),
     clock_pauses: metrics.reduce((a, m) => a + m.game_pause_count, 0),
+    claims: attempts.length,
+    claims_rejected: metrics.reduce((a, m) => a + m.rejected, 0),
     fastest: rows[0] ?? null,
     cycles,
   };

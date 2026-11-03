@@ -22,8 +22,8 @@ interface StripProps {
 
 const STOP_ICON: Record<JourneyStop['key'], (props: { className?: string }) => ReactElement> = {
   lobby: UsersIcon,
+  floor2: RunnerIcon,
   gate: DoorIcon,
-  hall: RunnerIcon,
   room: RoomIcon,
   end: FlagIcon,
 };
@@ -48,10 +48,11 @@ function nodeStyle(stop: JourneyStop): CSSProperties {
 }
 
 /**
- * The five-stop route every phone shows: sảnh → cửa vào → hành lang → 305 →
- * kết thúc. Checked stops are red, the area the team is in or walking into wears
- * its own colour as a ring, and stops still ahead stay grey. Labels sit under the
- * nodes exactly like the five-node rail on the wall of the design.
+ * The five-stop route every phone shows: sảnh tầng 1 → tầng 2 → cửa vào tầng 3 →
+ * phòng 305 → kết thúc. Checked stops are red, the area the team is in or walking
+ * into wears its own colour as a ring, and stops still ahead stay grey. Passing
+ * `onOpen` makes the rail a button that reveals the floor map; without it the rail
+ * is pure status, which is all an observer may have.
  */
 export function JourneyStepper({ journey, onOpen }: StripProps) {
   const { stops, focus } = journey;

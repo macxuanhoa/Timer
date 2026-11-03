@@ -42,13 +42,24 @@ describe('team label', () => {
     expect(hub.command('lobby', 'SET_TEAM_NAME', {}).code).toBe('INVALID_STATE');
     expect(hub.snapshot().active_round?.team_name).toBeNull();
 
-    // Once GATE clears the round there is nothing left to label.
-    hub.command('lobby', 'TEAM_UPSTAIRS');
+    // The label belongs to the handover, not to the game: once 5:00 runs, session
+    // data is frozen for every role (§9).
+    hub.command('corridor', 'CONFIRM_FLOOR2');
     hub.command('gate', 'START_GAME');
-    hub.command('gate', 'GAME_STOP');
-    hub.command('corridor', 'RESET_DONE'); // CORRIDOR owns hidden_objects by default
+    expect(hub.command('lobby', 'SET_TEAM_NAME', { team_name: 'Giữa trận' }).code).toBe('INVALID_STATE');
+    hub.advance(301_000);
+    hub.command('gate', 'CONFIRM_EXIT');
+    hub.command('gate', 'RESET_DONE');
     hub.command('room305', 'RESET_DONE');
     hub.command('gate', 'GATE_FINALIZE');
     expect(hub.command('lobby', 'SET_TEAM_NAME', { team_name: 'Muộn' }).code).toBe('INVALID_STATE');
+  });
+
+  it('is drafted before the team exists and travels with the reception', () => {
+    const hub = new TestHub();
+    expect(hub.command('lobby', 'SET_TEAM_NAME', { team_name: 'Chưa có đội' }).code).toBe('INVALID_STATE');
+    expect(hub.command('lobby', 'CALL_TEAM', { team_name: 'Phantom 05' }).ok).toBe(true);
+    expect(hub.snapshot().active_round?.team_name).toBe('Phantom 05');
+    expect(latest(hub, 'CALL_TEAM')?.metadata?.team_name).toBe('Phantom 05');
   });
 });

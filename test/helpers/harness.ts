@@ -1,9 +1,9 @@
 import { ScreamEngine, initialState, type Account, type PersistedState } from '../../src/server/engine';
-import { FakeClock, type Clock, type CommandRequest, type CommandResult, type Snapshot } from '../../src/shared/types';
+import { FakeClock, type Clock, type CommandRequest, type CommandResult, type CompletionAttempt, type Snapshot } from '../../src/shared/types';
 import { MemoryStore } from '../../src/server/store';
 import type { ConnectionStatus, Gateway, RevisionHint } from '../../src/client/gateway';
 import { LiveStore, type StoreAccount } from '../../src/client/liveStore';
-import type { Role } from '../../src/shared/constants';
+import type { HiddenObjectOwner, Role } from '../../src/shared/constants';
 
 export const T0 = 1_730_000_000_000;
 export const SEC = 1000;
@@ -15,12 +15,14 @@ export interface OperatorDef {
   display_name: string;
 }
 
+/** The four floor positions, the retained admin, and one open viewer. */
 export const OPERATORS: OperatorDef[] = [
   { id: 'lobby', role: 'LOBBY', display_name: 'Lan' },
-  { id: 'gate', role: 'GATE', display_name: 'Hung' },
   { id: 'corridor', role: 'CORRIDOR', display_name: 'Ngoc' },
+  { id: 'gate', role: 'GATE', display_name: 'Hung' },
   { id: 'room305', role: 'ROOM305', display_name: 'Tuan' },
   { id: 'supervisor', role: 'SUPERVISOR', display_name: 'Mai' },
+  { id: 'observer', role: 'OBSERVER', display_name: 'Viewer' },
 ];
 
 type Listener = (hint: RevisionHint) => void;
@@ -36,7 +38,7 @@ export class TestHub {
   /** Number of broadcast hints delivered, for convergence assertions. */
   broadcasts = 0;
 
-  constructor(options: { fake?: boolean; store?: MemoryStore; hiddenObjectOwner?: 'GATE' | 'CORRIDOR'; prepAllowanceMs?: number } = {}) {
+  constructor(options: { fake?: boolean; store?: MemoryStore; hiddenObjectOwner?: HiddenObjectOwner; prepAllowanceMs?: number } = {}) {
     this.clock = options.fake === false ? new (class implements Clock { nowMs() { return Date.now(); } })() : new FakeClock(T0);
     const store = options.store ?? new MemoryStore();
     const state: PersistedState =
@@ -149,6 +151,13 @@ export class TestHub {
   snapshot(): Snapshot {
     return this.engine.snapshot();
   }
+
+  /** Claims recorded on the round currently in play, in recording order. */
+  attempts(roundId?: string): CompletionAttempt[] {
+    const snap = this.snapshot();
+    const id = roundId ?? snap.active_round?.id;
+    return snap.attempts.filter((a) => a.round_id === id);
+  }
 }
 
 /** Flattened log for assertions about what was recorded. */
@@ -166,44 +175,62 @@ export function latest(hub: TestHub, action: CommandRequest['action']) {
 }
 
 /**
- * Plays one complete round through the correct operators, exactly as the five
- * phones would. `gameMs` is the resulting official duration.
+ * Plays one complete round through the positions that own each step, exactly as the
+ * four phones would. `claimMs` is the instant the players say they are finished and
+ * therefore the official duration; `verifyMs` is how long NPC2 then takes, which
+ * must not change the score.
  */
 export function playRound(
   hub: TestHub,
   opts: {
     prepMs?: number;
-    gameMs?: number;
+    claimMs?: number;
+    verifyMs?: number;
+    /** Record the claim but never validate it, so the round ends as TIME UP. */
     puzzle?: boolean;
+    /** Let NPC1 bypass the floor-2 confirmation instead of OPERATOR_02 confirming. */
+    bypass?: boolean;
+    exitMs?: number;
     resetMs?: number;
-    corridorFirst?: boolean;
+    /** The round's window. Defaults to the duration the event is configured with. */
+    durationMs?: number;
   } = {},
 ) {
-  const { prepMs = 60 * SEC, gameMs = 150 * SEC, puzzle = true, resetMs = 40 * SEC, corridorFirst = true } = opts;
+  const configured = hub.snapshot().event.config.game_limit_ms;
+  const {
+    prepMs = 60 * SEC,
+    claimMs = 150 * SEC,
+    verifyMs = 12 * SEC,
+    puzzle = true,
+    bypass = false,
+    exitMs = 20 * SEC,
+    resetMs = 40 * SEC,
+    durationMs = configured,
+  } = opts;
   hub.command('lobby', 'CALL_TEAM');
   hub.advance(prepMs);
-  hub.command('gate', 'START_GAME');
-  let elapsed = 0;
-  if (corridorFirst) {
-    hub.advance(20 * SEC);
-    hub.command('corridor', 'HALLWAY_PROGRESS');
-    elapsed += 20 * SEC;
-  }
+  if (bypass) hub.command('gate', 'FLOOR2_BYPASS', { reason: 'Đội đã lên thẳng tầng 3' });
+  else hub.command('corridor', 'CONFIRM_FLOOR2');
   hub.advance(20 * SEC);
-  elapsed += 20 * SEC;
-  hub.command('room305', 'ROOM_REACHED');
-  if (puzzle) hub.command('room305', 'PUZZLE_COMPLETE');
-  hub.advance(Math.max(0, gameMs - elapsed - 5 * SEC));
-  elapsed += Math.max(0, gameMs - elapsed - 5 * SEC);
-  hub.command('room305', 'RETURN_START');
-  hub.advance(5 * SEC);
-  const stop = hub.command('gate', 'GAME_STOP');
-  const config = hub.snapshot().event.config;
+  hub.command('gate', 'START_GAME');
+  hub.advance(claimMs);
+  let attempt: CompletionAttempt | null = null;
+  if (puzzle) {
+    hub.command('room305', 'CLAIM_COMPLETE');
+    attempt = hub.attempts().at(-1) ?? null;
+    hub.advance(verifyMs);
+    if (attempt) hub.command('room305', 'VERIFY_ATTEMPT', { attempt_id: attempt.id, decision: 'VALID' });
+    // Verification delay plus the walk out, so the exit is measurably later than the claim.
+    hub.advance(Math.max(0, exitMs - verifyMs));
+  } else {
+    // Without a validated claim the clock has to run out before the round can close.
+    hub.advance(Math.max(0, durationMs - claimMs + exitMs));
+  }
+  hub.command('gate', 'CONFIRM_EXIT');
   hub.advance(resetMs);
-  // Corridor and room reset concurrently; each press records its own timestamp.
-  hub.command('corridor', 'RESET_DONE');
+  // The floor-3 checks are confirmed concurrently by the staff who own them.
+  hub.command('gate', 'RESET_DONE');
   hub.command('room305', 'RESET_DONE');
-  if (config.hidden_object_owner === 'GATE') hub.command('gate', 'RESET_DONE');
   hub.command('gate', 'GATE_FINALIZE');
-  return { stop, round: hub.snapshot().rounds.at(-1)! };
+  return { attempt, round: hub.snapshot().rounds.at(-1)! };
 }

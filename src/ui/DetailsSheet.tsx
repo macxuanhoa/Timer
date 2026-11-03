@@ -2,12 +2,33 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useMemo, useState } from 'react';
 import type { LiveStore } from '../client/liveStore';
 import type { StoredSession } from './session';
-import { analytics, formatClockMs, formatClockSec, formatDuration, formatSeconds, formatWallTime, leaderboard, roundMetrics } from '../shared/metrics';
-import { OUTCOME_LABEL, RESET_TASKS, RESET_TASK_LABEL, REVIEW_REASON_LABEL, ROLE_LABEL, STATUS_LABEL, LAYOUTS, type Role } from '../shared/constants';
-import { isGameRunning } from '../shared/machine';
+import { analytics, formatClockCs, formatClockMs, formatClockSec, formatDuration, formatSeconds, formatWallTime, leaderboard, roundMetrics } from '../shared/metrics';
+import {
+  ABORT_KINDS,
+  ABORT_KIND_LABEL,
+  ACTION_LABEL,
+  ATTEMPT_LABEL,
+  OUTCOME_LABEL,
+  PHASE_LABEL,
+  RESET_TASKS,
+  RESET_TASK_LABEL,
+  REVIEW_REASON_LABEL,
+  ROLE_LABEL,
+  ROLE_SHORT,
+  ROUND_DURATION_MAX_MS,
+  ROUND_DURATION_MIN_MS,
+  STATUS_LABEL,
+  TRANSPORT_LABEL,
+  LAYOUTS,
+  type AbortKind,
+  type Role,
+} from '../shared/constants';
+import { flowStatus, liveStatus, roundLimitMs } from '../shared/machine';
+import { USING_SUPABASE } from '../client/gateway';
 import { disputedRounds } from '../shared/metrics';
 import { pad } from '../client/selectors';
 import { alarms } from './sound';
+import { EyeIcon, EyeOffIcon } from './icons';
 import { StationStrip } from './StationStrip';
 import type { Round } from '../shared/types';
 
@@ -33,6 +54,11 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
   // clock argument, so the memo keys on the snapshot alone: with a game running the
   // dashboard ticks at display rate, and this summarised the whole event each time.
   const stats = useMemo(() => (snap ? analytics(snap, now) : null), [snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The wall display follows the authoritative countdown, not a phone's own timer.
+  const counting =
+    snap !== null && snap.active_round !== null
+      ? liveStatus(snap.active_round, snap.attempts ?? [], roundLimitMs(snap.active_round, snap.event.config.game_limit_ms), now) === 'RUNNING'
+      : false;
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -56,7 +82,7 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
                 {/* Wall display + station switch: the only two actions that are not
                     a handoff, so they live here instead of the operator screen. */}
                 <div className="flex gap-2">
-                  {isGameRunning(snap.active_round) && onOpenBigScreen && (
+                  {counting && onOpenBigScreen && (
                     <button
                       type="button"
                       onClick={onOpenBigScreen}
@@ -85,7 +111,7 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
                 </Section>
                 <Section title="Bảng xếp hạng" testid="section-leaderboard">
                   {rows.length === 0 ? (
-                    <p className="py-3 text-[0.75rem] text-mute">Chưa có đội hoàn thành trận đồ trong 5:00.</p>
+                    <p className="py-3 text-[0.75rem] text-mute">Chưa có đội hoàn thành trận đồ trong thời lượng lượt chơi.</p>
                   ) : (
                     <table className="w-full text-[0.75rem]" data-testid="leaderboard-table">
                       <thead className="text-mute">
@@ -155,44 +181,65 @@ function Row({ k, v, tone = 'text-snow' }: { k: string; v: string; tone?: string
 
 function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>; now: number }) {
   const rounds = [...snap.rounds].reverse().slice(0, 6);
+  const configLimit = snap.event.config.game_limit_ms;
   if (rounds.length === 0) return <p className="text-[0.75rem] text-mute">Chưa có lượt chơi nào.</p>;
   return (
     <div className="flex flex-col gap-3">
       {rounds.map((r) => {
-        // One source for the score: the flexible 5:00 window (pauses excluded).
-        const m = roundMetrics(r, snap.reset_tasks, now);
+        // One source for the score: the validated claim, frozen when NPC2 finalised it.
+        const limit = roundLimitMs(r, configLimit);
+        const m = roundMetrics(r, snap.reset_tasks, now, snap.attempts ?? [], configLimit);
+        const claims = (snap.attempts ?? []).filter((a) => a.round_id === r.id);
         return (
           <div key={r.id} data-testid={`round-detail-${r.team_number}`}>
             <p className="mb-1 text-[0.75rem] font-semibold text-snow">
-              TEAM #{pad(r.team_number)} <span className="text-mute">· {STATUS_LABEL[r.status]}</span>
+              ĐỘI #{pad(r.team_number)}{' '}
+              <span className="text-mute">· {STATUS_LABEL[r.status] ?? PHASE_LABEL[flowStatus(r) ?? ''] ?? 'Không rõ'}</span>
             </p>
-            <Row k="Gọi đội" v={r.called_at ? formatWallTime(r.called_at) : '—'} />
-            <Row k="Bắt đầu trận" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
-            <Row k="Chốt giờ" v={r.game_stopped_at ? formatWallTime(r.game_stopped_at) : '—'} />
+            <Row k="Nhận đội" v={r.called_at ? formatWallTime(r.called_at) : '—'} />
+            <Row
+              k="Tầng 2"
+              v={r.floor2_confirmed_at ? formatWallTime(r.floor2_confirmed_at) : r.floor2_bypassed_at ? 'BỎ QUA (NPC 1)' : '—'}
+              tone={r.floor2_bypassed_at !== null ? 'text-ember' : 'text-snow'}
+            />
+            <Row k="Bắt đầu lượt chơi" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
+            <Row k="Thời lượng lượt" v={r.game_started_at !== null ? formatClockSec(limit) : '—'} />
+            <Row k="Hết giờ" v={r.deadline_at ? formatWallTime(r.deadline_at) : '—'} />
             <Row
               k="Điểm chính thức"
               v={m.game_ms === null ? '—' : formatClockMs(m.game_ms)}
-              tone={m.game_ms !== null && m.game_ms > snap.event.config.game_limit_ms ? 'text-blood' : 'text-snow'}
+              tone={m.game_ms !== null && m.game_ms > limit ? 'text-blood' : 'text-snow'}
             />
             <Row k="Chuẩn bị" v={formatSeconds(m.prep_ms)} />
-            {r.game_reset_count > 0 && (
-              <Row k="Reset 5:00 giữa trận" v={`${r.game_reset_count} lần`} tone="text-ember" />
-            )}
-            {r.game_pause_count > 0 && <Row k="Tạm dừng 5:00" v={`${r.game_pause_count} lần`} tone="text-ember" />}
+            <Row k="Rời tầng 3" v={r.exit_confirmed_at ? formatWallTime(r.exit_confirmed_at) : '—'} />
+            <Row k="Hủy lượt" v={r.aborted_at ? `${formatWallTime(r.aborted_at)}${r.abort_kind ? ` · ${ABORT_KIND_LABEL[r.abort_kind]}` : ''}` : '—'} tone={r.aborted_at !== null ? 'text-blood' : 'text-snow'} />
             <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
-            <Row k="Reset hành lang" v={formatSeconds(m.corridor_reset_ms)} />
-            <Row k="Reset phòng 305" v={formatSeconds(m.room_reset_ms)} />
-            <Row k="GATE chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
-            <Row k="Kết quả" v={OUTCOME_LABEL[r.outcome]} tone={r.outcome === 'WON' ? 'text-jade' : r.outcome === 'TIMEOUT' ? 'text-blood' : 'text-mute'} />
+            <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
+            <Row k="Kết quả" v={OUTCOME_LABEL[m.result] ?? 'Không rõ'} tone={m.result === 'WON' ? 'text-jade' : m.result === 'TIME_UP' || m.result === 'ABORTED' ? 'text-blood' : 'text-mute'} />
+            {claims.length > 0 && (
+              <ul className="mt-1 flex flex-col gap-0.5" data-testid={`claims-${r.team_number}`}>
+                {claims.map((a) => (
+                  <li key={a.id} className="flex items-baseline justify-between gap-2 text-[0.66rem]">
+                    <span className="text-mute">Lần {a.seq} · {formatClockMs(a.elapsed_ms)}</span>
+                    <span className={a.status === 'VALID' ? 'text-jade' : a.status === 'INVALID' ? 'text-mute' : 'text-ember'}>
+                      {ATTEMPT_LABEL[a.status as keyof typeof ATTEMPT_LABEL] ?? 'Không rõ'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {r.game_reset_count > 0 && (
+              <Row k="Reset đồng hồ (lịch sử)" v={`${r.game_reset_count} lần`} tone="text-ember" />
+            )}
             {r.needs_review && (
               <p className="mt-1 text-[0.68rem] text-ember" data-testid={`review-${r.team_number}`}>
                 CHỜ XÉT: {r.review_reasons.map((x) => REVIEW_REASON_LABEL[x] ?? x).join(' · ')}
               </p>
             )}
             {r.decertified && <p className="mt-1 text-[0.68rem] text-blood">Đã bị loại khỏi bảng xếp hạng (có nhật ký).</p>}
-            {r.stop_transport_ms !== null && (
+            {r.start_transport_ms !== null && (
               <p className="mt-1 text-[0.66rem] text-mute">
-                Network của nhịp CHỐT GIỜ: {r.stop_transport_ms} ms (không trừ vào điểm)
+                Network của nhịp BẮT ĐẦU: {r.start_transport_ms} ms (không trừ vào điểm)
               </p>
             )}
             {m.admitted_by_override && <p className="mt-1 text-[0.68rem] text-ember">Vào trận bằng ngoại lệ có nhật ký kiểm toán.</p>}
@@ -236,7 +283,8 @@ function NpcStatus({
             <div className="min-w-0">
               <p className="text-[0.72rem] font-semibold text-snow">{ROLE_LABEL[op.role]}</p>
               <p className="truncate text-[0.66rem] text-mute">
-                {op.last_action ? `${op.last_action} · ${op.last_action_at ? formatWallTime(op.last_action_at) : ''}` : 'chưa thao tác'}
+                {op.last_detail ?? (op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác')}
+                {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
               </p>
             </div>
             <span
@@ -258,7 +306,7 @@ function NpcStatus({
               k={RESET_TASK_LABEL[t.task_key]}
               v={
                 t.completed_at && t.cycle === (round.reset_cycle ?? 1)
-                  ? `${t.confirmed_by_role ?? ''} ${formatWallTime(t.completed_at)}${t.layout ? ` · ${t.layout}` : ''}`
+                  ? `${ROLE_SHORT[t.confirmed_by_role as Role] ?? ''} ${formatWallTime(t.completed_at)}${t.layout ? ` · kiểu ${t.layout}` : ''}`
                   : 'chờ'
               }
               tone={t.completed_at && t.cycle === (round.reset_cycle ?? 1) ? 'text-jade' : 'text-ember'}
@@ -270,7 +318,7 @@ function NpcStatus({
       {/* Scenario C: one responsible operator prepares the layout, everyone can read it. */}
       <div className="mt-3 rounded-panel border border-hair px-3 py-2" data-testid="layout-block">
         <p className="text-[0.68rem] text-mute">
-          Bố trí vật ẩn · <span className="text-snow">{snap.event.config.hiding_layout}</span> · do {owner} chuẩn bị
+          Bố trí vật ẩn · <span className="text-snow">kiểu {snap.event.config.hiding_layout}</span> · do {ROLE_SHORT[owner]} chuẩn bị
         </p>
         {canSetLayout && (
           <div className="mt-2 flex gap-2">
@@ -301,7 +349,7 @@ function Connectivity({ store, now }: { store: LiveStore; now: number }) {
   const age = store.dataAgeMs();
   return (
     <div data-testid="connectivity">
-      <Row k="Trạng thái" v={state.status} tone={state.status === 'CONNECTED' ? 'text-jade' : 'text-ember'} />
+      <Row k="Trạng thái" v={TRANSPORT_LABEL[state.status] ?? state.status} tone={state.status === 'CONNECTED' ? 'text-jade' : 'text-ember'} />
       <Row k="Bản trạng thái (revision)" v={String(state.revision)} />
       <Row k="Đọc máy chủ gần nhất cách" v={age === null ? 'chưa đọc' : `${Math.round(age / 1000)}s`} />
       <Row k="Độ trễ vòng gọi (RTT)" v={state.rttMs === null ? 'chưa đo' : `${Math.round(state.rttMs)} ms`} />
@@ -360,8 +408,8 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
         tone="text-ember"
       />
       <Row k="Tổng thời gian chờ" v={formatDuration(stats.total_idle_ms)} />
-      <Row k="Reset 5:00 (toàn sự kiện)" v={String(stats.clock_resets)} tone={stats.clock_resets > 0 ? 'text-ember' : 'text-snow'} />
-      <Row k="Tạm dừng 5:00 (toàn sự kiện)" v={String(stats.clock_pauses)} tone={stats.clock_pauses > 0 ? 'text-ember' : 'text-snow'} />
+      <Row k="Reset đồng hồ (toàn sự kiện)" v={String(stats.clock_resets)} tone={stats.clock_resets > 0 ? 'text-ember' : 'text-snow'} />
+      <Row k="Tạm dừng đồng hồ (toàn sự kiện)" v={String(stats.clock_pauses)} tone={stats.clock_pauses > 0 ? 'text-ember' : 'text-snow'} />
       <div className="mt-3 rounded-panel border border-hair px-3 py-2 text-[0.66rem] leading-relaxed text-mute" data-testid="sync-quality">
         Đồng bộ hiển thị: offset máy khách đã hiệu chỉnh bằng RTT. RTT trung vị {state.maxDisplayErrorMs === null ? '—' : 'đã đo'}, sai số
         tối đa ước tính {state.maxDisplayErrorMs === null ? 'chưa đồng bộ' : `${state.maxDisplayErrorMs} ms`} · now = {formatWallTime(now)}
@@ -378,16 +426,20 @@ function History({ snap }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot
         <li key={l.seq} className="border-b border-hair/40 pb-1.5 text-[0.7rem] last:border-0">
           <div className="flex items-baseline justify-between gap-2">
             <span className="digital text-mute">{formatWallTime(l.at_ms)}</span>
-            <span className="text-[0.62rem] tracking-[0.08em] text-mute">rev {l.revision}</span>
+            <span className="text-[0.62rem] tracking-[0.08em] text-mute">bản {l.revision}</span>
           </div>
           <p className="text-snow">
-            {l.metadata?.detail_text ? String(l.metadata.detail_text) : l.action}
+            {/* The engine already writes a Vietnamese sentence for every press; the
+                action type is only a fallback for rows older than that habit. */}
+            {l.metadata?.detail_text ? String(l.metadata.detail_text) : ACTION_LABEL[l.action] ?? 'Thao tác không rõ'}
             {l.team_number !== null ? <span className="text-mute"> · #{pad(l.team_number)}</span> : null}
           </p>
           <p className="text-[0.62rem] text-mute">
-            {l.actor_role}
-            {l.actor_id === 'system.clock' ? ' (tự động)' : ` · ${l.actor_id}`}
-            {l.from_state && l.to_state ? ` · ${l.from_state} → ${l.to_state}` : ''}
+            {ROLE_SHORT[l.actor_role as Role] ?? l.actor_role}
+            {l.actor_id === 'system.clock' ? ' (tự động)' : ''}
+            {l.from_state && l.to_state
+              ? ` · ${STATUS_LABEL[l.from_state] ?? l.from_state} → ${STATUS_LABEL[l.to_state] ?? l.to_state}`
+              : ''}
             {l.metadata?.reason ? ` · lý do: ${String(l.metadata.reason)}` : ''}
           </p>
         </li>
@@ -402,6 +454,16 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   const [prep, setPrep] = useState(String(Math.round(snap.event.config.prep_allowance_ms / 1000)));
   const [target, setTarget] = useState(snap.event.config.reset_target_ms === null ? '' : String(Math.round(snap.event.config.reset_target_ms / 1000)));
   const [owner, setOwner] = useState(snap.event.config.hidden_object_owner);
+  // The round duration is edited as phút + giây, the way it is read out on the floor.
+  const [minutes, setMinutes] = useState(String(Math.floor(snap.event.config.game_limit_ms / 60_000)));
+  const [seconds, setSeconds] = useState(String(Math.floor((snap.event.config.game_limit_ms % 60_000) / 1000)));
+  const [abortKind, setAbortKind] = useState<AbortKind>('technical');
+  // The board release is a supervisor action since V3.1 §6.1: the same secret, the
+  // same peek-and-hide field, but only from a phone that actually holds the seat.
+  const [releaseSecret, setReleaseSecret] = useState('');
+  const [releaseShown, setReleaseShown] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [released, setReleased] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [reopen, setReopen] = useState<{ round_id: string; task_key: string; reason: string }>({
     round_id: '',
@@ -412,29 +474,69 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   const [closeReason, setCloseReason] = useState('');
   const [correction, setCorrection] = useState<{ round_id: string; field: string; value: string }>({
     round_id: '',
-    field: 'game_stopped_at',
+    field: 'exit_confirmed_at',
     value: '',
   });
   const started = snap.event.event_started_at !== null;
   const round: Round | null = snap.active_round;
   const disputed = disputedRounds(snap.rounds);
+  const durationMs = (Number(minutes) || 0) * 60_000 + (Number(seconds) || 0) * 1000;
+  const durationValid =
+    Number.isInteger(durationMs) && durationMs >= ROUND_DURATION_MIN_MS && durationMs <= ROUND_DURATION_MAX_MS;
+  // A reset may only be reopened once the team is out of the area, or on the very
+  // last round if readiness was already granted.
   const reopenable = snap.rounds.filter(
-    (r) => (r.status !== 'GATE_CLEARED' && r.game_stopped_at !== null) || (r.system_ready_at !== null && r.id === snap.rounds.at(-1)?.id),
+    (r) => flowStatus(r) === 'EXIT_CONFIRMED' || (r.system_ready_at !== null && r.id === snap.rounds.at(-1)?.id),
   );
 
   const saveConfig = () =>
     store.act('CONFIGURE', {
+      game_limit_ms: durationMs,
       prep_allowance_ms: Math.max(0, Number(prep) || 0) * 1000,
       reset_target_ms: target.trim() === '' ? null : Math.max(0, Number(target) || 0) * 1000,
       hidden_object_owner: owner,
     });
 
+  /**
+   * Every occupied station returns to CÒN TRỐNG so a new shift can pick its seat
+   * again. The secret is verified inside PostgreSQL, and the answer is the same
+   * authoritative floor predicate the picker shows — so this can never run over a
+   * team that is still inside, and never touches a clock, a result or a checklist.
+   */
+  const releaseBoard = async () => {
+    setReleasing(true); setReleased(null);
+    try {
+      const { resetAllStations, resetErrorMessage } = await import('../client/supabaseAuth');
+      const result = await resetAllStations(releaseSecret);
+      setReleased(result?.ok
+        ? (result.freed ?? 0) > 0 ? `ĐÃ GIẢI PHÓNG ${result.freed} VỊ TRÍ · BẢNG CÒN TRỐNG` : 'BẢNG ĐÃ TRỐNG — KHÔNG CÓ VỊ TRÍ NÀO BỊ ĐÁ'
+        : resetErrorMessage(result));
+      if (result?.ok) { setReleaseSecret(''); setReleaseShown(false); }
+    } catch {
+      setReleased('MẤT KẾT NỐI — CHƯA GIẢI PHÓNG ĐƯỢC. KIỂM TRA MẠNG RỒI BẤM LẠI');
+    } finally {
+      setReleasing(false);
+    }
+  };
+
   const exportCsv = () => {
-    const lines = ['team_number,outcome,official_ms,prep_ms,reset_ms,corridor_ms,room_ms,gate_ms'];
+    const limit = snap.event.config.game_limit_ms;
+    const lines = ['team_number,result,official_ms,deadline_ms,prep_ms,exit_ms,reset_ms,claims,rejected,floor2'];
     for (const r of snap.rounds) {
-      const m = roundMetrics(r, snap.reset_tasks);
+      const m = roundMetrics(r, snap.reset_tasks, undefined, snap.attempts ?? [], limit);
       lines.push(
-        [r.team_number, r.outcome, m.game_ms ?? '', m.prep_ms ?? '', m.reset_total_ms ?? '', m.corridor_reset_ms ?? '', m.room_reset_ms ?? '', m.gate_clear_ms ?? ''].join(','),
+        [
+          r.team_number,
+          m.result,
+          m.game_ms ?? '',
+          r.deadline_at ?? '',
+          m.prep_ms ?? '',
+          r.exit_confirmed_at ?? '',
+          m.reset_total_ms ?? '',
+          m.claims,
+          m.rejected,
+          r.floor2_bypassed_at !== null ? 'bypassed' : r.floor2_confirmed_at !== null ? 'confirmed' : 'pending',
+        ].join(','),
       );
     }
     lines.push('');
@@ -453,11 +555,40 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   return (
     <div className="flex flex-col gap-4" data-testid="management">
       <div className="flex flex-col gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">ĐIỀU KHIỂN SỰ KIỆN (SUPERVISOR)</p>
-        <p className="text-[0.7rem] text-mute">
-          Giới hạn mỗi lượt{' '}
-          {Math.round(snap.event.config.game_limit_ms / 1000)} giây (mặc định bảo vệ, chỉ đổi trước khi chạy).
+        <p className="text-[0.7rem] tracking-[0.1em] text-mute">ĐIỀU KHIỂN SỰ KIỆN · QUẢN TRỊ VIÊN</p>
+        <p className="text-[0.7rem] text-mute" data-testid="cfg-duration-current">
+          Thời lượng lượt chơi hiện hành: <span className="text-snow">{formatClockSec(snap.event.config.game_limit_ms)}</span>.
+          {round && round.game_started_at !== null ? ' Thời lượng mới sẽ áp dụng từ lượt tiếp theo.' : ''}
         </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-[0.68rem] text-mute">
+            Phút (0–59)
+            <input
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+              maxLength={2}
+              className="mt-1 w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="cfg-duration-min"
+            />
+          </label>
+          <label className="text-[0.68rem] text-mute">
+            Giây (0–59)
+            <input
+              value={seconds}
+              onChange={(e) => setSeconds(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+              maxLength={2}
+              className="mt-1 w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="cfg-duration-sec"
+            />
+          </label>
+        </div>
+        {!durationValid && (
+          <p role="alert" className="text-[0.68rem] text-blood" data-testid="cfg-duration-error">
+            Thời lượng hợp lệ từ 00:01 đến {formatClockSec(ROUND_DURATION_MAX_MS)}.
+          </p>
+        )}
         {!started && (
           <div className="grid grid-cols-2 gap-2">
             <label className="text-[0.68rem] text-mute">
@@ -473,20 +604,69 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <label className="text-[0.68rem] text-mute">
           Người đặt lại vật ẩn
           <select value={owner} onChange={(e) => setOwner(e.target.value as Role & typeof owner)} className="mt-1 w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="cfg-owner">
-            <option value="CORRIDOR">CORRIDOR</option>
-            <option value="GATE">GATE</option>
+            <option value="ROOM305">NPC 2 · PHÒNG 305</option>
+            <option value="GATE">NPC 1 · CỬA VÀO</option>
           </select>
         </label>
-        <button type="button" onClick={saveConfig} className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow" data-testid="cfg-save">
+        <button
+          type="button"
+          onClick={saveConfig}
+          disabled={!durationValid}
+          className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow disabled:opacity-50"
+          data-testid="cfg-save"
+        >
           LƯU CẤU HÌNH
         </button>
       </div>
+
+      {USING_SUPABASE && (
+        <div className="flex flex-col gap-2" data-testid="release-panel">
+          <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
+          <p className="text-[0.66rem] leading-snug text-mute">
+            Thu hồi mọi máy đang giữ chỗ trực, trả về CÒN TRỐNG để ca mới chọn lại vị trí. Đồng hồ,
+            kết quả, lần báo hoàn thành và checklist vẫn còn nguyên. Chỉ máy đang giữ ghế Quản trị
+            mới làm được việc này.
+          </p>
+          <div className="home-pin-field">
+            <input
+              type={releaseShown ? 'text' : 'password'}
+              autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+              maxLength={64} minLength={10}
+              aria-label="Mật khẩu giải phóng bảng" value={releaseSecret}
+              onChange={(e) => { setReleaseSecret(e.target.value); setReleased(null); }}
+              disabled={releasing}
+              className="w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="release-secret"
+            />
+            <button type="button" className="home-pin-peek" data-testid="release-peek" disabled={releasing}
+              aria-label={releaseShown ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} aria-pressed={releaseShown}
+              onClick={() => setReleaseShown((shown) => !shown)}>
+              {releaseShown ? <EyeOffIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
+            </button>
+          </div>
+          {/* No pre-computed hint here: the answer comes from the same PostgreSQL
+              predicate that guards the RPC, so the operator reads one truth instead
+              of two that could drift apart. */}
+          <button
+            type="button"
+            disabled={releasing || releaseSecret.trim().length < 10}
+            onClick={() => void releaseBoard()}
+            className="rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-semibold text-blood disabled:opacity-50"
+            data-testid="release-confirm"
+          >
+            {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG TOÀN BỘ VỊ TRÍ'}
+          </button>
+          {released !== null && (
+            <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
         {!started ? (
           <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
-            LOBBY gọi đội đầu tiên. GATE bấm BẮT ĐẦU để chạy đồng hồ 5:00.
+            Nhân sự 01 nhận đội đầu tiên ở sảnh. NPC 1 bấm BẮT ĐẦU để mở đồng hồ lượt chơi.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -514,17 +694,36 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         {round && (
           <>
             <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Lý do can thiệp (bắt buộc)" className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="admin-reason" />
+            <label className="text-[0.68rem] text-mute">
+              Loại hủy lượt chơi
+              <select
+                value={abortKind}
+                onChange={(e) => setAbortKind(e.target.value as AbortKind)}
+                className="mt-1 w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+                data-testid="admin-abort-kind"
+              >
+                {ABORT_KINDS.map((k) => (
+                  <option key={k} value={k}>{ABORT_KIND_LABEL[k]}</option>
+                ))}
+              </select>
+            </label>
+            <p className="text-[0.66rem] leading-snug text-mute" data-testid="admin-abort-note">
+              {abortKind === 'misconduct'
+                ? 'Hủy vì kỷ luật: loại kết quả, kể cả lần báo đã ghi trước hạn — chỉ Quản trị viên xét lại mới mở lại được.'
+                : 'Hủy vì sự cố hoặc an toàn: lần báo đã ghi trước hạn vẫn còn nguyên và NPC 2 có thể xác minh.'}
+              {' '}Hủy lượt không thay thế xác nhận rời khu vực: NPC 1 vẫn phải bấm XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3.
+            </p>
             <button
               type="button"
               disabled={!reason.trim()}
               onClick={() => {
-                void store.act('ABORT_ROUND', { reason: reason.trim() });
+                void store.act('ABORT_ROUND', { reason: reason.trim(), kind: abortKind });
                 setReason('');
               }}
               className="rounded-panel border border-blood/60 bg-blood/10 px-3 py-4 text-[0.78rem] font-bold text-blood disabled:opacity-50"
               data-testid="admin-abort"
             >
-              DỪNG KHẨN CẤP ĐỘI #{pad(round.team_number)}
+              HỦY LƯỢT CHƠI ĐỘI #{pad(round.team_number)}
             </button>
           </>
         )}
@@ -535,15 +734,15 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <select value={correction.round_id} onChange={(e) => setCorrection({ ...correction, round_id: e.target.value })} className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="corr-round">
           <option value="">Chọn đội…</option>
           {[...snap.rounds].reverse().map((r) => (
-            <option key={r.id} value={r.id}>#{pad(r.team_number)} · {STATUS_LABEL[r.status]}</option>
+            <option key={r.id} value={r.id}>#{pad(r.team_number)} · {STATUS_LABEL[r.status] ?? 'Không rõ'}</option>
           ))}
         </select>
         <div className="grid grid-cols-2 gap-2">
           <select value={correction.field} onChange={(e) => setCorrection({ ...correction, field: e.target.value })} className="rounded border border-hair bg-ink px-2 py-2 text-[0.7rem] text-snow" data-testid="corr-field">
-            <option value="game_started_at">Bắt đầu trận</option>
-            <option value="game_stopped_at">Chốt giờ</option>
-            <option value="puzzle_completed_at">Trận đồ xong</option>
-            <option value="exit_confirmed_at">Khách ra</option>
+            <option value="game_started_at">Bắt đầu lượt chơi</option>
+            <option value="deadline_at">Mốc hết giờ</option>
+            <option value="exit_confirmed_at">Đội rời tầng 3</option>
+            <option value="floor2_confirmed_at">Xác nhận tầng 2</option>
           </select>
         <input
           value={correction.value}
@@ -586,7 +785,8 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
             <option value="">Chọn đội tranh chấp…</option>
             {disputed.map((r) => (
               <option key={r.id} value={r.id}>
-                #{pad(r.team_number)} · {r.official_duration_ms} ms · {r.review_reasons.join(', ')}
+                #{pad(r.team_number)} · {formatClockCs(r.official_duration_ms ?? 0)} ·{' '}
+                {r.review_reasons.map((x) => REVIEW_REASON_LABEL[x] ?? x).join(' · ')}
               </option>
             ))}
           </select>
@@ -636,7 +836,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
 
       {reopenable.length > 0 && (
         <div className="flex flex-col gap-2">
-          <p className="text-[0.7rem] tracking-[0.1em] text-mute">MỞ LẠI RESET (P0-06)</p>
+          <p className="text-[0.7rem] tracking-[0.1em] text-mute">MỞ LẠI MỘT BƯỚC RESET</p>
           <select
             value={reopen.round_id}
             onChange={(e) => setReopen({ ...reopen, round_id: e.target.value })}

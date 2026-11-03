@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Dashboard } from './Dashboard';
 import { Home } from './Home';
+import { Observer } from './Observer';
 import { enterStation, gatewayFor, logout, refreshSession, saveSession, type StoredSession } from './session';
 import { USING_SUPABASE } from '../client/gateway';
 import { LiveStore } from '../client/liveStore';
@@ -90,7 +91,18 @@ export default function App() {
   if (checking) return <Splash text="ĐANG KIỂM TRA PHIÊN…" />;
   if (!session) return <><Home error={error} canSelect={verified} onEnter={acceptSession} /><PwaUpdate /></>;
   if (!liveStore) return <Splash text={error ?? 'ĐANG KẾT NỐI MÁY CHỦ…'} />;
-  return <><Dashboard store={liveStore} account={session.account} onLogout={release} /><PwaUpdate /></>;
+  // A viewer lands on the read-only board, never on an operator console. Which
+  // screen renders is decided from the server-resolved role, not from a route.
+  return (
+    <>
+      {session.account.role === 'OBSERVER' ? (
+        <Observer store={liveStore} account={session.account} token={session.token} onLogout={release} />
+      ) : (
+        <Dashboard store={liveStore} account={session.account} onLogout={release} />
+      )}
+      <PwaUpdate />
+    </>
+  );
 }
 
 function Splash({ text }: { text: string }) {

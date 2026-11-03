@@ -1,41 +1,62 @@
 import {
+  ABORT_KINDS,
+  ABORT_KIND_LABEL,
+  DEFAULT_ROUND_DURATION_MS,
   EVENT_DURATION_MS,
-  GAME_LIMIT_MS,
+  PHASE_LABEL,
   PREP_ALLOWANCE_MS,
   RESET_TARGET_MS,
   REVIEW_THRESHOLD_MS,
+  ROUND_DURATION_MAX_MS,
+  ROUND_DURATION_MIN_MS,
   STALL_WARN_MS,
+  ROLE_SHORT,
   TEAM_NAME_MAX,
+  resetTasksSentence,
+  type AbortKind,
   type HidingLayout,
   type ResetTaskKey,
   type Role,
 } from '../shared/constants.ts';
 import {
   STAGE_OF_STATUS,
+  attemptsOf,
+  authorizePhase,
+  authorizeRole,
   deriveEventStatus,
   derivePhase,
   evaluateDispatch,
   evaluateGameStart,
   finalizeSnapshot,
+  flowStatus,
   gameElapsedMs,
-  isAllowed,
-  isGameRunning,
+  hasValidatedAttempt,
+  isEligibleClaim,
   isResetWindow,
   isTerminalRound,
+  liveStatus,
+  pendingEligibleClaims,
+  resultOf,
+  roundDeadlineMs,
+  roundLimitMs,
 } from '../shared/machine.ts';
 import type {
   ActionType,
   Clock,
   CommandRequest,
   CommandResult,
+  CompletionAttempt,
   EventConfig,
   EventSession,
+  FlowStatus,
+  LegacyRoundStatus,
   LogEntry,
   OperatorState,
   OperationStatus,
   Outcome,
   ResetTask,
   Round,
+  RoundResult,
   Snapshot,
 } from '../shared/types.ts';
 
@@ -49,6 +70,8 @@ export interface PersistedState {
   event: EventSession;
   rounds: Round[];
   reset_tasks: ResetTask[];
+  /** Completion claims, append-only: an earlier attempt is never overwritten. */
+  attempts: CompletionAttempt[];
   log: LogEntry[];
   /** idempotency key -> committed outcome, so a retry never double-writes. */
   processed_keys: Record<string, { revision: number; code: string; message: string }>;
@@ -60,11 +83,11 @@ export function defaultConfig(): EventConfig {
   return {
     event_name: 'SCREAM CONTROL — Room 305',
     event_duration_ms: EVENT_DURATION_MS,
-    game_limit_ms: GAME_LIMIT_MS,
+    game_limit_ms: DEFAULT_ROUND_DURATION_MS,
     prep_allowance_ms: PREP_ALLOWANCE_MS,
     start_team_number: 1,
     reset_target_ms: RESET_TARGET_MS,
-    hidden_object_owner: 'CORRIDOR',
+    hidden_object_owner: 'ROOM305',
     review_threshold_ms: REVIEW_THRESHOLD_MS,
     stall_warn_ms: STALL_WARN_MS,
     hiding_layout: 'A',
@@ -86,36 +109,90 @@ export function initialState(nowMs: number, overrides: Partial<EventConfig> = {}
     },
     rounds: [],
     reset_tasks: [],
+    attempts: [],
     log: [],
     processed_keys: {},
   };
 }
 
 /**
- * Sessions persisted before the 5-minute clock became pausable/resettable carry
- * none of the new fields. Filling them from the old timestamps keeps a running
- * event readable across a deploy instead of crashing the countdown.
+ * Rows persisted before the unified flow carry none of the new columns, and their
+ * status text belongs to the retired five-station relay. Filling the fields from
+ * what is already there keeps a running event readable across a deploy instead of
+ * crashing the countdown, and maps every legacy status onto the one vocabulary the
+ * rest of the system reads.
  */
-export function hydrateState(state: PersistedState): PersistedState {
+export function hydrateState(state: PersistedState, nowMs = Date.now()): PersistedState {
+  state.attempts ??= [];
   for (const r of state.rounds) {
-    // Rows written by an older build simply lack these keys; read them as optional.
     const legacy: Partial<Round> = r;
-    if (typeof legacy.game_elapsed_ms !== 'number') {
-      r.game_elapsed_ms =
-        legacy.official_duration_ms ??
-        (legacy.game_started_at !== null && legacy.game_started_at !== undefined
-          ? Math.max(0, (legacy.game_stopped_at ?? 0) - legacy.game_started_at)
-          : 0);
+    // V3.1 fields: rows written before the duration became configurable and before
+    // the cancellation kinds existed are filled from what the round already proves.
+    if (legacy.round_duration_ms === undefined) {
+      r.round_duration_ms = r.deadline_at !== null && r.game_started_at !== null
+        ? Math.max(0, r.deadline_at - r.game_started_at)
+        : null;
     }
-    if (legacy.game_anchor_ms === undefined) {
-      // Older rows may lack the key entirely, so `Partial<Round>` makes it optional.
-      const started = legacy.game_started_at;
-      r.game_anchor_ms = typeof started === 'number' && (legacy.game_stopped_at ?? null) === null ? started : null;
-    }
+    if (legacy.abort_kind === undefined) r.abort_kind = r.aborted_at !== null ? 'safety' : null;
+    if (legacy.abort_reason === undefined) r.abort_reason = null;
+    if (typeof legacy.game_elapsed_ms !== 'number') r.game_elapsed_ms = 0;
+    if (legacy.game_anchor_ms === undefined) r.game_anchor_ms = null;
     if (typeof legacy.game_reset_count !== 'number') r.game_reset_count = 0;
     if (typeof legacy.game_pause_count !== 'number') r.game_pause_count = 0;
+    if (legacy.received_by_role === undefined) r.received_by_role = r.status === 'LOBBY_CALL' ? null : 'LOBBY';
+    if (legacy.received_by === undefined) r.received_by = null;
+    if (legacy.floor2_confirmed_at === undefined) r.floor2_confirmed_at = null;
+    if (legacy.floor2_confirmed_by_role === undefined) r.floor2_confirmed_by_role = null;
+    if (legacy.floor2_confirmed_by === undefined) r.floor2_confirmed_by = null;
+    if (legacy.floor2_bypassed_at === undefined) r.floor2_bypassed_at = null;
+    if (legacy.floor2_bypassed_by_role === undefined) r.floor2_bypassed_by_role = null;
+    if (legacy.floor2_bypassed_by === undefined) r.floor2_bypassed_by = null;
+    if (legacy.floor2_bypass_reason === undefined) r.floor2_bypass_reason = null;
+    if (legacy.started_by_role === undefined) r.started_by_role = null;
+    if (legacy.started_by === undefined) r.started_by = null;
+    if (legacy.deadline_at === undefined) r.deadline_at = null;
+    if (legacy.validated_attempt_id === undefined) r.validated_attempt_id = null;
+    if (legacy.exit_by_role === undefined) r.exit_by_role = null;
+    if (legacy.exit_by === undefined) r.exit_by = null;
+    if (legacy.exit_reason === undefined) r.exit_reason = null;
+    if (legacy.finalized_by_role === undefined) r.finalized_by_role = null;
+    if (legacy.result === undefined) r.result = legacyResult(r.outcome);
+    if (legacy.stage !== STAGE_OF_STATUS[r.status]) r.stage = STAGE_OF_STATUS[r.status] ?? r.stage;
+    // One vocabulary: rewrite the stored status onto the authoritative flow. A legacy
+    // row that was mid-window keeps its clock (the deadline is derived from the fields
+    // it does have), so nobody gains or loses time from the upgrade.
+    const flow = flowStatus(r);
+    if (flow && r.status !== flow) r.status = flow;
+    // A legacy round already scored as WON keeps a validated-attempt marker so the
+    // result derivation behaves the same as a claim-based round.
+    if (r.result === 'WON' && r.validated_attempt_id === null && r.puzzle_completed_at !== null) {
+      r.validated_attempt_id = 'legacy';
+    }
+    if (r.result === 'WON' && r.official_duration_ms === null && r.game_started_at !== null) {
+      r.official_duration_ms = Math.max(0, (r.puzzle_completed_at ?? nowMs) - r.game_started_at);
+    }
+  }
+  for (const a of state.attempts) {
+    if (typeof a.claim_press_ms !== 'number') a.claim_press_ms = null;
+    if (typeof a.claim_transport_ms !== 'number') a.claim_transport_ms = null;
+    if (typeof a.decision_note !== 'string' && a.decision_note === undefined) a.decision_note = null;
   }
   return state;
+}
+
+/** Old outcome vocabulary mapped onto the new result field. */
+function legacyResult(outcome: Outcome | undefined): RoundResult {
+  switch (outcome) {
+    case 'WON':
+      return 'WON';
+    case 'ABORTED':
+      return 'ABORTED';
+    case 'TIMEOUT':
+    case 'NO_PUZZLE':
+      return 'TIME_UP';
+    default:
+      return 'IN_PROGRESS';
+  }
 }
 
 /* -------------------------------------------------------------------- engine */
@@ -143,13 +220,13 @@ export class ScreamEngine {
 
   /** Latest committed state plus the authoritative server instant. */
   snapshot(nowMs = this.clock.nowMs()): Snapshot {
-
     return finalizeSnapshot({
       revision: this.state.event.revision,
       server_now_ms: nowMs,
       event: structuredClone(this.state.event),
       rounds: structuredClone(this.state.rounds),
       reset_tasks: structuredClone(this.state.reset_tasks),
+      attempts: structuredClone(this.state.attempts),
       operators: this.operatorStates(),
       log: structuredClone(this.state.log.slice(-400)),
     });
@@ -193,7 +270,17 @@ export class ScreamEngine {
     if (!this.accounts[req.actor.id] || this.accounts[req.actor.id].role !== req.actor.role) {
       return this.result(false, 'PERMISSION_DENIED', 'Tài khoản không hợp lệ', this.revision, now);
     }
-    if (!isAllowed(req.actor.role, req.action)) {
+
+    // State-specific authorization, from the same table the UI mirrors: who may act,
+    // and in which phase, with the decided result as the final immutability guard.
+    // The role answer comes first (it leaks nothing about the state), the revision
+    // check before the phase check, so a phone that is simply behind is told so and
+    // resynchronises instead of receiving a confusing “invalid state”.
+    const roleVerdict = authorizeRole(req.actor.role, req.action);
+    if (!roleVerdict.allowed) {
+      if (roleVerdict.reason === 'READ_ONLY') {
+        return this.result(false, 'READ_ONLY', 'NGƯỜI THEO DÕI CHỈ XEM ĐƯỢC', this.revision, now);
+      }
       return this.result(
         false,
         'PERMISSION_DENIED',
@@ -202,6 +289,7 @@ export class ScreamEngine {
         now,
       );
     }
+
     if (req.expected_revision !== this.revision) {
       return this.result(
         false,
@@ -212,19 +300,35 @@ export class ScreamEngine {
       );
     }
 
+    const round = this.activeRound();
+    // The round's own duration is the truth for its clock; the configuration is only
+    // the fallback for rows that carry neither a snapshot nor a stored deadline.
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
+    const live = round ? liveStatus(round, this.state.attempts, limit, now) : null;
+    const result = round ? resultOf(round, this.state.attempts, limit, now) : null;
+    const verdict = authorizePhase(req.action, live, result, round);
+    if (!verdict.allowed) {
+      return this.result(
+        false,
+        'INVALID_STATE',
+        // Say what actually blocked the press: a settled round is not a wrong phase.
+        verdict.message
+          ?? `Giai đoạn hiện tại (${PHASE_LABEL[live ?? 'WAITING_FOR_TEAM'] ?? live ?? 'chưa có đội'}) không nhận thao tác này`,
+        this.revision,
+        now,
+      );
+    }
+
     const handlers: Partial<Record<ActionType, (r: CommandRequest, t: number) => CommandResult>> = {
       CONFIGURE: this.onConfigure,
       CALL_TEAM: this.onCallTeam,
-      TEAM_UPSTAIRS: this.onTeamUpstairs,
+      CONFIRM_FLOOR2: this.onConfirmFloor2,
+      FLOOR2_BYPASS: this.onFloor2Bypass,
       START_GAME: this.onStartGame,
-      GAME_PAUSE: this.onGamePause,
-      GAME_RESUME: this.onGameResume,
-      GAME_RESET: this.onGameReset,
-      HALLWAY_PROGRESS: this.onHallwayProgress,
-      ROOM_REACHED: this.onRoomReached,
-      PUZZLE_COMPLETE: this.onPuzzleComplete,
-      RETURN_START: this.onReturnStart,
-      GAME_STOP: this.onGameStop,
+      CLAIM_COMPLETE: this.onClaimComplete,
+      VERIFY_ATTEMPT: this.onVerifyAttempt,
+      CONFIRM_EXIT: this.onConfirmExit,
+      EARLY_EXIT: this.onEarlyExit,
       RESET_DONE: this.onResetDone,
       GATE_FINALIZE: this.onGateFinalize,
       SET_LAYOUT: this.onSetLayout,
@@ -236,7 +340,9 @@ export class ScreamEngine {
       CORRECT_ROUND: this.onCorrectRound,
     };
     const handler = handlers[req.action];
-    if (!handler) return this.result(false, 'UNKNOWN_ACTION', `Hành động không xác định`, this.revision, now);
+    if (!handler) {
+      return this.result(false, 'UNKNOWN_ACTION', retiredMessage(req.action) ?? 'Hành động không xác định', this.revision, now);
+    }
     const res = handler.call(this, req, now);
     if (res.ok) this.state.processed_keys[idemKey] = { revision: res.revision, code: 'OK', message: res.message };
     return res;
@@ -301,27 +407,56 @@ export class ScreamEngine {
   private onConfigure(req: CommandRequest, now: number): CommandResult {
     const cfg = req.meta as unknown as Partial<EventConfig>;
     const started = this.state.event.event_started_at !== null;
-    const locked: (keyof EventConfig)[] = ['event_duration_ms', 'game_limit_ms', 'start_team_number', 'event_name'];
+    // V3.1: the round duration is a configuration the supervisor may change at any
+    // time, and it only ever applies to the NEXT round. A round that is already
+    // running keeps its own snapshot, so changing this can never move a live clock.
+    const locked: (keyof EventConfig)[] = ['start_team_number', 'event_name'];
     for (const k of locked) {
       if (started && cfg[k] !== undefined && cfg[k] !== this.state.event.config[k]) {
-        return this.result(false, 'INVALID_STATE', 'Không đổi được thời lượng sau khi sự kiện đã chạy', this.revision, now);
+        return this.result(false, 'INVALID_STATE', 'Không đổi được dữ liệu sự kiện sau khi ca đã chạy', this.revision, now);
       }
     }
+    // The session length is retired: it is not editable at all, so no configuration
+    // path can bring a 90-minute deadline back into the operating surface (§7.1).
+    if (cfg.event_duration_ms !== undefined && cfg.event_duration_ms !== this.state.event.config.event_duration_ms) {
+      return this.result(false, 'INVALID_STATE', 'Sự kiện không còn thời lượng phiên để cấu hình', this.revision, now);
+    }
     const allowed: (keyof EventConfig)[] = started
-      ? ['prep_allowance_ms', 'reset_target_ms', 'hidden_object_owner']
-      : ['event_name', 'event_duration_ms', 'game_limit_ms', 'prep_allowance_ms', 'start_team_number', 'reset_target_ms', 'hidden_object_owner'];
+      ? ['game_limit_ms', 'prep_allowance_ms', 'reset_target_ms', 'hidden_object_owner']
+      : ['event_name', 'game_limit_ms', 'prep_allowance_ms', 'start_team_number', 'reset_target_ms', 'hidden_object_owner'];
     const applied: Record<string, unknown> = {};
     for (const k of allowed) {
       if (cfg[k] !== undefined) {
+        if (k === 'hidden_object_owner' && cfg[k] !== 'GATE' && cfg[k] !== 'ROOM305') {
+          return this.result(false, 'INVALID_STATE', 'Chủ vật ẩn phải là NPC 1 hoặc NPC 2', this.revision, now);
+        }
+        if (k === 'game_limit_ms') {
+          const verdict = validateRoundDuration(cfg[k]);
+          if (!verdict.ok) return this.result(false, 'INVALID_STATE', verdict.message, this.revision, now);
+        }
         applied[k] = cfg[k];
         (this.state.event.config as unknown as Record<string, unknown>)[k] = cfg[k];
       }
     }
     if (!started && cfg.start_team_number !== undefined) this.state.event.next_team_number = cfg.start_team_number;
+    if (cfg.game_limit_ms !== undefined) {
+      applied.round_duration_ms = cfg.game_limit_ms;
+      this.commit(req, now, null, null,
+        `Đã đặt thời lượng lượt chơi mặc định ${formatClockSec(Number(cfg.game_limit_ms))}`, applied);
+      const running = this.activeRound();
+      return this.result(true, 'OK', running && running.game_started_at !== null
+        ? `ĐÃ LƯU · ${formatClockSec(Number(cfg.game_limit_ms))} · Áp dụng từ lượt tiếp theo`
+        : `ĐÃ LƯU · ${formatClockSec(Number(cfg.game_limit_ms))}`, this.revision, now);
+    }
     this.commit(req, now, null, null, 'Đã cập nhật cấu hình sự kiện', applied);
     return this.result(true, 'OK', 'Đã lưu cấu hình', this.revision, now);
   }
 
+  /**
+   * PHASE 01 — OPERATOR_01 receives the team and sends it up. This is the only
+   * dispatch step: the old second LOBBY button (“đã lên tầng 3”) was a duplicate of
+   * the floor handover and is gone, so one press can never be counted twice.
+   */
   private onCallTeam(req: CommandRequest, now: number): CommandResult {
     if (this.state.event.event_ended_at !== null) {
       return this.result(false, 'INVALID_STATE', 'SỰ KIỆN ĐÃ KẾT THÚC', this.revision, now);
@@ -352,21 +487,42 @@ export class ScreamEngine {
       round_number: this.state.rounds.length + 1,
       team_number: this.state.event.next_team_number,
       team_name: name,
-      status: 'LOBBY_CALL',
-      stage: 1,
+      status: 'WAITING_FLOOR2_CONFIRMATION',
+      stage: STAGE_OF_STATUS.WAITING_FLOOR2_CONFIRMATION,
       called_at: now,
+      received_by_role: req.actor.role,
+      received_by: req.actor.id,
+      floor2_confirmed_at: null,
+      floor2_confirmed_by_role: null,
+      floor2_confirmed_by: null,
+      floor2_bypassed_at: null,
+      floor2_bypassed_by_role: null,
+      floor2_bypassed_by: null,
+      floor2_bypass_reason: null,
       game_started_at: null,
+      started_by_role: null,
+      started_by: null,
+      deadline_at: null,
       game_anchor_ms: null,
       game_elapsed_ms: 0,
       game_stopped_at: null,
       game_reset_count: 0,
       game_pause_count: 0,
+      round_duration_ms: null,
+      abort_kind: null,
+      abort_reason: null,
       official_duration_ms: null,
+      validated_attempt_id: null,
       puzzle_completed_at: null,
       exit_confirmed_at: null,
+      exit_by_role: null,
+      exit_by: null,
+      exit_reason: null,
       gate_finalized_at: null,
+      finalized_by_role: null,
       system_ready_at: null,
       aborted_at: null,
+      result: 'IN_PROGRESS',
       outcome: 'IN_PROGRESS',
       admission_override: !decision.allowed,
       hiding_layout: this.state.event.config.hiding_layout,
@@ -397,212 +553,378 @@ export class ScreamEngine {
         revision: 0,
       });
     }
-    this.commit(req, now, round, 'LOBBY_CALL', `Đã gọi đội #${pad3(round.team_number)}`, {
-      override: !decision.allowed ? true : undefined,
-      remaining_ms: decision.remaining_ms,
-      hiding_layout: round.hiding_layout,
-      event_clock_started: firstTeam ? true : undefined,
-    });
-    return this.result(true, 'OK', `Đội #${pad3(round.team_number)} đang lên tầng`, this.revision, now);
+    this.commit(
+      req,
+      now,
+      round,
+      'WAITING_FLOOR2_CONFIRMATION',
+      `Đã nhận đội ${labelOf(round)} và cho lên tầng 2`,
+      {
+        override: !decision.allowed ? true : undefined,
+        hiding_layout: round.hiding_layout,
+        event_clock_started: firstTeam ? true : undefined,
+        team_name: round.team_name,
+      },
+    );
+    return this.result(true, 'OK', `${teamSentence(round, 'đã được cho lên tầng 2')}`, this.revision, now);
   }
 
-  private onTeamUpstairs(req: CommandRequest, now: number): CommandResult {
+  /**
+   * PHASE 02 — OPERATOR_02 confirms the team physically reached floor 2. Confirmation
+   * is a fact about arrival, distinct from the send-off upstairs, and it does not start
+   * the countdown.
+   */
+  private onConfirmFloor2(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
     if (!round) return this.invalidRound(req, now);
-    if (round.status !== 'LOBBY_CALL') {
-      return this.result(true, 'OK', 'Trạng thái đã được ghi nhận', this.revision, now);
+    if (round.floor2_confirmed_at !== null) {
+      return this.result(true, 'OK', 'Đã xác nhận tầng 2 trước đó', this.revision, now);
     }
-    round.status = 'TEAM_PREPARING';
-    this.commit(req, now, round, 'TEAM_PREPARING', 'Đội đang lên cầu thang');
-    return this.result(true, 'OK', 'Đội đang lên tầng', this.revision, now);
+    // A stale tap after NPC1 bypassed floor 2 is refused safely: the workflow does not
+    // revert, and no fake confirmation is written.
+    if (round.floor2_bypassed_at !== null) {
+      return this.result(
+        false,
+        'INVALID_STATE',
+        'NPC 1 đã bỏ qua xác nhận tầng 2 — thao tác này không còn hiệu lực',
+        this.revision,
+        now,
+      );
+    }
+    round.floor2_confirmed_at = now;
+    round.floor2_confirmed_by_role = req.actor.role;
+    round.floor2_confirmed_by = req.actor.id;
+    this.advance(round, 'READY_AT_FLOOR3');
+    this.commit(req, now, round, 'READY_AT_FLOOR3', `${teamSentence(round, 'đã đến tầng 2 — đang được hướng dẫn lên tầng 3')}`, {
+      operator: req.actor.role,
+    });
+    return this.result(true, 'OK', 'Đội sắp bắt đầu — NPC 1 có thể bấm BẮT ĐẦU', this.revision, now);
   }
 
+  /**
+   * Controlled exception: the team walked straight to floor 3. NPC1 can see that, so
+   * NPC1 may skip the floor-2 confirmation — while `floor2Confirmed` stays false. The
+   * bypass is its own audited fact, never a substituted confirmation.
+   */
+  private onFloor2Bypass(req: CommandRequest, now: number): CommandResult {
+    const round = this.requireActive(req, now);
+    if (!round) return this.invalidRound(req, now);
+    if (!req.meta?.reason) {
+      return this.result(false, 'BLOCKED', 'Bắt buộc nhập lý do bỏ qua tầng 2', this.revision, now);
+    }
+    if (round.floor2_confirmed_at !== null) {
+      return this.result(false, 'INVALID_STATE', 'Tầng 2 đã được xác nhận — không cần bỏ qua', this.revision, now);
+    }
+    if (round.game_started_at !== null) {
+      return this.result(false, 'INVALID_STATE', 'Trận đã bắt đầu', this.revision, now);
+    }
+    round.floor2_bypassed_at = now;
+    round.floor2_bypassed_by_role = req.actor.role;
+    round.floor2_bypassed_by = req.actor.id;
+    round.floor2_bypass_reason = String(req.meta.reason);
+    this.advance(round, 'READY_AT_FLOOR3');
+    this.flagReview(round, 'FLOOR2_BYPASS');
+    this.commit(req, now, round, 'READY_AT_FLOOR3', `Bỏ qua xác nhận tầng 2 cho ${labelOf(round)}`, {
+      bypassed_by: req.actor.role,
+      reason: req.meta.reason,
+      floor2_confirmed: false,
+    });
+    return this.result(true, 'OK', 'ĐÃ BỎ QUA TẦNG 2 — đội sẵn sàng ở tầng 3', this.revision, now);
+  }
+
+  /**
+   * PHASE 04 — one atomic, server-authoritative start. Both instants are persisted, so
+   * every device counts down against the same deadline and no browser interval is ever
+   * the clock.
+   */
   private onStartGame(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
     if (!round) return this.invalidRound(req, now);
     if (round.game_started_at !== null) {
-      return this.result(false, 'INVALID_STATE', 'Đồng hồ trận đã chạy', this.revision, now);
+      return this.result(true, 'OK', `Đồng hồ ${formatClockSec(roundLimitMs(round, this.state.event.config.game_limit_ms))} đang chạy`, this.revision, now);
     }
-    if (round.status !== 'LOBBY_CALL' && round.status !== 'TEAM_PREPARING') {
-      return this.result(false, 'INVALID_STATE', 'Không thể bắt đầu trận từ trạng thái này', this.revision, now);
+    if (!round.floor2_confirmed_at && !round.floor2_bypassed_at) {
+      return this.result(false, 'INVALID_STATE', 'Chưa xác nhận đội ở tầng 3', this.revision, now);
     }
     const decision = evaluateGameStart(this.state.event, now);
-    const override = req.meta?.override === true && !!req.meta?.reason;
     if (!decision.allowed) {
-      if (!decision.overridePossible || !override) {
-        return this.result(false, 'BLOCKED', decision.message, this.revision, now, {
-          requires_override: decision.overridePossible,
-        });
-      }
-      round.admission_override = true;
+      return this.result(false, 'BLOCKED', decision.message, this.revision, now, {
+        requires_override: decision.overridePossible,
+      });
     }
-    round.status = 'GAME_STARTED';
-    round.stage = Math.max(round.stage, STAGE_OF_STATUS.GAME_STARTED);
+    // One atomic snapshot: the duration the configuration carries right now becomes
+    // this round's duration for good. Later configuration changes cannot move it.
+    const configured = validateRoundDuration(this.state.event.config.game_limit_ms);
+    const duration = configured.ok ? configured.ms : DEFAULT_ROUND_DURATION_MS;
+    round.round_duration_ms = duration;
     round.game_started_at = now;
-    round.game_anchor_ms = now;
-    round.game_elapsed_ms = 0;
-    this.recordPress(round, 'start', req, now);
-    this.commit(req, now, round, 'GAME_STARTED', `Bắt đầu trận đội #${pad3(round.team_number)}`, {
+    round.deadline_at = now + duration;
+    round.started_by_role = req.actor.role;
+    round.started_by = req.actor.id;
+    this.advance(round, 'RUNNING');
+    this.recordPress(round, req, now);
+    this.commit(req, now, round, 'RUNNING', `Bắt đầu ${formatClockSec(duration)} cho ${labelOf(round)}`, {
       prep_ms: now - round.called_at,
-      remaining_ms: decision.remaining_ms,
+      deadline_at: round.deadline_at,
+      round_duration_ms: duration,
       start_transport_ms: round.start_transport_ms,
     });
-    return this.result(true, 'OK', 'Đồng hồ 5:00 đang chạy', this.revision, now);
+    return this.result(true, 'OK', `ĐÃ BẮT ĐẦU ${formatClockSec(duration)} — màn hình đã khoá`, this.revision, now);
   }
 
   /**
-   * GATE freezes the 5-minute window when a player falls, the puzzle jams, or the
-   * hallway is blocked. Paused gaps do not count toward the official score.
+   * PHASE 05 step A — record that the players say they are finished. The claim is the
+   * score candidate; the countdown deliberately keeps running, because the claim may be
+   * wrong and nobody knows that yet.
    */
-  private onGamePause(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.game_anchor_ms === null) {
-      return this.result(true, 'OK', `5:00 đang tạm dừng · còn lại ${formatLeft(this.state.event.config.game_limit_ms - round.game_elapsed_ms)}`, this.revision, now);
-    }
-    round.game_elapsed_ms = gameElapsedMs(round, now);
-    round.game_anchor_ms = null;
-    round.game_pause_count += 1;
-    const left = this.state.event.config.game_limit_ms - round.game_elapsed_ms;
-    this.commit(req, now, round, round.status, `Tạm dừng đồng hồ 5:00 đội #${pad3(round.team_number)} · còn ${formatLeft(left)}`, {
-      paused_at_ms: now,
-      banked_ms: round.game_elapsed_ms,
-      remaining_ms: left,
-      pause_count: round.game_pause_count,
-    });
-    return this.result(true, 'OK', `TẠM DỪNG 5:00 · còn lại ${formatLeft(left)}`, this.revision, now);
-  }
-
-  /** Releases the pause without handing out any extra time. */
-  private onGameResume(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.game_anchor_ms !== null) {
-      return this.result(true, 'OK', 'Đồng hồ 5:00 đang chạy', this.revision, now);
-    }
-    round.game_anchor_ms = now;
-    const left = this.state.event.config.game_limit_ms - round.game_elapsed_ms;
-    this.commit(req, now, round, round.status, `Chạy lại 5:00 đội #${pad3(round.team_number)} · còn ${formatLeft(left)}`, {
-      resumed_at_ms: now,
-      remaining_ms: left,
-      pause_count: round.game_pause_count,
-    });
-    return this.result(true, 'OK', `5:00 chạy lại · còn lại ${formatLeft(left)}`, this.revision, now);
-  }
-
-  /**
-   * A full restart of the 5-minute window. It is a scoring decision, not a display
-   * trick: the banked time is dropped and the official result is measured from here,
-   * so the round is flagged for supervisor review and every station sees the count.
-   */
-  private onGameReset(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    const lost = gameElapsedMs(round, now);
-    round.game_elapsed_ms = 0;
-    round.game_anchor_ms = now;
-    round.game_reset_count += 1;
-    this.flagReview(round, 'GAME_RESET');
-    this.commit(req, now, round, round.status, `RESET 5:00 đội #${pad3(round.team_number)} · lần ${round.game_reset_count}`, {
-      reset_at_ms: now,
-      discarded_ms: lost,
-      reset_count: round.game_reset_count,
-      pause_count: round.game_pause_count,
-    });
-    return this.result(true, 'OK', `ĐÃ RESET 5:00 · ${formatLeft(this.state.event.config.game_limit_ms)} chạy lại`, this.revision, now);
-  }
-
-  private onHallwayProgress(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.status === 'GAME_STARTED') {
-      round.status = 'CORRIDOR_ACTIVE';
-      round.stage = Math.max(round.stage, STAGE_OF_STATUS.CORRIDOR_ACTIVE);
-      this.commit(req, now, round, 'CORRIDOR_ACTIVE', 'Đội đang tìm ở hành lang');
-    }
-    return this.result(true, 'OK', 'Đã ghi nhận hành lang', this.revision, now);
-  }
-
-  private onRoomReached(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.status === 'GAME_STARTED' || round.status === 'CORRIDOR_ACTIVE') {
-      round.status = 'ROOM_REACHED';
-      round.stage = Math.max(round.stage, STAGE_OF_STATUS.ROOM_REACHED);
-      this.commit(req, now, round, 'ROOM_REACHED', `Đội #${pad3(round.team_number)} đã đến 305`);
-    }
-    return this.result(true, 'OK', 'Đã ghi nhận đến phòng 305', this.revision, now);
-  }
-
-  private onPuzzleComplete(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.puzzle_completed_at !== null) {
-      return this.result(true, 'OK', 'Trận đồ đã được xác nhận', this.revision, now);
-    }
-    round.puzzle_completed_at = now;
-    round.status = 'PUZZLE_COMPLETED';
-    round.stage = Math.max(round.stage, STAGE_OF_STATUS.PUZZLE_COMPLETED);
-    // Explicit rule: completion does NOT stop the official clock.
-    const puzzleTransport = req.press ? Math.max(0, now - req.press.press_ms) : null;
-    if (puzzleTransport !== null && puzzleTransport > this.state.event.config.review_threshold_ms) {
-      this.flagReview(round, 'PUZZLE_TRANSPORT');
-    }
-    this.commit(req, now, round, 'PUZZLE_COMPLETED', 'Trận đồ hoàn thành — đồng hồ vẫn chạy', {
-      elapsed_ms: round.game_started_at !== null ? gameElapsedMs(round, now) : null,
-      press_transport_ms: puzzleTransport,
-    });
-    return this.result(true, 'OK', 'Trận đồ hoàn thành', this.revision, now);
-  }
-
-  private onReturnStart(req: CommandRequest, now: number): CommandResult {
-    const round = this.requireRunning(req, now);
-    if (!round) return this.invalidRound(req, now);
-    if (round.status !== 'RETURNING') {
-      round.status = 'RETURNING';
-      round.stage = Math.max(round.stage, STAGE_OF_STATUS.RETURNING);
-      this.commit(req, now, round, 'RETURNING', 'Đội đang quay lại cửa vào');
-    }
-    return this.result(true, 'OK', 'Đã ghi nhận đội quay lại', this.revision, now);
-  }
-
-  private onGameStop(req: CommandRequest, now: number): CommandResult {
+  private onClaimComplete(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
     if (!round) return this.invalidRound(req, now);
-    if (round.game_stopped_at !== null) {
-      // Exactly-once: the second press must not create a second score record.
-      return this.result(true, 'OK', `Đã chốt giờ: ${round.official_duration_ms} ms`, this.revision, now);
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
+    const deadline = roundDeadlineMs(round, limit, now);
+    if (deadline === null) return this.result(false, 'INVALID_STATE', 'Trận chưa bắt đầu', this.revision, now);
+    const inTime = isEligibleClaim({ claimed_at: now } as CompletionAttempt, deadline);
+    const seq = attemptsOf(this.state.attempts, round.id).length + 1;
+    const claimTransport = req.press ? Math.max(0, now - req.press.press_ms) : null;
+    const attempt: CompletionAttempt = {
+      id: `att_${round.id}_${seq}`,
+      round_id: round.id,
+      seq,
+      claimed_at: now,
+      elapsed_ms: Math.max(0, now - (round.game_started_at ?? now)),
+      remaining_ms: deadline - now,
+      in_time: inTime,
+      status: inTime ? 'PENDING' : 'LATE',
+      claimed_by_role: req.actor.role,
+      claimed_by: req.actor.id,
+      verified_by_role: null,
+      verified_by: null,
+      verified_at: null,
+      decision_note: null,
+      claim_press_ms: req.press?.press_ms ?? null,
+      claim_transport_ms: claimTransport,
+      revision: this.revision + 1,
+    };
+    this.state.attempts.push(attempt);
+    if (!inTime) this.flagReview(round, 'LATE_CLAIM');
+    else if (claimTransport !== null && claimTransport > this.state.event.config.review_threshold_ms) {
+      this.flagReview(round, 'CLAIM_TRANSPORT');
     }
-    if (round.game_started_at === null) {
-      return this.result(false, 'INVALID_STATE', 'Trận chưa bắt đầu', this.revision, now);
+    this.commit(
+      req,
+      now,
+      round,
+      liveStatus(round, this.state.attempts, limit, now),
+      `Lần ${seq} — ghi nhận báo hoàn thành lúc ${formatClockCs(attempt.elapsed_ms)}${inTime ? ' — chờ kiểm tra' : ' — đến muộn'}`,
+      {
+        attempt_id: attempt.id,
+        claimed_at: now,
+        elapsed_ms: attempt.elapsed_ms,
+        remaining_ms: attempt.remaining_ms,
+        in_time: inTime,
+        press_transport_ms: claimTransport,
+      },
+    );
+    return this.result(
+      true,
+      'OK',
+      inTime
+        ? `LẦN ${seq} · ${formatClockCs(attempt.elapsed_ms)} — ĐANG KIỂM TRA, đồng hồ vẫn chạy`
+        : `LẦN ${seq} · ${formatClockCs(attempt.elapsed_ms)} — GHI NHẬN SAU HẾT GIỜ (không thành thắng)`,
+      this.revision,
+      now,
+    );
+  }
+
+  /**
+   * PHASE 05 step B — NPC2's decision on one specific recorded attempt.
+   *
+   * The official time is the attempt's own claim instant, so the seconds NPC2 spent
+   * checking the arrangement never penalise the players. The attempt identity is
+   * required precisely so a decision can never land on an unrelated historical
+   * checkpoint, and a decided attempt is immutable.
+   */
+  private onVerifyAttempt(req: CommandRequest, now: number): CommandResult {
+    const round = this.requireActive(req, now);
+    if (!round) return this.invalidRound(req, now);
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
+    const meta = req.meta as unknown as { attempt_id?: string; decision?: 'VALID' | 'INVALID'; note?: string };
+    const deadline = roundDeadlineMs(round, limit, now);
+    if (deadline === null) return this.result(false, 'INVALID_STATE', 'Trận chưa bắt đầu', this.revision, now);
+    const attempt = this.state.attempts.find((a) => a.id === meta?.attempt_id && a.round_id === round.id);
+    if (!attempt) return this.result(false, 'INVALID_STATE', 'Không tìm thấy lần báo hoàn thành', this.revision, now);
+    if (attempt.status !== 'PENDING' && attempt.status !== 'LATE') {
+      return this.result(true, 'OK', `Lần ${attempt.seq} đã được chốt: ${attempt.status}`, this.revision, now);
     }
-    // The score is what the 5-minute window actually measured: every paused gap is
-    // excluded and a reset restarts the measurement from 5:00.
-    const duration = gameElapsedMs(round, now);
-    round.game_elapsed_ms = duration;
-    round.game_anchor_ms = null;
-    const limit = this.state.event.config.game_limit_ms;
-    round.game_stopped_at = now;
+    const decision = meta?.decision;
+    if (decision !== 'VALID' && decision !== 'INVALID') {
+      return this.result(false, 'INVALID_STATE', 'Quyết định không hợp lệ', this.revision, now);
+    }
+    // A disqualified round is a supervisor decision, never an NPC2 verification,
+    // until REVIEW_RESOLVE has accepted the result by name.
+    if (round.aborted_at !== null && round.abort_kind === 'misconduct'
+      && !(round.review_resolved_at !== null && !round.decertified)) {
+      return this.result(false, 'INVALID_STATE', 'Lượt chơi đã bị hủy vì kỷ luật — Quản trị viên phải xét lại kết quả', this.revision, now);
+    }
+
+    if (decision === 'INVALID') {
+      // Keep the timestamp, keep the countdown, keep the history: only this attempt closes.
+      attempt.status = 'INVALID';
+      attempt.verified_by_role = req.actor.role;
+      attempt.verified_by = req.actor.id;
+      attempt.verified_at = now;
+      attempt.decision_note = meta?.note ? String(meta.note) : null;
+      attempt.revision = this.revision + 1;
+      this.commit(
+        req,
+        now,
+        round,
+        liveStatus(round, this.state.attempts, limit, now),
+        `Lần ${attempt.seq} — CHƯA ĐÚNG, đội tiếp tục chơi`,
+        { attempt_id: attempt.id, claimed_at: attempt.claimed_at, decision: 'INVALID' },
+      );
+      return this.result(true, 'OK', `LẦN ${attempt.seq} CHƯA ĐÚNG — đồng hồ vẫn chạy`, this.revision, now);
+    }
+
+    if (!attempt.in_time) {
+      return this.result(
+        false,
+        'INVALID_STATE',
+        `Lần ${attempt.seq} được ghi nhận sau hết giờ — không thể thành kết quả thắng`,
+        this.revision,
+        now,
+      );
+    }
+    // Atomic finalization: one validated claim decides the score, once.
+    attempt.status = 'VALID';
+    attempt.verified_by_role = req.actor.role;
+    attempt.verified_by = req.actor.id;
+    attempt.verified_at = now;
+    attempt.decision_note = meta?.note ? String(meta.note) : null;
+    attempt.revision = this.revision + 1;
+    const official = Math.max(0, attempt.claimed_at - (round.game_started_at ?? attempt.claimed_at));
+    round.official_duration_ms = official;
+    round.validated_attempt_id = attempt.id;
+    round.puzzle_completed_at = attempt.claimed_at;
+    round.result = 'WON';
+    // The team may already have left while NPC2 was checking: a decision must never
+    // drag the lifecycle backwards, so only a round still inside moves to exit-waiting.
+    if (round.exit_confirmed_at === null) this.advance(round, 'WAITING_FOR_EXIT');
+    if (Math.abs(limit - official) <= this.state.event.config.review_threshold_ms) this.flagReview(round, 'CLOSE_FINISH');
+    this.commit(
+      req,
+      now,
+      round,
+      'WAITING_FOR_EXIT',
+      `Lần ${attempt.seq} — CHÍNH XÁC. Kết quả chính thức ${formatClockCs(official)}`,
+      {
+        attempt_id: attempt.id,
+        decision: 'VALID',
+        claimed_at: attempt.claimed_at,
+        official_duration_ms: official,
+        verified_at: now,
+        verification_delay_ms: now - attempt.claimed_at,
+      },
+    );
+    return this.result(true, 'OK', `THÀNH CÔNG ${formatClockCs(official)} — chờ đội rời tầng 3`, this.revision, now);
+  }
+
+  /**
+   * PHASE 07 — the physical exit is its own event. It never touches the completion
+   * duration, and it may happen while a claim still awaits verification: the team is
+   * not detained by the software, and the review simply stays open.
+   */
+  private onConfirmExit(req: CommandRequest, now: number): CommandResult {
+    const round = this.requireActive(req, now);
+    if (!round) return this.invalidRound(req, now);
+    if (round.exit_confirmed_at !== null) {
+      return this.result(true, 'OK', 'Đã xác nhận đội rời tầng 3', this.revision, now);
+    }
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
+    const pending = pendingEligibleClaims(round, this.state.attempts, limit, now);
     round.exit_confirmed_at = now;
-    round.official_duration_ms = duration;
-    round.outcome = this.computeOutcome(round, duration);
-    round.status = 'RESETTING';
-    round.stage = Math.max(round.stage, STAGE_OF_STATUS.GAME_EXITED);
-    this.recordPress(round, 'stop', req, now);
-    // A finish within the review window of the limit is a prize dispute, not a
-    // fact the software may settle on its own.
-    if (Math.abs(limit - duration) <= this.state.event.config.review_threshold_ms) this.flagReview(round, 'CLOSE_FINISH');
-    this.commit(req, now, round, 'RESETTING', `Chốt giờ đội #${pad3(round.team_number)}: ${duration} ms`, {
-      official_duration_ms: duration,
-      outcome: round.outcome,
-      limit_ms: limit,
-      game_reset_count: round.game_reset_count,
-      game_pause_count: round.game_pause_count,
-      stop_transport_ms: round.stop_transport_ms,
-      needs_review: round.needs_review,
-      review_reasons: round.review_reasons,
+    round.exit_by_role = req.actor.role;
+    round.exit_by = req.actor.id;
+    // The departure is an authoritative write, so the gameplay result is settled into
+    // the row here — the same value the derivation shows on every screen.
+    round.result = resultOf(round, this.state.attempts, limit, now);
+    this.advance(round, 'EXIT_CONFIRMED');
+    this.commit(
+      req,
+      now,
+      round,
+      'EXIT_CONFIRMED',
+      `${labelOf(round)} đã rời tầng 3 · kết quả ${resultText(round, this.state.attempts, limit, now)}`,
+      {
+        exited_at: now,
+        result: resultOf(round, this.state.attempts, limit, now),
+        official_duration_ms: round.official_duration_ms,
+        pending_validation: pending.length > 0,
+        since_start_ms: round.game_started_at ? now - round.game_started_at : null,
+      },
+    );
+    return this.result(
+      true,
+      'OK',
+      pending.length > 0
+        ? 'ĐÃ GHI NHẬN RỜI KHU VỰC · KẾT QUẢ VẪN CHỜ NPC 2 XÁC MINH'
+        : 'ĐÃ GHI NHẬN RỜI KHU VỰC — khu vực cần reset',
+      this.revision,
+      now,
+    );
+  }
+
+  /**
+   * Guarded exception at the gate: the team leaves before solving, or the area is
+   * evacuated. This press IS the confirmation that the players are out — NPC1 stands
+   * at the door — so it writes the exit stamp and no second press is asked for.
+   * It never invents a successful completion time.
+   */
+  private onEarlyExit(req: CommandRequest, now: number): CommandResult {
+    const round = this.requireActive(req, now);
+    if (!round) return this.invalidRound(req, now);
+    if (!req.meta?.reason) {
+      return this.result(false, 'BLOCKED', 'Bắt buộc nhập lý do kết thúc sớm', this.revision, now);
+    }
+    if (round.result === 'WON') {
+      // The win is already final: an early-exit press must not erase it.
+      return this.result(false, 'INVALID_STATE', 'Kết quả đã chốt THÀNH CÔNG — dùng XÁC NHẬN RỜI TẦNG 3', this.revision, now);
+    }
+    if (round.aborted_at !== null) {
+      return this.result(false, 'INVALID_STATE', 'Lượt chơi đã bị hủy — NPC 1 dùng XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3', this.revision, now);
+    }
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
+    if (round.game_started_at !== null) {
+      round.game_stopped_at = now;
+      round.official_duration_ms = null;
+    }
+    // An early exit IS the confirmed departure: the team is physically out, so the
+    // exit stamp is written here rather than waiting for a second press.
+    if (round.exit_confirmed_at === null) {
+      round.exit_confirmed_at = now;
+      round.exit_by_role = req.actor.role;
+      round.exit_by = req.actor.id;
+    }
+    round.aborted_at = now;
+    // A gate-side early departure is a safety/operational cancellation, not a
+    // verdict on the arrangement: a claim recorded before the deadline may still be
+    // verified afterwards and win on its own instant (§4.4).
+    round.abort_kind = round.abort_kind ?? 'safety';
+    round.exit_reason = String(req.meta.reason);
+    round.result = resultOf(round, this.state.attempts, limit, now);
+    round.outcome = round.result === 'WON' ? 'WON' : 'ABORTED';
+    this.advance(round, 'EXIT_CONFIRMED');
+    this.flagReview(round, 'ROUND_ABORTED');
+    this.commit(req, now, round, 'EXIT_CONFIRMED', `KẾT THÚC SỚM ${labelOf(round)} · ${ABORT_KIND_LABEL[round.abort_kind]}`, {
+      reason: req.meta.reason,
+      kind: round.abort_kind,
+      result: round.result,
+      elapsed_ms: round.game_started_at ? now - round.game_started_at : null,
     });
-    return this.result(true, 'OK', `Kết quả: ${outcomeText(round.outcome, duration)}`, this.revision, now);
+    return this.result(true, 'OK',
+      round.result === 'WON'
+        ? `ĐÃ RỜI KHU VỰC · KẾT QUẢ CHÍNH THỨC ${formatClockCs(round.official_duration_ms ?? 0)}`
+        : 'LƯỢT CHƠI ĐÃ HỦY — không có kết quả thắng', this.revision, now);
   }
 
   private onResetDone(req: CommandRequest, now: number): CommandResult {
@@ -634,29 +956,40 @@ export class ScreamEngine {
       if (t.task_key === 'hidden_objects') t.layout = this.state.event.config.hiding_layout;
       t.revision = this.revision + 1;
     }
-    round.status = this.allTasksDone(round.id) ? 'RESET_CONFIRMED' : 'RESETTING';
-    round.stage = Math.max(round.stage, STAGE_OF_STATUS.RESETTING);
     this.commit(
       req,
       now,
       round,
       round.status,
-      `${req.actor.role} xác nhận xong: ${pending.map((t) => t.task_key).join(', ')}`,
+      `${ROLE_SHORT[req.actor.role]} xác nhận xong: ${resetTasksSentence(pending.map((t) => t.task_key))}`,
       {
         tasks: pending.map((t) => t.task_key),
         cycle: round.reset_cycle,
         layout: this.state.event.config.hiding_layout,
-        since_stop_ms: round.game_stopped_at ? now - round.game_stopped_at : null,
+        since_exit_ms: round.exit_confirmed_at ? now - round.exit_confirmed_at : null,
       },
     );
     return this.result(true, 'OK', 'Đã ghi nhận reset', this.revision, now);
   }
 
+  /**
+   * PHASE 08 — closure. It requires the physical departure, the outstanding physical
+   * checks, and a finalised result: a claim still awaiting verification keeps the
+   * session open instead of silently dropping it.
+   */
   private onGateFinalize(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
     if (!round) return this.invalidRound(req, now);
     if (!isResetWindow(round)) {
       return this.result(false, 'INVALID_STATE', 'Chưa tới giai đoạn reset', this.revision, now);
+    }
+    if (round.exit_confirmed_at === null) {
+      return this.result(false, 'BLOCKED', 'NPC 1 chưa xác nhận đội rời tầng 3', this.revision, now);
+    }
+    const limit = this.state.event.config.game_limit_ms;
+    const result = resultOf(round, this.state.attempts, limit, now);
+    if (result === 'IN_PROGRESS' || result === 'PENDING_VALIDATION') {
+      return this.result(false, 'BLOCKED', 'Kết quả trận chưa chốt — NPC 2 cần xác minh lần báo hoàn thành', this.revision, now);
     }
     const missing = this.state.reset_tasks.filter(
       (t) => t.round_id === round.id && (t.completed_at === null || t.cycle !== round.reset_cycle),
@@ -665,25 +998,26 @@ export class ScreamEngine {
       return this.result(
         false,
         'BLOCKED',
-        `Chưa xác nhận reset: ${missing.map((m) => m.task_key).join(', ')}`,
+        `Chưa thể sẵn sàng: ${resetTasksSentence(missing.map((m) => m.task_key))} chưa được xác nhận.`,
         this.revision,
         now,
       );
     }
+    round.result = result;
     round.gate_finalized_at = now;
+    round.finalized_by_role = req.actor.role;
     round.system_ready_at = now;
-    round.status = 'GATE_CLEARED';
-    round.stage = STAGE_OF_STATUS.GATE_CLEARED;
-    // The deadline may already have passed; the event only closes once the
-    // supervisor confirms the area is clear or the round finishes in overtime.
-    this.commit(req, now, round, 'GATE_CLEARED', 'GATE xác nhận khu vực thông thoáng — SẴN SÀNG', {
-      total_reset_ms: round.game_stopped_at ? now - round.game_stopped_at : null,
+    this.advance(round, 'CLOSED');
+    this.commit(req, now, round, 'CLOSED', `${labelOf(round)} đã đóng · SẴN SÀNG nhận đội tiếp theo`, {
+      total_reset_ms: round.exit_confirmed_at ? now - round.exit_confirmed_at : null,
+      result,
+      official_duration_ms: round.official_duration_ms,
       cycle: round.reset_cycle,
     });
     return this.result(true, 'OK', 'SẴN SÀNG nhận đội tiếp theo', this.revision, now);
   }
 
-  /** Scenario C: the object-placement operator records the prepared hiding layout. */
+  /** The object-placement operator records the prepared hiding layout. */
   private onSetLayout(req: CommandRequest, now: number): CommandResult {
     const meta = req.meta as unknown as { layout?: HidingLayout };
     const layout = meta?.layout;
@@ -701,9 +1035,8 @@ export class ScreamEngine {
   }
 
   /**
-   * The optional label of the team currently on the floor. It is a normal
-   * revisioned command: every station receives the corrected name with the next
-   * snapshot, and the change stays in the audit history.
+   * The optional label of the team on the floor. Only allowed before the countdown
+   * starts: while 5:00 runs, session data is frozen (§9).
    */
   private onSetTeamName(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
@@ -728,16 +1061,16 @@ export class ScreamEngine {
       now,
       round,
       round.status,
-      name ? `Đặt tên đội #${pad3(round.team_number)}: ${name}` : `Đã xoá tên đội #${pad3(round.team_number)}`,
+      name ? `Đặt tên đội ${labelOf(round)}: ${name}` : `Đã xoá tên đội ${labelOf(round)}`,
       { team_name: name, previous_team_name: before },
     );
     return this.result(true, 'OK', name ? `Đã đặt tên đội: ${name}` : 'Đã xoá tên đội', this.revision, now);
   }
 
   /**
-   * P0-06: reopening a reset invalidates every confirmation of the round by
-   * advancing its reset cycle, and revokes READY so no team can be dispatched on
-   * the old acknowledgement set. The original records stay in the audit log.
+   * Reopening a reset invalidates every confirmation of the round by advancing its
+   * reset cycle, and revokes readiness so no team can be dispatched on the old
+   * acknowledgement set. The original records stay in the audit log.
    */
   private onReopenReset(req: CommandRequest, now: number): CommandResult {
     const meta = req.meta as unknown as { round_id?: string; task_key?: ResetTaskKey; reason?: string };
@@ -764,18 +1097,20 @@ export class ScreamEngine {
     // Bring the task rows onto the new cycle so the pending check stays simple.
     for (const t of this.state.reset_tasks.filter((x) => x.round_id === round.id)) t.cycle = round.reset_cycle;
     round.gate_finalized_at = null;
+    round.finalized_by_role = null;
     round.system_ready_at = null;
-    round.status = 'RESETTING';
-    this.commit(req, now, round, 'RESETTING', `Mở lại reset đội #${pad3(round.team_number)} · chu kỳ ${round.reset_cycle}`, {
+    round.status = 'EXIT_CONFIRMED';
+    this.flagReview(round, 'RESET_REOPENED');
+    this.commit(req, now, round, 'EXIT_CONFIRMED', `Mở lại reset ${labelOf(round)} · chu kỳ ${round.reset_cycle}`, {
       reason: meta.reason,
       task: meta.task_key ?? 'all',
       cycle: round.reset_cycle,
       invalidated: previous,
     });
-    return this.result(true, 'OK', 'Cả ba bước reset phải xác nhận lại', this.revision, now);
+    return this.result(true, 'OK', 'Tất cả bước reset phải xác nhận lại', this.revision, now);
   }
 
-  /** P0-05: only a supervisor decision releases (or rejects) a disputed result. */
+  /** Only a supervisor decision releases (or rejects) a disputed result. */
   private onReviewResolve(req: CommandRequest, now: number): CommandResult {
     const meta = req.meta as unknown as { round_id?: string; decision?: 'ACCEPT' | 'REJECT'; reason?: string };
     if (!meta?.reason) return this.result(false, 'BLOCKED', 'Bắt buộc nhập lý do quyết định', this.revision, now);
@@ -788,7 +1123,8 @@ export class ScreamEngine {
     round.needs_review = false;
     round.review_resolved_at = now;
     round.decertified = meta.decision === 'REJECT';
-    this.commit(req, now, round, round.status, `Xét kết quả đội #${pad3(round.team_number)}: ${meta.decision}`, {
+    this.commit(req, now, round, round.status,
+      `Xét kết quả ${labelOf(round)}: ${meta.decision === 'ACCEPT' ? 'chấp nhận' : 'loại bỏ'}`, {
       reason: meta.reason,
       decision: meta.decision,
       reasons: round.review_reasons,
@@ -816,43 +1152,85 @@ export class ScreamEngine {
       return this.result(
         false,
         'BLOCKED',
-        active.game_stopped_at === null
-          ? `Đội #${pad3(active.team_number)} vẫn đang trong khu vực — không cắt đồng hồ`
-          : 'Chưa hoàn tất reset cho đội hiện tại',
+        flowStatus(active) === 'EXIT_CONFIRMED'
+          ? 'Chưa hoàn tất reset và đóng lượt chơi hiện tại'
+          : `${labelOf(active)} vẫn đang trong khu vực — không cắt đồng hồ`,
         this.revision,
         now,
       );
     }
     this.state.event.event_ended_at = now;
-    this.commit(req, now, null, 'ENDED', 'Sự kiện đã kết thúc (đóng có kiểm soát)', {
-      overtime_ms: 0,
-    });
+    this.commit(req, now, null, 'ENDED', 'Sự kiện đã kết thúc (đóng có kiểm soát)', { overtime_ms: 0 });
     return this.result(true, 'OK', 'SỰ KIỆN KẾT THÚC', this.revision, now);
   }
 
+  /**
+   * Supervisor-side cancellation. It cancels the *round*; it never speaks for the
+   * players' bodies (V3.1 §4.2): no exit stamp is written here, so NPC1 still has to
+   * confirm the team is out of floor 3 before the area may be prepared again.
+   *
+   * `kind` decides what happens to an outstanding claim: a `misconduct` cancellation
+   * disqualifies and can only be reopened by REVIEW_RESOLVE, while `technical` and
+   * `safety` leave a claim recorded before the deadline verifiable by NPC2 (§4.4).
+   */
   private onAbortRound(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);
     if (!round) return this.invalidRound(req, now);
-    if (!req.meta?.reason) {
+    const reason = String(req.meta?.reason ?? '').trim();
+    if (!reason) {
       return this.result(false, 'BLOCKED', 'Bắt buộc nhập lý do dừng khẩn cấp', this.revision, now);
     }
-    if (round.game_started_at !== null && round.game_stopped_at === null) {
-      const duration = gameElapsedMs(round, now);
-      round.game_elapsed_ms = duration;
-      round.game_anchor_ms = null;
-      round.game_stopped_at = now;
-      round.exit_confirmed_at = now;
-      round.official_duration_ms = duration;
+    const kind = String(req.meta?.kind ?? '') as AbortKind;
+    if (!ABORT_KINDS.includes(kind)) {
+      return this.result(false, 'INVALID_STATE', 'Chọn loại hủy: Sự cố kỹ thuật, An toàn · y tế hoặc Kỷ luật', this.revision, now);
     }
+    if (round.aborted_at !== null) {
+      return this.result(true, 'OK', 'Lượt chơi đã bị hủy trước đó', this.revision, now);
+    }
+    const limit = roundLimitMs(round, this.state.event.config.game_limit_ms);
     round.aborted_at = now;
-    round.outcome = 'ABORTED';
-    round.status = 'RESETTING';
-    this.commit(req, now, round, 'RESETTING', `DỪNG KHẨN CẤP đội #${pad3(round.team_number)}`, {
-      reason: req.meta.reason,
+    round.abort_kind = kind;
+    round.abort_reason = reason;
+    // The clock stops on a cancellation, and nothing can start it again.
+    if (round.game_started_at !== null) round.game_stopped_at = now;
+    const validated = hasValidatedAttempt(round) || attemptsOf(this.state.attempts, round.id).some((a) => a.status === 'VALID');
+    if (kind === 'misconduct') {
+      // Disqualified, but the recorded facts survive: the claim rows, its timestamp
+      // and the time it would have scored stay on the row so a supervisor's REVIEW_RESOLVE
+      // can decide on the real numbers instead of a rewritten history (§4.4, §10.2).
+      round.result = 'ABORTED';
+      round.outcome = 'ABORTED';
+      round.decertified = true;
+    } else if (validated) {
+      // A win already decided by a legitimate claim is not erased by an operational
+      // cancellation; the abort itself still stands in the history and the review.
+      round.result = 'WON';
+      round.outcome = 'WON';
+    } else {
+      round.official_duration_ms = null;
+      round.result = 'ABORTED';
+      round.outcome = 'ABORTED';
+    }
+    // Gameplay is over, the team is still inside: the lifecycle stops at exit-waiting.
+    this.advance(round, 'WAITING_FOR_EXIT');
+    this.flagReview(round, 'ROUND_ABORTED');
+    this.commit(req, now, round, 'WAITING_FOR_EXIT', `HỦY LƯỢT ${labelOf(round)} · ${ABORT_KIND_LABEL[kind]}`, {
+      reason,
+      kind,
+      result: round.result,
+      pending_validation: pendingEligibleClaims(round, this.state.attempts, limit, now).length > 0,
+      elapsed_ms: round.game_started_at ? now - round.game_started_at : null,
     });
-    return this.result(true, 'OK', 'Đã dừng khẩn cấp — khu vực cần reset', this.revision, now);
+    return this.result(true, 'OK',
+      'LƯỢT CHƠI ĐÃ HỦY — NPC 1 vẫn cần xác nhận đội đã rời tầng 3', this.revision, now);
   }
 
+  /**
+   * Elevated correction for an operator mistake. It requires a reason, keeps the
+   * original value in the audit entry, and never rewrites a claim: correcting an
+   * attempt timestamp means recording the decision against the right attempt, which
+   * this does not do — so the claim rows themselves stay out of reach.
+   */
   private onCorrectRound(req: CommandRequest, now: number): CommandResult {
     const meta = req.meta as unknown as {
       round_id?: string;
@@ -866,35 +1244,29 @@ export class ScreamEngine {
     const round = this.state.rounds.find((r) => r.id === meta.round_id);
     if (!round) return this.result(false, 'INVALID_STATE', 'Không tìm thấy lượt chơi', this.revision, now);
     const field = meta.field as keyof Round | undefined;
-    if (!field || !['game_started_at', 'game_stopped_at', 'puzzle_completed_at', 'exit_confirmed_at'].includes(field)) {
+    const correctable: (keyof Round)[] = ['game_started_at', 'deadline_at', 'exit_confirmed_at', 'floor2_confirmed_at'];
+    if (!field || !correctable.includes(field)) {
       return this.result(false, 'INVALID_STATE', 'Trường không được phép hiệu chỉnh', this.revision, now);
     }
-    if (round.system_ready_at !== null && field !== 'puzzle_completed_at') {
-      return this.result(false, 'INVALID_STATE', 'Lượt chơi đã đóng — không đổi mốc giờ sau khi SẴN SÀNG', this.revision, now);
-    }
-    const before = round[field] as number | null;
-    // null is an explicit undo (Scenario A: a wrong puzzle confirmation), never a
-    // silent delete: the original value stays in the audit entry.
     let value: number | null = null;
     if (meta.value_ms !== null && meta.value_ms !== undefined) {
       value = Number(meta.value_ms);
       if (!Number.isFinite(value)) return this.result(false, 'INVALID_STATE', 'Thời gian không hợp lệ', this.revision, now);
     }
+    const before = round[field] as number | null;
+    if (field === 'game_started_at' && value !== null) {
+      // Moving START moves the deadline with it, so the window keeps its 300 seconds.
+      round.deadline_at = value + this.state.event.config.game_limit_ms;
+    }
     (round as unknown as Record<string, unknown>)[field] = value;
-    // A wall-clock recompute is only honest for a round whose 5-minute window was
-    // never paused or restarted; otherwise the banked score stays and the mismatch
-    // is left for the supervisor to resolve (this press already flags CORRECTED).
-    if (
-      round.game_started_at !== null &&
-      round.game_stopped_at !== null &&
-      round.game_reset_count === 0 &&
-      round.game_pause_count === 0
-    ) {
-      round.official_duration_ms = Math.max(0, round.game_stopped_at - round.game_started_at);
-      round.outcome = round.outcome === 'ABORTED' ? 'ABORTED' : this.computeOutcome(round, round.official_duration_ms);
+    // A duration was scored from a claim: re-derive it against the corrected start
+    // instead of trusting a wall-clock recomputation.
+    if (field === 'game_started_at' && round.validated_attempt_id !== null) {
+      const attempt = this.state.attempts.find((a) => a.id === round.validated_attempt_id);
+      if (attempt && value !== null) round.official_duration_ms = Math.max(0, attempt.claimed_at - value);
     }
     this.flagReview(round, 'CORRECTED');
-    this.commit(req, now, round, round.status, `Hiệu chỉnh ${field}`, {
+    this.commit(req, now, round, round.status, `Hiệu chỉnh ${fieldLabel(field)}`, {
       field,
       before_ms: before,
       after_ms: value,
@@ -914,48 +1286,35 @@ export class ScreamEngine {
     return this.activeRound();
   }
 
-  private requireRunning(_req: CommandRequest, _now: number): Round | null {
-    const r = this.activeRound();
-    return r && isGameRunning(r) ? r : null;
+  /**
+   * Move the round to the next lifecycle position. `stage` only ever grows, so the
+   * progress line can show how far a team got even after an exceptional branch.
+   */
+  private advance(round: Round, to: FlowStatus): void {
+    round.status = to;
+    round.stage = Math.max(round.stage, STAGE_OF_STATUS[to]);
   }
 
   private requiredTasks(): { key: ResetTaskKey; role: Role }[] {
     const owner = this.state.event.config.hidden_object_owner;
     return [
       { key: 'hidden_objects', role: owner },
-      { key: 'hallway', role: 'CORRIDOR' },
+      { key: 'hallway', role: 'GATE' },
       { key: 'room', role: 'ROOM305' },
     ];
   }
 
-  private allTasksDone(roundId: string): boolean {
-    const round = this.state.rounds.find((r) => r.id === roundId);
-    if (!round) return false;
-    // Only confirmations from the current cycle count, so a reopened reset can
-    // never be satisfied by the previous round's DONE marks.
-    return this.state.reset_tasks
-      .filter((t) => t.round_id === roundId)
-      .every((t) => t.completed_at !== null && t.cycle === round.reset_cycle);
-  }
-
   /**
-   * Stores the gap between the operator's physical press (client-calibrated
-   * instant) and the authoritative server commit. The official timestamp stays the
-   * server value; a large gap makes the result disputed rather than silently
-   * accepted.
+   * Stores the gap between the operator's physical press (client-calibrated instant)
+   * and the authoritative server commit. The official timestamp stays the server value;
+   * a large gap makes the result disputed rather than silently accepted.
    */
-  private recordPress(round: Round, which: 'start' | 'stop', req: CommandRequest, now: number): void {
+  private recordPress(round: Round, req: CommandRequest, now: number): void {
     const press = req.press;
     const delay = press ? Math.max(0, now - press.press_ms) : null;
-    if (which === 'start') {
-      round.start_press_ms = press?.press_ms ?? null;
-      round.start_transport_ms = delay;
-      if (delay !== null && delay > this.state.event.config.review_threshold_ms) this.flagReview(round, 'START_TRANSPORT');
-    } else {
-      round.stop_press_ms = press?.press_ms ?? null;
-      round.stop_transport_ms = delay;
-      if (delay !== null && delay > this.state.event.config.review_threshold_ms) this.flagReview(round, 'STOP_TRANSPORT');
-    }
+    round.start_press_ms = press?.press_ms ?? null;
+    round.start_transport_ms = delay;
+    if (delay !== null && delay > this.state.event.config.review_threshold_ms) this.flagReview(round, 'START_TRANSPORT');
   }
 
   private flagReview(round: Round, reason: string): void {
@@ -964,16 +1323,8 @@ export class ScreamEngine {
     round.review_resolved_at = null;
   }
 
-  private computeOutcome(round: Round, duration: number): Outcome {
-    if (round.aborted_at !== null) return 'ABORTED';
-    const limit = this.state.event.config.game_limit_ms;
-    if (duration > limit) return 'TIMEOUT';
-    if (round.puzzle_completed_at === null) return 'NO_PUZZLE';
-    return 'WON';
-  }
-
   private operatorStates(): OperatorState[] {
-    const roles: Role[] = ['LOBBY', 'GATE', 'CORRIDOR', 'ROOM305', 'SUPERVISOR'];
+    const roles: Role[] = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'SUPERVISOR'];
     return roles.map((role) => {
       const entry = [...this.state.log].reverse().find((l) => l.actor_role === role && l.actor_id !== 'system.clock');
       const account = Object.values(this.accounts).find((a) => a.role === role);
@@ -990,7 +1341,7 @@ export class ScreamEngine {
 
 /* ------------------------------------------------------------------ helpers */
 
-export { deriveEventStatus, derivePhase };
+export { deriveEventStatus, derivePhase, flowStatus, gameElapsedMs, liveStatus, resultOf, roundDeadlineMs };
 
 /** Trim a submitted team label; missing or non-string input means “no label”. */
 function teamNameOf(meta: CommandRequest['meta']): string | null {
@@ -1004,24 +1355,104 @@ export function pad3(n: number): string {
   return String(n).padStart(3, '0');
 }
 
-/** Human-readable remainder for command messages (seconds, no milliseconds noise). */
-function formatLeft(ms: number): string {
-  const abs = Math.abs(ms);
-  const m = Math.floor(abs / 60_000);
-  const s = Math.floor((abs % 60_000) / 1000);
-  return `${ms < 0 ? '-' : ''}${m}:${String(s).padStart(2, '0')}`;
+/** “#004 · PHANTOM 05”, the identity every shared status sentence must carry. */
+function labelOf(r: Round): string {
+  return r.team_name ? `#${pad3(r.team_number)} · ${r.team_name}` : `#${pad3(r.team_number)}`;
 }
 
-function outcomeText(outcome: Outcome, duration: number): string {
-  const ms = `${Math.floor(duration / 1000)}.${String(duration % 1000).padStart(3, '0')}s`;
-  switch (outcome) {
+/** The one sentence the whole room reads after a phase press. */
+function teamSentence(r: Round, predicate: string): string {
+  return `Đội ${labelOf(r)} ${predicate}`;
+}
+
+function resultText(r: Round, attempts: CompletionAttempt[], limit: number, now: number): string {
+  switch (resultOf(r, attempts, limit, now)) {
     case 'WON':
-      return `THÀNH CÔNG ${ms}`;
-    case 'TIMEOUT':
-      return `QUÁ GIỜ ${ms}`;
-    case 'NO_PUZZLE':
-      return `CHƯA HOÀN THÀNH TRẬN ĐỒ · ${ms}`;
+      return `THÀNH CÔNG ${formatClockCs(r.official_duration_ms ?? 0)}`;
+    case 'TIME_UP':
+      return 'HẾT GIỜ';
+    case 'PENDING_VALIDATION':
+      return 'ĐANG CHỜ XÁC MINH';
+    case 'ABORTED':
+      return 'LƯỢT CHƠI ĐÃ HỦY';
     default:
-      return ms;
+      return 'ĐANG DIỄN RA';
   }
+}
+
+/** The correctable columns named the way the operator sees them (§10.2). */
+function fieldLabel(field: keyof Round | string): string {
+  switch (field) {
+    case 'game_started_at': return 'mốc bắt đầu lượt chơi';
+    case 'deadline_at': return 'mốc hết giờ';
+    case 'exit_confirmed_at': return 'mốc đội rời tầng 3';
+    case 'floor2_confirmed_at': return 'mốc xác nhận tầng 2';
+    default: return String(field);
+  }
+}
+
+/** Human-readable duration for labels and messages (MM:SS). */
+export function formatClockSec(ms: number): string {
+  const abs = Math.max(0, Math.floor(ms / 1000) * 1000);
+  const m = Math.floor(abs / 60_000);
+  const s = Math.floor((abs % 60_000) / 1000);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * The single duration rule shared by the engine, the UI and the tests: a round is
+ * between 00:01 and 59:59, whole seconds, and never 00:00 (V3.1 §7.3). PostgreSQL
+ * enforces the same bounds in `sc._valid_round_duration`.
+ */
+export function validateRoundDuration(value: unknown): { ok: boolean; message: string; ms: number } {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || Number.isNaN(ms)) {
+    return { ok: false, message: 'Thời lượng không hợp lệ', ms: 0 };
+  }
+  if (ms !== Math.round(ms)) {
+    return { ok: false, message: 'Thời lượng phải là số giây nguyên', ms: 0 };
+  }
+  if (ms % 1000 !== 0) {
+    return { ok: false, message: 'Thời lượng tính theo giây, không theo phần trăm giây', ms: 0 };
+  }
+  if (ms < ROUND_DURATION_MIN_MS) {
+    return { ok: false, message: 'Thời lượng lượt chơi phải lớn hơn 00:00', ms: 0 };
+  }
+  if (ms > ROUND_DURATION_MAX_MS) {
+    return { ok: false, message: `Thời lượng tối đa là ${formatClockSec(ROUND_DURATION_MAX_MS)}`, ms: 0 };
+  }
+  return { ok: true, message: '', ms };
+}
+
+/** Human-readable elapsed for messages and the attempt list (MM:SS.hh). */
+export function formatClockCs(ms: number): string {
+  const abs = Math.max(0, ms);
+  const m = Math.floor(abs / 60_000);
+  const s = Math.floor((abs % 60_000) / 1000);
+  const cs = Math.floor((abs % 1000) / 10);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+/**
+ * What a retired button used to do, and where that job lives now. A stale client
+ * must get an explanation, not a silent success that moves the state machine.
+ */
+function retiredMessage(action: ActionType): string | null {
+  const map: Partial<Record<ActionType, string>> = {
+    TEAM_UPSTAIRS: 'Thao tác đã gộp vào NHẬN ĐỘI & CHO LÊN TẦNG 2',
+    HALLWAY_PROGRESS: 'Hành lang không còn điều khiển lượt chơi',
+    ROOM_REACHED: 'Đội đến phòng 305 do NPC 2 ghi nhận khi báo hoàn thành',
+    PUZZLE_COMPLETE: 'Dùng GHI NHẬN BÁO HOÀN THÀNH rồi kiểm tra từng lần',
+    RETURN_START: 'Việc quay lại cửa vào không còn là một bước bấm riêng',
+    GAME_STOP: 'NPC 1 dùng XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3',
+    OVERTIME_STARTED: 'Không còn nghiệp vụ phiên 90 phút để gia hạn',
+    OVERRIDE_ADMIT: 'Không còn mốc cutoff phiên để vượt qua',
+    EVENT_CLOSED: 'Đóng sự kiện do Quản trị viên thực hiện bằng ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT',
+    SESSION_RESTORE: 'Không còn phiên 90 phút để khôi phục',
+    GAME_PAUSE: 'Đồng hồ lượt chơi không còn tạm dừng được',
+    GAME_RESUME: 'Đồng hồ lượt chơi không còn chạy lại được',
+    GAME_RESET: 'Đồng hồ lượt chơi không thể reset — chỉ KẾT THÚC SỚM có lý do',
+    START_EVENT: 'Sự kiện mở bằng lần nhận đội đầu tiên',
+  };
+  return map[action] ?? null;
 }

@@ -1,17 +1,29 @@
-import type { JourneyStopDef, ResetTaskKey, Role } from '../shared/constants';
-import { JOURNEY_STOPS, RESET_TASK_LABEL, STALL_WARN_MS } from '../shared/constants';
+import type { JourneyStopDef, ResetTaskKey, Role, StationRole } from '../shared/constants';
+import { JOURNEY_STOPS, OBSERVER_CAPACITY, RESET_TASK_LABEL, STALL_WARN_MS } from '../shared/constants';
 import {
+  attemptsOf,
   deriveEventStatus,
-  derivePhase,
   gameRemainingMs,
-  isGamePaused,
-  isGameRunning,
   isResetWindow,
   isTerminalRound,
+  liveStatus,
+  pendingEligibleClaims,
+  resultOf,
+  roundDeadlineMs,
+  roundLimitMs,
   stallSince,
 } from '../shared/machine';
 import { formatClockSec, formatWallTime } from '../shared/metrics';
-import type { ActionType, Round, Snapshot, SystemPhase } from '../shared/types';
+import type {
+  ActionType,
+  CommandMeta,
+  CompletionAttempt,
+  FlowStatus,
+  Round,
+  RoundResult,
+  Snapshot,
+  SystemPhase,
+} from '../shared/types';
 
 export type Tone = 'primary' | 'danger' | 'warn' | 'waiting';
 
@@ -22,19 +34,43 @@ export interface PrimaryAction {
   hint: string | null;
   /** True when only a supervisor, with a typed reason, may proceed. */
   overrideOnly: boolean;
+  /** When set, the control must collect this reason before it may send. */
+  reasonPrompt: string | null;
+  /** When set, the control must be confirmed a second time before it may send. */
+  confirmLabel: string | null;
+  /** Extra payload the action carries (an attempt id, an override flag…). */
+  meta: CommandMeta;
 }
 
-/**
- * The main timer is the 5-minute game countdown. `valueMs === null` means “show
- * no number at all”, which is what every non-playing phase does.
- */
-export interface HeroClock {
-  mode: 'GAME' | 'GAME_OVERTIME' | 'GAME_PAUSED' | 'IDLE';
-  label: string;
-  sublabel: string;
-  /** Signed ms: the countdown goes negative into game overtime. */
-  valueMs: number | null;
-  tone: Tone;
+/** Everything the one control needs, so no screen decides permissions for itself. */
+function locked(label: string, hint: string | null = null): PrimaryAction {
+  return {
+    action: null,
+    label,
+    tone: 'waiting',
+    hint,
+    overrideOnly: false,
+    reasonPrompt: null,
+    confirmLabel: null,
+    meta: {},
+  };
+}
+
+function live(
+  action: ActionType,
+  label: string,
+  opts: { tone?: Tone; hint?: string | null; meta?: CommandMeta; reasonPrompt?: string; confirmLabel?: string } = {},
+): PrimaryAction {
+  return {
+    action,
+    label,
+    tone: opts.tone ?? 'primary',
+    hint: opts.hint ?? null,
+    overrideOnly: false,
+    reasonPrompt: opts.reasonPrompt ?? null,
+    confirmLabel: opts.confirmLabel ?? null,
+    meta: opts.meta ?? {},
+  };
 }
 
 export function activeRound(snap: Snapshot | null): Round | null {
@@ -44,295 +80,491 @@ export function activeRound(snap: Snapshot | null): Round | null {
 
 /**
  * Phase and status are pure functions of authoritative timestamps and "now", so
- * they are re-derived against the client's estimated server clock on every
- * render. A fetched snapshot can never leave the dashboard showing a phase that
- * time has already passed — while the official numbers stay untouched.
+ * they are re-derived against the client's estimated server clock on every render.
+ * A fetched snapshot can never leave the dashboard showing a phase that time has
+ * already passed — while the official numbers stay untouched.
  */
 export function phaseOf(snap: Snapshot, nowMs: number): SystemPhase {
-  return derivePhase(snap.event, snap.active_round, nowMs);
+  // Always recomputed against the live estimated server clock: a snapshot fetched a
+  // minute ago must not keep a phone in a phase that time has already left behind.
+  return deriveFallback(snap, nowMs);
+}
+
+/** The derivation the server used, recomputed locally against the live clock. */
+function deriveFallback(snap: Snapshot, nowMs: number): SystemPhase {
+  const round = snap.active_round;
+  if (snap.event.event_ended_at !== null) return 'ENDED';
+  if (snap.event.event_started_at === null && !round) return 'PRE_EVENT';
+  if (!round) return 'WAITING_FOR_TEAM';
+  return liveStatus(round, snap.attempts ?? [], roundLimitMs(round, snap.event.config.game_limit_ms), nowMs);
 }
 
 export function statusOf(snap: Snapshot, nowMs: number): ReturnType<typeof deriveEventStatus> {
   return deriveEventStatus(snap.event, nowMs);
 }
 
+/** The lifecycle position of the round in play, or null when nobody is on the floor. */
+export function flowOf(snap: Snapshot, nowMs: number): FlowStatus | null {
+  const phase = phaseOf(snap, nowMs);
+  return phase === 'PRE_EVENT' || phase === 'ENDED' || phase === 'WAITING_FOR_TEAM' ? null : phase;
+}
+
+export function resultOfRound(snap: Snapshot, nowMs: number): RoundResult | null {
+  const round = snap.active_round;
+  if (!round) return null;
+  return resultOf(round, snap.attempts ?? [], roundLimitMs(round, snap.event.config.game_limit_ms), nowMs);
+}
+
+/**
+ * The functional screen lock (§9). While the countdown runs, or the clock has run
+ * out and a claim still awaits verification, every phone shows the clock and only
+ * the explicitly authorised in-game controls stay available.
+ */
+export function isLockedPhase(phase: SystemPhase): boolean {
+  return phase === 'RUNNING' || phase === 'TIME_EXPIRED_PENDING_VALIDATION';
+}
+
+/* ------------------------------------------------------------------ identity */
+
+/** “Đội PHANTOM 05”, the way every shared sentence names the team. */
+export function teamLabel(round: Round | null, nextTeamNumber: number): string {
+  if (!round) return `Đội #${pad(nextTeamNumber)}`;
+  return round.team_name ? `Đội ${round.team_name.toUpperCase()}` : `Đội #${pad(round.team_number)}`;
+}
+
 /* ------------------------------------------------------------- primary action */
 
 export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): PrimaryAction {
   const phase = phaseOf(snap, nowMs);
-  const round = activeRound(snap);
-  const ev = snap.event;
+  const round = snap.active_round;
+  const attempts = snap.attempts ?? [];
+  // What a round runs on: its own snapshot once it has started, otherwise the
+  // duration the supervisor has configured for the next round (V3.1 §7.5).
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const limitLabel = formatClockSec(limit);
 
-  if (phase === 'PRE_EVENT') {
-    // The first dispatch opens the event history.
-    if (role === 'LOBBY') {
-      return {
-        action: 'CALL_TEAM',
-        label: 'CHO ĐỘI LÊN',
-        tone: 'primary',
-        hint: 'Gọi đội đầu tiên khi khu vực đã sẵn sàng',
-        overrideOnly: false,
-      };
+  // A viewer is never an operator, whatever the client renders around it.
+  if (role === 'OBSERVER') return locked('CHỈ XEM — TRỰC TIẾP', 'Bạn đang theo dõi phòng 305');
+
+  switch (phase) {
+    case 'PRE_EVENT':
+    case 'WAITING_FOR_TEAM':
+      if (role === 'LOBBY') {
+        return live('CALL_TEAM', 'NHẬN ĐỘI & CHO LÊN TẦNG 2', {
+          hint: 'Kiểm tra đội tại sảnh rồi cho đội lên tầng 2',
+        });
+      }
+      return locked('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI', 'Chỉ Nhân sự 01 được nhận đội');
+
+    case 'WAITING_FLOOR2_CONFIRMATION': {
+      if (role === 'CORRIDOR') {
+        return live('CONFIRM_FLOOR2', 'XÁC NHẬN ĐÃ ĐẾN TẦNG 2', {
+          hint: 'Bấm khi đội đã có mặt ở tầng 2',
+        });
+      }
+      if (role === 'GATE') {
+        return live('FLOOR2_BYPASS', 'ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2', {
+          tone: 'warn',
+          hint: 'Chỉ dùng khi tận mắt thấy đội ở tầng 3. Bỏ qua không phải là xác nhận tầng 2.',
+          reasonPrompt: 'Lý do bỏ qua tầng 2 (bắt buộc, sẽ vào nhật ký)',
+          confirmLabel: 'XÁC NHẬN BỎ QUA TẦNG 2',
+        });
+      }
+      if (role === 'LOBBY') {
+        return locked('ĐÃ CHO ĐỘI LÊN TẦNG 2', secondary(snap, round, nowMs));
+      }
+      return locked('CHỜ NHÂN SỰ 02 XÁC NHẬN TẦNG 2', secondary(snap, round, nowMs));
     }
-    if (role === 'SUPERVISOR') {
-      return { action: null, label: 'CHỜ LOBBY GỌI ĐỘI', tone: 'waiting', hint: 'Cấu hình trong “Xem thêm” trước khi nhận đội đầu tiên', overrideOnly: false };
-    }
-    return { action: null, label: 'CHỜ LOBBY GỌI ĐỘI', tone: 'waiting', hint: 'Khu vực sẵn sàng, đồng hồ chưa chạy', overrideOnly: false };
-  }
 
-  if (phase === 'ENDED') {
-    return { action: null, label: 'SỰ KIỆN ĐÃ KẾT THÚC', tone: 'waiting', hint: 'Xem tổng kết trong “Xem thêm”', overrideOnly: false };
-  }
-
-  if (phase === 'READY') {
-    if (role === 'LOBBY') return { action: 'CALL_TEAM', label: 'CHO ĐỘI LÊN', tone: 'primary', hint: 'Khu vực đã sẵn sàng cho đội tiếp theo', overrideOnly: false };
-    if (role === 'SUPERVISOR') return { action: null, label: 'SẴN SÀNG — CHỜ LOBBY', tone: 'waiting', hint: 'Không cần thao tác trong trận bình thường', overrideOnly: false };
-    const hint = role === 'GATE' ? 'Chưa có đội nào được gọi' : 'Khu vực đã sẵn sàng';
-    return { action: null, label: 'SẴN SÀNG NHẬN ĐỘI', tone: 'waiting', hint, overrideOnly: false };
-  }
-
-  if (!round) {
-    return { action: null, label: 'CHỜ ĐỒNG BỘ…', tone: 'waiting', hint: null, overrideOnly: false };
-  }
-
-  /* ---------------------------------------------------------------- preparing */
-  if (phase === 'PREPARING') {
-    if (role === 'GATE') {
-      return { action: 'START_GAME', label: 'BẮT ĐẦU', tone: 'primary', hint: 'Chốt đồng hồ chuẩn bị, chạy 05:00', overrideOnly: false };
-    }
-    if (role === 'LOBBY') {
-      if (round.status === 'LOBBY_CALL') {
-        return {
-          action: 'TEAM_UPSTAIRS',
-          label: 'ĐÃ LÊN TẦNG 3',
+    case 'READY_AT_FLOOR3':
+      if (role === 'GATE') {
+        return live('START_GAME', `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}`, {
           tone: 'primary',
-          hint: 'GATE bấm BẮT ĐẦU chạy 05:00 sau đó',
-          overrideOnly: false,
-        };
+          hint: 'Phổ biến luật và đưa gợi ý trước khi bấm. Chỉ NPC 1 mở đồng hồ.',
+        });
       }
-      return { action: null, label: 'ĐỘI ĐANG Ở CỬA VÀO TẦNG 3', tone: 'waiting', hint: 'Chờ GATE bấm BẮT ĐẦU 05:00', overrideOnly: false };
+      return locked('ĐỘI CHƠI SẮP BẮT ĐẦU', 'Chỉ NPC 1 được bấm BẮT ĐẦU');
+
+      case 'RUNNING': {
+        if (role === 'ROOM305') {
+          return live('CLAIM_COMPLETE', 'GHI NHẬN BÁO HOÀN THÀNH', {
+            hint: 'Đồng hồ VẪN chạy sau khi ghi nhận. Kiểm tra trận đồ rồi mới chốt.',
+          });
+        }
+        if (role === 'GATE') return locked(`${limitLabel} ĐANG CHẠY`, 'Chỉ bấm khi cần rời khu vực khẩn cấp');
+        return locked(`ĐANG KHOÁ — ${limitLabel} ĐANG CHẠY`);
+      }
+
+    case 'TIME_EXPIRED_PENDING_VALIDATION': {
+      if (role === 'GATE') {
+        return live('CONFIRM_EXIT', 'XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3', {
+          tone: 'warn',
+          hint: 'Đội không bị giữ lại vì phần mềm đang chờ xác minh',
+        });
+      }
+      if (role === 'ROOM305') {
+        return locked('Kiểm tra lần báo đang chờ', 'Dùng danh sách lần báo hoàn thành bên dưới');
+      }
+      return locked('HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ');
     }
-    if (role === 'SUPERVISOR') {
-      return { action: null, label: 'ĐANG CHUẨN BỊ', tone: 'waiting', hint: null, overrideOnly: false };
+
+    case 'WAITING_FOR_EXIT':
+      if (role === 'GATE') {
+        return live('CONFIRM_EXIT', 'XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3', {
+          tone: 'primary',
+          hint: round?.aborted_at !== null
+            ? 'Lượt chơi đã bị hủy — vẫn phải xác nhận đội đã ra khỏi khu vực'
+            : 'Thời gian hoàn thành không đổi khi xác nhận rời khu vực',
+        });
+      }
+      return locked(round && round.aborted_at !== null
+        ? 'LƯỢT CHƠI ĐÃ HỦY — CHỜ NPC 1 XÁC NHẬN ĐÃ RỜI TẦNG 3'
+        : 'ĐANG CHỜ NPC1 XÁC NHẬN ĐỘI RỜI TẦNG 3');
+
+    case 'EXIT_CONFIRMED': {
+      if (role === 'ROOM305' && pendingEligibleClaims(round ?? emptyRound(), attempts, limit, nowMs).length > 0) {
+        return locked('Còn lần báo chờ xác minh', 'Kiểm tra và chốt lần báo trong danh sách');
+      }
+      if (role === 'GATE' || role === 'ROOM305') {
+        const own = pendingTasks(snap, role);
+        if (own.length > 0) {
+          return live('RESET_DONE', 'ĐÃ RESET XONG', {
+            tone: 'warn',
+            hint: own.map((t) => RESET_TASK_LABEL[t.task_key]).join(' · '),
+          });
+        }
+        if (role === 'GATE') {
+          const missing = pendingTasks(snap);
+          const pendingResult = resultOfRound(snap, nowMs) === 'PENDING_VALIDATION';
+          if (missing.length === 0 && !pendingResult) {
+            return live('GATE_FINALIZE', 'XÁC NHẬN SẴN SÀNG', {
+              hint: 'NPC 1 chốt lượt chơi sau khi khu vực đã reset',
+            });
+          }
+          return locked('CHỜ RESET HOÀN TẤT', pendingResult ? 'Kết quả đang chờ NPC 2 xác minh' : `Còn: ${missing.map((m) => RESET_TASK_LABEL[m.task_key]).join(' · ')}`);
+        }
+        return locked('ĐÃ XONG PHẦN CỦA BẠN', 'Chờ NPC 1 chốt lượt chơi');
+      }
+      return locked('ĐANG RESET KHU VỰC', 'Chờ khu vực tầng 3 sẵn sàng cho đội tiếp theo');
     }
-    if (role === 'CORRIDOR') {
-      return { action: null, label: 'CHỜ ĐỘI VÀO HÀNH LANG', tone: 'waiting', hint: null, overrideOnly: false };
-    }
-    if (role === 'ROOM305') {
-      return { action: null, label: 'CHỜ ĐỘI ĐẾN 305', tone: 'waiting', hint: null, overrideOnly: false };
-    }
-    return { action: null, label: 'ĐANG CHUẨN BỊ', tone: 'waiting', hint: null, overrideOnly: false };
+
+    case 'CLOSED':
+      return locked('LƯỢT CHƠI ĐÃ ĐÓNG', 'Sẵn sàng nhận đội tiếp theo');
+
+    case 'ENDED':
+      return locked('SỰ KIỆN ĐÃ KẾT THÚC', 'Xem tổng kết trong “Xem thêm”');
+
+    default:
+      return locked('CHỜ ĐỒNG BỘ…');
   }
-
-  /* ------------------------------------------------------------------ running */
-  if (phase === 'RUNNING' || phase === 'GAME_OVERTIME') {
-    const overtime = phase === 'GAME_OVERTIME';
-    if (role === 'GATE') {
-      return {
-        action: 'GAME_STOP',
-        label: 'KHÁCH ĐÃ RA — CHỐT GIỜ',
-        tone: overtime ? 'danger' : 'primary',
-        hint: overtime ? 'Quá giờ — đội vẫn được ra an toàn' : 'Nhấn khi người cuối cùng qua cửa',
-        overrideOnly: false,
-      };
-    }
-    if (role === 'CORRIDOR') {
-      if (round.status === 'GAME_STARTED') {
-        return { action: 'HALLWAY_PROGRESS', label: 'ĐÃ SETUP XONG', tone: 'primary', hint: 'Bắt đầu hóa trang & gây sợ', overrideOnly: false };
-      }
-      return { action: null, label: overtime ? 'QUÁ GIỜ — HƯỚNG DẪN ĐỘI RA' : 'ĐỘI ĐANG Ở 305', tone: overtime ? 'danger' : 'waiting', hint: null, overrideOnly: false };
-    }
-    if (role === 'ROOM305') {
-      if (round.status === 'GAME_STARTED' || round.status === 'CORRIDOR_ACTIVE') {
-        return { action: 'ROOM_REACHED', label: 'ĐÃ ĐẾN 305', tone: 'primary', hint: 'Đội đã trước cửa phòng', overrideOnly: false };
-      }
-      if (round.status === 'ROOM_REACHED') {
-        return { action: 'PUZZLE_COMPLETE', label: 'XÁC NHẬN HOÀN THÀNH', tone: 'primary', hint: 'Đồng hồ VẪN chạy', overrideOnly: false };
-      }
-      if (round.status === 'PUZZLE_COMPLETED') {
-        return { action: 'RETURN_START', label: 'ĐỘI RỜI PHÒNG 305', tone: 'primary', hint: 'Hướng dẫn đội quay lại cửa vào', overrideOnly: false };
-      }
-      return { action: null, label: overtime ? 'QUÁ GIỜ — CHO ĐỘI RA' : 'ĐỘI ĐANG QUAY LẠI', tone: overtime ? 'danger' : 'waiting', hint: null, overrideOnly: false };
-    }
-    if (role === 'LOBBY') {
-      return { action: null, label: 'TRẬN ĐANG DIỄN RA', tone: 'waiting', hint: overtime ? 'Đội đang quá giờ' : null, overrideOnly: false };
-    }
-    return { action: null, label: overtime ? 'HẾT 5:00' : 'TRẬN ĐANG DIỄN RA', tone: overtime ? 'danger' : 'waiting', hint: 'Chỉ can thiệp khi khẩn cấp', overrideOnly: false };
-  }
-
-  /* ----------------------------------------------------------------- resetting */
-  if (phase === 'RESETTING') {
-    const pendingFor = (r: Role) => pendingTasks(snap, r);
-    const missing = pendingTasks(snap);
-
-    if (role === 'GATE') {
-      const own = pendingFor('GATE');
-      if (own.length > 0) {
-        return { action: 'RESET_DONE', label: 'ĐÃ RESET XONG', tone: 'primary', hint: own.map((t) => RESET_TASK_LABEL[t.task_key]).join(' · '), overrideOnly: false };
-      }
-      if (missing.length === 0) {
-        return { action: 'GATE_FINALIZE', label: 'XÁC NHẬN SẴN SÀNG', tone: 'primary', hint: 'Cửa vào & khu vực đã thông thoáng', overrideOnly: false };
-      }
-      return {
-        action: null,
-        label: 'CHỜ RESET HOÀN TẤT',
-        tone: 'waiting',
-        hint: `Còn: ${missing.map((m) => RESET_TASK_LABEL[m.task_key]).join(' · ')}`,
-        overrideOnly: false,
-      };
-    }
-    if (role === 'CORRIDOR' || role === 'ROOM305') {
-      const own = pendingFor(role);
-      if (own.length > 0) {
-        return { action: 'RESET_DONE', label: 'ĐÃ RESET XONG', tone: 'primary', hint: own.map((t) => RESET_TASK_LABEL[t.task_key]).join(' · '), overrideOnly: false };
-      }
-      return { action: null, label: 'ĐÃ XONG PHẦN CỦA BẠN', tone: 'waiting', hint: 'Chờ GATE xác nhận', overrideOnly: false };
-    }
-    if (role === 'LOBBY') {
-      return {
-        action: null,
-        label: 'ĐANG RESET KHU VỰC',
-        tone: 'waiting',
-        hint: missing.length === 0 ? 'Reset xong — chờ GATE chốt' : `Còn ${missing.length} tác vụ`,
-        overrideOnly: false,
-      };
-    }
-    return {
-      action: null,
-      label: 'ĐANG RESET',
-      tone: 'waiting',
-      hint: missing.length === 0 ? 'GATE có thể xác nhận' : `Còn: ${missing.map((m) => RESET_TASK_LABEL[m.task_key]).join(', ')}`,
-      overrideOnly: false,
-    };
-  }
-
-  /* an active round in a phase we do not map to a button: never guess */
-  return { action: null, label: 'CHỜ ĐỒNG BỘ…', tone: 'waiting', hint: null, overrideOnly: false };
 }
 
-/* ------------------------------------------------------------------ hero clock */
+/** The line under a locked control: who is expected to act, in one sentence. */
+function secondary(snap: Snapshot, round: Round | null, nowMs: number): string | null {
+  if (!round) return null;
+  if (round.floor2_bypassed_at !== null) {
+    return 'NPC 1 đã bỏ qua xác nhận tầng 2 — không cần thao tác ở tầng 2';
+  }
+  if (round.floor2_confirmed_at !== null) return 'Đội đang được hướng dẫn lên tầng 3';
+  return resultOfRound(snap, nowMs) === 'IN_PROGRESS' ? 'Chờ Nhân sự 02 xác nhận đội đã đến tầng 2' : null;
+}
+
+const EMPTY_ROUND_EXTRA = {
+  result: 'IN_PROGRESS' as RoundResult,
+  validated_attempt_id: null,
+};
+
+/** A stand-in that only exists so the helper above never dereferences null. */
+function emptyRound(): Round {
+  return {
+    ...EMPTY_ROUND_EXTRA,
+    id: '',
+    event_id: '',
+    round_number: 0,
+    team_number: 0,
+    team_name: null,
+    status: 'WAITING_FLOOR2_CONFIRMATION',
+    stage: 1,
+    called_at: 0,
+    received_by_role: null,
+    received_by: null,
+    floor2_confirmed_at: null,
+    floor2_confirmed_by_role: null,
+    floor2_confirmed_by: null,
+    floor2_bypassed_at: null,
+    floor2_bypassed_by_role: null,
+    floor2_bypassed_by: null,
+    floor2_bypass_reason: null,
+    game_started_at: null,
+    started_by_role: null,
+    started_by: null,
+    deadline_at: null,
+    game_anchor_ms: null,
+    game_elapsed_ms: 0,
+    game_stopped_at: null,
+    game_reset_count: 0,
+    game_pause_count: 0,
+    round_duration_ms: null,
+    abort_kind: null,
+    abort_reason: null,
+    official_duration_ms: null,
+    puzzle_completed_at: null,
+    exit_confirmed_at: null,
+    exit_by_role: null,
+    exit_by: null,
+    exit_reason: null,
+    gate_finalized_at: null,
+    finalized_by_role: null,
+    system_ready_at: null,
+    aborted_at: null,
+    outcome: 'IN_PROGRESS',
+    admission_override: false,
+    hiding_layout: 'A',
+    reset_cycle: 1,
+    start_press_ms: null,
+    stop_press_ms: null,
+    start_transport_ms: null,
+    stop_transport_ms: null,
+    needs_review: false,
+    review_reasons: [],
+    review_resolved_at: null,
+    decertified: false,
+    created_revision: 0,
+  };
+}
 
 /**
- * The main screen shows the flexible 5:00 window while a team is on the clock.
- * Prep, reset and idle phases remain status lines.
+ * The compact secondary control that stays reachable on the locked screen: NPC1's
+ * guarded emergency exit. It is deliberately not a primary button, so it never
+ * competes with the clock, and it always needs a reason plus a confirmation.
  */
-export function resolveHero(snap: Snapshot, nowMs: number): HeroClock {
-  const ev = snap.event;
-  const round = activeRound(snap);
-  const limit = ev.config.game_limit_ms;
+export function resolveEmergency(role: Role, snap: Snapshot, nowMs: number): PrimaryAction | null {
+  if (role !== 'GATE') return null;
+  const phase = phaseOf(snap, nowMs);
+  if (phase !== 'RUNNING' && phase !== 'TIME_EXPIRED_PENDING_VALIDATION' && phase !== 'WAITING_FOR_EXIT') return null;
+  if (resultOfRound(snap, nowMs) === 'WON' && phase === 'WAITING_FOR_EXIT') return null;
+  return live('EARLY_EXIT', 'KẾT THÚC SỚM / RỜI KHU VỰC', {
+    tone: 'danger',
+    hint: 'Chỉ dùng khi đội buộc phải rời khu vực. Không tạo thời gian thắng.',
+    reasonPrompt: 'Lý do kết thúc sớm (bắt buộc, sẽ vào nhật ký)',
+    confirmLabel: 'XÁC NHẬN KẾT THÚC SỚM',
+  });
+}
 
-  if (!round) {
-    if (ev.event_ended_at !== null) {
-      const teams = snap.rounds.filter((r) => r.game_stopped_at !== null).length;
-      return { mode: 'IDLE', label: 'SỰ KIỆN KẾT THÚC', sublabel: `${teams} đội đã chơi`, valueMs: null, tone: 'waiting' };
-    }
-    if (ev.event_started_at === null) {
-      return {
-        mode: 'IDLE',
-        label: 'CHƯA TÍNH GIỜ',
-        sublabel: 'Đồng hồ 5:00 bắt đầu khi GATE bấm BẮT ĐẦU',
-        valueMs: null,
-        tone: 'waiting',
-      };
-    }
-    return {
-      mode: 'IDLE',
-      label: 'CHƯA TÍNH GIỜ',
-      sublabel: `Đã hoàn thành ${snap.rounds.filter((r) => r.system_ready_at !== null).length} đội · #${pad(ev.next_team_number)} là đội tiếp theo`,
-      valueMs: null,
-      tone: 'waiting',
-    };
+/* ------------------------------------------------------------------ countdown */
+
+/**
+ * The one clock every locked screen renders. MM:SS carries the visual weight and
+ * the hundredths are a separate, smaller field, so nothing competes with the main
+ * number. It is derived purely from the stored deadline and the synced server
+ * clock: no interval, no local start, no drift.
+ */
+export interface CountdownView {
+  /** Whether this screen should be the countdown at all. */
+  visible: boolean;
+  /** Signed ms until the authoritative deadline; clamped for display. */
+  remainingMs: number;
+  /** Display value, never negative: at 00:00 the countdown stops. */
+  mm: string;
+  ss: string;
+  cs: string;
+  expired: boolean;
+  running: boolean;
+  /**
+   * True once the round is decided. The gameplay countdown is live information
+   * only until then: from the moment an announcement is judged (or the floor is
+   * aborted) the screen stops counting toward a deadline that no longer matters.
+   */
+  settled: boolean;
+  /** Which number the hero carries: the remaining time, or the time that counted. */
+  mode: 'GAME' | 'RESULT';
+  /** The line above the hero digits, in the operator's own words. */
+  heroLabel: string;
+  /** The duration this round runs on, for every label that names it. */
+  durationMs: number;
+  teamText: string;
+  statusLine: string;
+  result: RoundResult | null;
+  /** Official elapsed time once a claim has been validated. */
+  officialMs: number | null;
+  tone: Tone;
+  /** Warning threshold crossing for the alarm pattern. */
+  warnMs: number;
+}
+
+export function resolveCountdown(snap: Snapshot, nowMs: number): CountdownView {
+  const round = snap.active_round;
+  // The round's own duration, not the configuration as it reads right now.
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const phase = phaseOf(snap, nowMs);
+  const signed = round ? gameRemainingMs(round, limit, nowMs) : limit;
+  const shown = Math.max(0, signed);
+  const result = resultOfRound(snap, nowMs);
+  // §10 step B item 5: verifying the right announcement ends the countdown as a
+  // piece of live information. The hero then carries the official time itself —
+  // the claim's own instant — so the number on the screen is the number on the
+  // board. An aborted round freezes at whatever the clock had left when NPC1 said
+  // so, and never invents a finishing time.
+  const settled = result === 'WON' || result === 'ABORTED';
+  const heroMs = result === 'WON'
+    ? round?.official_duration_ms ?? 0
+    : result === 'ABORTED'
+      ? Math.max(0, (round?.deadline_at ?? 0) - (round?.aborted_at ?? round?.exit_confirmed_at ?? 0))
+      : shown;
+  const total = Math.floor(heroMs / 1000);
+  const statusLine =
+    phase === 'TIME_EXPIRED_PENDING_VALIDATION'
+      ? 'HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ'
+      : result === 'WON'
+        ? `● THÀNH CÔNG ${formatClockSec(round?.official_duration_ms ?? 0)}`
+        : result === 'TIME_UP'
+          ? 'HẾT GIỜ — CHỜ ĐỘI RỜI TẦNG 3'
+          : result === 'ABORTED'
+            ? 'ĐÃ KẾT THÚC SỚM'
+            : phase === 'RUNNING'
+              ? `● ĐANG CHẠY ${formatClockSec(limit)}`
+              : '● ĐANG CHỜ';
+  return {
+    visible: isLockedPhase(phase) || phase === 'WAITING_FOR_EXIT',
+    remainingMs: signed,
+    mm: String(Math.floor(total / 60)).padStart(2, '0'),
+    ss: String(total % 60).padStart(2, '0'),
+    cs: String(Math.floor((heroMs % 1000) / 10)).padStart(2, '0'),
+    expired: signed <= 0,
+    running: phase === 'RUNNING' && result === 'IN_PROGRESS',
+    settled,
+    mode: settled ? 'RESULT' : 'GAME',
+    heroLabel: result === 'WON'
+      ? 'THỜI GIAN HOÀN THÀNH'
+      : result === 'ABORTED'
+        ? 'LƯỢT CHƠI ĐÃ HỦY'
+        : signed <= 0
+          ? 'HẾT GIỜ'
+          : 'THỜI GIAN CÒN LẠI',
+    durationMs: limit,
+    teamText: teamLabel(round, snap.event.next_team_number),
+    statusLine,
+    result,
+    officialMs: round?.official_duration_ms ?? null,
+    tone: phase === 'TIME_EXPIRED_PENDING_VALIDATION'
+      ? 'warn'
+      : result === 'ABORTED'
+        ? 'warn'
+        : result === 'WON'
+          ? 'primary'
+          : signed <= 0 ? 'danger' : signed <= 60_000 ? 'warn' : 'primary',
+    warnMs: 60_000,
+  };
+}
+
+/* ------------------------------------------------------------------ attempts */
+
+export interface AttemptRow {
+  id: string;
+  seq: number;
+  claimedAt: number;
+  elapsedMs: number;
+  remainingMs: number;
+  status: CompletionAttempt['status'];
+  inTime: boolean;
+  /** The two decisions NPC2 may still make about this attempt. */
+  open: boolean;
+  verifiedAt: number | null;
+  verifiedByRole: string | null;
+  decisionNote: string | null;
+  label: string;
+}
+
+/**
+ * NPC2's compact attempt list: every claim keeps its own row and its own timestamp,
+ * so a verification always names the attempt it belongs to.
+ */
+export function resolveAttempts(snap: Snapshot, nowMs: number): AttemptRow[] {
+  const round = snap.active_round;
+  if (!round) return [];
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const result = resultOf(round, snap.attempts ?? [], limit, nowMs);
+  // A settled win closes the list; a cancellation only closes it when the round was
+  // disqualified, so a claim recorded before the deadline stays judgable (§4.4).
+  const judgable = attemptsJudgable(round, result);
+  return attemptsOf(snap.attempts ?? [], round.id).map((a) => ({
+    id: a.id,
+    seq: a.seq,
+    claimedAt: a.claimed_at,
+    elapsedMs: a.elapsed_ms,
+    remainingMs: a.remaining_ms,
+    status: a.status,
+    inTime: a.in_time,
+    open: judgable && (a.status === 'PENDING' || a.status === 'LATE'),
+    verifiedAt: a.verified_at,
+    verifiedByRole: a.verified_by_role,
+    decisionNote: a.decision_note,
+    label: `Lần ${a.seq} — ${formatClockCs(a.elapsed_ms)} — ${
+      a.status === 'PENDING' ? 'Chờ kiểm tra' : a.status === 'LATE' ? 'Đến muộn' : a.status === 'VALID' ? 'CHÍNH XÁC' : 'CHƯA ĐÚNG'
+    }`,
+  }));
+}
+
+/** True while NPC2 has an in-time claim that still needs a decision. */
+export function awaitingVerification(snap: Snapshot, nowMs: number): boolean {
+  const round = snap.active_round;
+  if (!round) return false;
+  return pendingEligibleClaims(round, snap.attempts ?? [], roundLimitMs(round, snap.event.config.game_limit_ms), nowMs).length > 0;
+}
+
+/**
+ * Whether NPC2 may still judge the recorded claims of this round. A validated win
+ * seals the list; a cancellation seals it only when it was a disqualification, and
+ * then only until a supervisor has resolved the review by name (V3.1 §4.4).
+ */
+export function attemptsJudgable(round: Round, result: RoundResult | null): boolean {
+  if (result === 'WON') return false;
+  if (round.aborted_at !== null && round.abort_kind === 'misconduct') {
+    return round.review_resolved_at !== null && !round.decertified;
   }
-
-  if (round.status === 'LOBBY_CALL' || round.status === 'TEAM_PREPARING') {
-    return {
-      mode: 'IDLE',
-      // The status line under TEAM #… already says where the team is; the hero
-      // only adds what that line cannot: the 5:00 has not started.
-      label: 'CHƯA TÍNH GIỜ',
-      sublabel: `Đồng hồ ${formatClockSec(limit)} chưa chạy`,
-      valueMs: null,
-      tone: 'warn',
-    };
-  }
-
-  if (round.game_started_at !== null && round.game_stopped_at === null) {
-    const left = gameRemainingMs(round, limit, nowMs);
-    const resetNote = round.game_reset_count > 0 ? ` · reset 5:00 lần ${round.game_reset_count}` : '';
-    if (isGamePaused(round)) {
-      return {
-        mode: 'GAME_PAUSED',
-        label: 'TẠM DỪNG 5:00',
-        sublabel: `Đồng hồ trận đang dừng${resetNote}`,
-        valueMs: left,
-        tone: 'warn',
-      };
-    }
-    return {
-      mode: left <= 0 ? 'GAME_OVERTIME' : 'GAME',
-      label: left <= 0 ? 'QUÁ GIỜ' : 'THỜI GIAN CÒN LẠI',
-      sublabel:
-        left <= 0
-          ? `Đã vượt ${formatClockSec(limit)}${resetNote} — đưa đội ra an toàn`
-          : `Đội #${pad(round.team_number)} đang tìm trận đồ${resetNote}`,
-      valueMs: left,
-      tone: left <= 0 ? 'danger' : left <= 60_000 ? 'warn' : 'primary',
-    };
-  }
-
-  if (isResetWindow(round)) {
-    const missing = snap.reset_tasks.filter((t) => t.round_id === round.id && t.completed_at === null).length;
-    return {
-      mode: 'IDLE',
-      label: 'CHƯA TÍNH GIỜ',
-      sublabel: missing === 0 ? 'Khu vực đã xong · chờ GATE xác nhận' : `Đang setup · còn ${missing} tác vụ`,
-      valueMs: null,
-      tone: 'warn',
-    };
-  }
-
-  return { mode: 'IDLE', label: 'ĐANG CHỜ', sublabel: 'Đang đồng bộ trạng thái…', valueMs: null, tone: 'waiting' };
+  return true;
 }
 
 /* --------------------------------------------------------------- big screen */
 
 export interface BigScreenClock {
-  /** Identifies the running game; changes on every reset of the 5:00 window. */
+  /** Identifies the running game; changes when a new countdown is started. */
   key: string;
   teamNumber: number;
   /** The authoritative 5-minute game limit. */
   limitMs: number;
-  /** Signed ms: keeps counting into overtime so the display and the alarm agree. */
+  /** Signed ms: frozen at zero once the deadline passes, never negative on screen. */
   remainingMs: number;
   expired: boolean;
-  /** True while the authoritative clock is paused; paused gaps do not count. */
-  paused: boolean;
-  resetCount: number;
-  pauseCount: number;
-
+  phase: SystemPhase;
+  result: RoundResult | null;
+  officialMs: number | null;
+  pendingValidation: boolean;
 }
 
 /**
- * What the wall display shows: the official 5-minute countdown of the running
- * round, mirrored straight from the authoritative timestamps. It has no local
- * override — a reset on this screen is a real `GAME_RESET` command, so the number
- * here and the score can never disagree.
+ * What the wall display shows: the authoritative countdown of the current round,
+ * mirrored straight from the stored start, duration and deadline. It has no local
+ * override and no pause or reset control, because the clock is not editable.
  */
 export function resolveBigScreen(snap: Snapshot, nowMs: number): BigScreenClock | null {
-  const round = activeRound(snap);
-  if (!round || round.game_started_at === null || !isGameRunning(round)) return null;
-  const limitMs = snap.event.config.game_limit_ms;
-  const remainingMs = gameRemainingMs(round, limitMs, nowMs);
+  const round = snap.active_round;
+  if (!round) return null;
+  const limitMs = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const phase = phaseOf(snap, nowMs);
+  if (!isLockedPhase(phase) && phase !== 'WAITING_FOR_EXIT') return null;
+  if (round.game_started_at === null) return null;
+  const result = resultOf(round, snap.attempts ?? [], limitMs, nowMs);
   return {
-    key: `${round.id}:${round.game_started_at}:${round.game_reset_count}`,
+    key: `${round.id}:${round.deadline_at ?? round.game_started_at}`,
     teamNumber: round.team_number,
     limitMs,
-    remainingMs,
-    expired: remainingMs <= 0,
-    paused: isGamePaused(round),
-    resetCount: round.game_reset_count,
-    pauseCount: round.game_pause_count,
-
+    remainingMs: Math.max(0, gameRemainingMs(round, limitMs, nowMs)),
+    expired: gameRemainingMs(round, limitMs, nowMs) <= 0,
+    phase,
+    result,
+    officialMs: round.official_duration_ms,
+    pendingValidation: result === 'PENDING_VALIDATION',
   };
 }
 
@@ -346,7 +578,7 @@ export interface JourneyStop {
   key: JourneyStopDef['key'];
   floor: string;
   name: string;
-  /** Printed under the node: [“SẢNH”, “TẦNG 1”], [“CỬA VÀO”]… */
+  /** Printed under the node: [“SẢNH”, “TẦNG 1”], [“TẦNG 2”… */
   label: readonly string[];
   station: Role | null;
   state: JourneyState;
@@ -363,7 +595,7 @@ export interface JourneyTask {
 }
 
 export interface JourneyTurn {
-  /** Station(s) whose next press moves the team forward. */
+  /** Position(s) whose next press moves the team forward. */
   roles: Role[];
   /** The same words as the button on that station. */
   label: string;
@@ -381,33 +613,23 @@ export interface JourneyInfo {
   /** Index into `stops` of the area the team is walking into — the tile that leads. */
   focus: number;
   movement: JourneyMovement;
-  /** Where the team is, in words: “CỬA VÀO · TẦNG 3”, “ĐANG LÊN TẦNG 3”… */
+  /** Where the team is, in words: “TẦNG 2”, “ĐANG LÊN TẦNG 2”… */
   where: string;
   turn: JourneyTurn | null;
-  /** One line, identical on all five phones. */
+  /** One line, identical on every device. */
   caption: string;
   tasks: JourneyTask[];
 }
 
-/** Timestamp of the last logged press of `action` on this round, if still in the log. */
-function logAt(snap: Snapshot, roundId: string, action: ActionType): number | null {
-  for (let i = snap.log.length - 1; i >= 0; i -= 1) {
-    const entry = snap.log[i];
-    if (entry.round_id === roundId && entry.action === action) return entry.at_ms;
-  }
-  return null;
-}
-
 /**
  * The team's walk through the venue, derived only from authoritative timestamps:
- * Sảnh tầng 1 → Cửa vào tầng 3 → Hành lang → Phòng 305 → Kết thúc cuộc chơi.
- * Every station reads the same position, so nobody has to reconstruct the route
- * from a status label.
+ * SẢNH TẦNG 1 → TẦNG 2 → CỬA VÀO TẦNG 3 → PHÒNG 305 → KẾT THÚC. Every device reads
+ * the same position, so nobody has to reconstruct the route from a status label.
+ * The hallway is part of the floor-3 leg and has no node of its own any more.
  */
 export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): JourneyInfo {
-  const round = activeRound(snap);
+  const round = snap.active_round;
   const phase = phaseOf(snap, nowMs);
-  const limit = snap.event.config.game_limit_ms;
   const at: (number | null)[] = [null, null, null, null, null];
   const notes: (string | null)[] = [null, null, null, null, null];
   let position = 0;
@@ -417,85 +639,75 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
   let turn: { roles: Role[]; label: string } | null = null;
 
   if (round) {
+    const limitLabel = formatClockSec(roundLimitMs(round, snap.event.config.game_limit_ms));
     at[0] = round.called_at;
-    at[1] = round.game_started_at;
-    // The round's own timestamps are authoritative; the log fills in the legs that
-    // have no column of their own, and a later press proves the earlier legs.
-    at[3] = logAt(snap, round.id, 'ROOM_REACHED') ?? round.puzzle_completed_at;
-    at[2] = logAt(snap, round.id, 'HALLWAY_PROGRESS') ?? at[3];
-    notes[0] = 'Đã gọi đội lên tầng';
-    position = 0;
+    at[1] = round.floor2_confirmed_at ?? round.floor2_bypassed_at;
+    at[2] = round.game_started_at;
+    at[3] = round.puzzle_completed_at ?? (round.exit_confirmed_at ? round.exit_confirmed_at : null);
+    notes[0] = 'Đã nhận đội ở sảnh';
 
-    switch (round.status) {
-      case 'LOBBY_CALL':
+    switch (phase) {
+      case 'WAITING_FLOOR2_CONFIRMATION':
+        position = 0;
         movement = 'up';
-        where = 'ĐANG LÊN TẦNG 3';
-        caption = 'Đội đang lên tầng 3';
-        turn = { roles: ['LOBBY'], label: 'ĐÃ LÊN TẦNG 3' };
+        where = 'ĐANG LÊN TẦNG 2';
+        caption = round.floor2_bypassed_at !== null ? 'Đội đã được bỏ qua tầng 2' : 'Đội đang lên tầng 2';
+        turn =
+          round.floor2_bypassed_at !== null
+            ? { roles: ['GATE'], label: `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}` }
+            : { roles: ['CORRIDOR'], label: 'XÁC NHẬN ĐÃ ĐẾN TẦNG 2' };
         break;
-      case 'TEAM_PREPARING':
-        position = 1;
-        movement = 'at';
-        where = 'CỬA VÀO · TẦNG 3';
-        notes[1] = 'Đội đã tới cửa vào — chờ bấm 05:00';
-        caption = 'Đội đã lên tới cửa vào tầng 3';
-        turn = { roles: ['GATE'], label: 'BẮT ĐẦU' };
-        break;
-      case 'GAME_STARTED':
-        position = 1;
-        movement = 'at';
-        where = 'CỬA VÀO · TẦNG 3';
-        notes[1] = '05:00 đang chạy';
-        caption = 'Đội đang ở cửa vào';
-        turn = { roles: ['CORRIDOR'], label: 'ĐÃ SETUP XONG' };
-        break;
-      case 'CORRIDOR_ACTIVE':
+      case 'READY_AT_FLOOR3':
         position = 2;
         movement = 'at';
-        where = 'HÀNH LANG · TẦNG 3';
-        notes[2] = 'Đội đang trong hành lang';
-        caption = 'Đội đang ở hành lang';
-        turn = { roles: ['ROOM305'], label: 'ĐÃ ĐẾN 305' };
+        where = 'CỬA VÀO · TẦNG 3';
+        notes[1] = round.floor2_bypassed_at !== null ? 'Bỏ qua xác nhận (NPC 1)' : `Đã xác nhận · ${formatWallTime(round.floor2_confirmed_at ?? 0)}`;
+        notes[2] = 'Đội đang nghe phổ biến luật';
+        caption = 'ĐỘI CHƠI SẮP BẮT ĐẦU';
+        turn = { roles: ['GATE'], label: `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}` };
         break;
-      case 'ROOM_REACHED':
+      case 'RUNNING':
         position = 3;
         movement = 'at';
         where = 'PHÒNG 305 · TẦNG 3';
-        notes[3] = 'Đội đã vào phòng 305';
-        caption = 'Đội đang ở phòng 305';
-        turn = { roles: ['ROOM305'], label: 'XÁC NHẬN HOÀN THÀNH' };
+        notes[2] = `${limitLabel} chạy · ${formatWallTime(round.game_started_at ?? 0)}`;
+        caption = `${limitLabel} đang chạy`;
+        turn = { roles: ['ROOM305'], label: 'GHI NHẬN BÁO HOÀN THÀNH' };
         break;
-      case 'PUZZLE_COMPLETED':
+      case 'TIME_EXPIRED_PENDING_VALIDATION':
         position = 3;
         movement = 'at';
         where = 'PHÒNG 305 · TẦNG 3';
-        notes[3] = `Trận đồ xong · ${formatWallTime(round.puzzle_completed_at ?? nowMs)}`;
-        caption = 'Trận đồ đã hoàn thành · đồng hồ vẫn chạy';
-        turn = { roles: ['ROOM305'], label: 'ĐỘI RỜI PHÒNG 305' };
+        notes[2] = `Hết ${limitLabel} · ${formatWallTime(round.deadline_at ?? 0)}`;
+        caption = 'Hết giờ — đang chờ xác minh mốc hợp lệ';
+        turn = { roles: ['ROOM305', 'GATE'], label: 'KIỂM TRA LẦN BÁO / XÁC NHẬN RỜI TẦNG 3' };
         break;
-      case 'RETURNING':
-        position = 2;
+      case 'WAITING_FOR_EXIT':
+        position = 3;
         movement = 'down';
-        where = 'ĐANG VỀ CỬA VÀO';
-        notes[2] = 'Đội đang đi ngược ra cửa vào';
-        notes[3] = `Trận đồ xong · ${formatWallTime(round.puzzle_completed_at ?? nowMs)}`;
-        caption = 'Đội đang quay lại cửa vào tầng 3';
-        turn = { roles: ['GATE'], label: 'KHÁCH ĐÃ RA — CHỐT GIỜ' };
+        where = 'ĐANG RA CỬA VÀO TẦNG 3';
+        notes[2] = `Chờ rời tầng 3 · ${formatWallTime(nowMs)}`;
+        if (round.puzzle_completed_at !== null) notes[3] = `Trận đồ · ${formatWallTime(round.puzzle_completed_at)}`;
+        caption = resultOfRound(snap, nowMs) === 'WON'
+          ? 'Đã chốt thời gian — chờ đội rời tầng 3'
+          : round.aborted_at !== null
+            ? 'Lượt chơi đã hủy — chờ đội rời tầng 3'
+            : 'Chờ đội rời tầng 3';
+        turn = { roles: ['GATE'], label: 'XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3' };
         break;
       default: {
-        // GATE stopped the clock (or the supervisor aborted): the team is back at
-        // the third-floor entrance and the area is being reset for the next team.
-        position = 1;
+        // The team is out; the area is being put back ready for the next team.
+        position = 2;
         movement = 'at';
         where = 'CỬA VÀO · TẦNG 3';
-        notes[1] = round.game_stopped_at ? `Khách đã ra · ${formatWallTime(round.game_stopped_at)}` : 'Đang reset khu vực';
-        if (round.puzzle_completed_at !== null) notes[3] = `Trận đồ xong · ${formatWallTime(round.puzzle_completed_at)}`;
+        notes[2] = round.exit_confirmed_at ? `Đã rời tầng 3 · ${formatWallTime(round.exit_confirmed_at)}` : 'Đang reset khu vực';
+        if (round.puzzle_completed_at !== null) notes[3] = `Trận đồ · ${formatWallTime(round.puzzle_completed_at)}`;
         const open = pendingTasks(snap);
         if (open.length > 0) {
           caption = 'Đang setup khu vực';
           turn = { roles: Array.from(new Set(open.map((t) => t.required_role))), label: 'ĐÃ RESET XONG' };
         } else {
-          caption = 'Đã setup xong · chờ GATE chốt';
+          caption = 'Đã setup xong · chờ NPC 1 chốt lượt chơi';
           turn = { roles: ['GATE'], label: 'XÁC NHẬN SẴN SÀNG' };
         }
         break;
@@ -506,21 +718,16 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
     where = 'SỰ KIỆN KẾT THÚC';
     caption = 'Sự kiện đã kết thúc';
   } else {
-    // Between rounds the route starts again at the lobby, which is what makes the
+    // Between teams the route starts again at the lobby, which is what makes the
     // first press of every team the same, predictable one.
     position = 0;
-    if (phase === 'PRE_EVENT') {
-      caption = 'Chưa mở sự kiện — LOBBY gọi đội đầu tiên';
-      turn = { roles: ['LOBBY'], label: 'CHO ĐỘI LÊN' };
-    } else {
-      caption = `Sẵn sàng gọi đội #${pad(snap.event.next_team_number)}`;
-      turn = { roles: ['LOBBY'], label: 'CHO ĐỘI LÊN' };
-    }
+    caption = phase === 'PRE_EVENT' ? 'Chưa mở sự kiện — Nhân sự 01 nhận đội đầu tiên' : `Sẵn sàng nhận đội #${pad(snap.event.next_team_number)}`;
+    turn = { roles: ['LOBBY'], label: 'NHẬN ĐỘI & CHO LÊN TẦNG 2' };
   }
 
   // The reset checklist only matters once the team is out; mid-round it is noise.
   const tasks: JourneyTask[] =
-    round && round.game_stopped_at !== null
+    round && isResetWindow(round)
       ? snap.reset_tasks
           .filter((t) => t.round_id === round.id)
           .map((t) => ({
@@ -532,11 +739,11 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
       : [];
 
   // The ring sits on the area the guests are walking into (or standing in), and
-  // on “KẾT THÚC” once the clock is stopped and the round only needs closing.
+  // on “KẾT THÚC” once the round only needs closing.
   const focus =
     position < 0
       ? -1
-      : round && round.game_stopped_at !== null
+      : round && (phase === 'EXIT_CONFIRMED' || phase === 'CLOSED')
         ? JOURNEY_STOPS.length - 1
         : movement === 'up'
           ? Math.min(position + 1, JOURNEY_STOPS.length - 1)
@@ -587,36 +794,42 @@ export interface TeamLine {
 
 /** The one sentence under TEAM #…, worded per phase and coloured per situation. */
 export function resolveTeamLine(snap: Snapshot, nowMs: number): TeamLine {
-  const round = activeRound(snap);
+  const round = snap.active_round;
   const phase = phaseOf(snap, nowMs);
   if (!round) {
     if (phase === 'ENDED') return { text: 'Sự kiện đã kết thúc', tone: 'mute' };
-    if (phase === 'PRE_EVENT') return { text: 'Chờ mở sự kiện', tone: 'mute' };
-    return { text: 'Chờ gọi đội', tone: 'mute' };
+    if (phase === 'PRE_EVENT') return { text: 'Chờ tiếp nhận đội chơi', tone: 'mute' };
+    return { text: 'Chờ tiếp nhận đội chơi', tone: 'mute' };
   }
-  switch (round.status) {
-    case 'LOBBY_CALL':
-      return { text: 'Đang lên tầng', tone: 'amber' };
-    case 'TEAM_PREPARING':
-      return { text: 'Đang ở cửa vào', tone: 'amber' };
-    case 'GAME_STARTED':
-      return { text: 'Đang chơi', tone: 'green' };
-    case 'CORRIDOR_ACTIVE':
-      return { text: 'Đang chơi', tone: 'green' };
-    case 'ROOM_REACHED':
-      return { text: 'Đang ở phòng 305', tone: 'violet' };
-    case 'PUZZLE_COMPLETED':
-      return { text: 'Đã hoàn thành trận đồ', tone: 'violet' };
-    case 'RETURNING':
-      return { text: 'Đang quay lại', tone: 'amber' };
+  const result = resultOfRound(snap, nowMs);
+  switch (phase) {
+    case 'WAITING_FLOOR2_CONFIRMATION':
+      return { text: round.floor2_bypassed_at !== null ? 'Đã bỏ qua tầng 2' : 'Đang lên tầng 2', tone: 'amber' };
+    case 'READY_AT_FLOOR3':
+      return { text: 'Sắp bắt đầu ở tầng 3', tone: 'amber' };
+    case 'RUNNING':
+      return { text: `${formatClockSec(roundLimitMs(round, snap.event.config.game_limit_ms))} đang chạy`, tone: 'green' };
+    case 'TIME_EXPIRED_PENDING_VALIDATION':
+      return { text: 'Hết giờ — chờ xác minh mốc hợp lệ', tone: 'amber' };
+    case 'WAITING_FOR_EXIT':
+      return result === 'WON'
+        ? { text: `Thành công ${formatClockSec(round.official_duration_ms ?? 0)} — chờ rời tầng 3`, tone: 'green' }
+        : result === 'ABORTED'
+          ? { text: 'Lượt chơi đã hủy — chờ đội rời tầng 3', tone: 'blue' }
+          : { text: 'Hết giờ — chờ đội rời tầng 3', tone: 'blue' };
+    case 'EXIT_CONFIRMED':
+      return result === 'PENDING_VALIDATION'
+        ? { text: 'Đã rời khu vực — kết quả chờ xác minh', tone: 'amber' }
+        : { text: 'Đang reset khu vực', tone: 'violet' };
     default:
-      return { text: round.game_stopped_at !== null ? 'Đang setup lại' : 'Đang xử lý', tone: 'amber' };
+      return { text: 'Đang xử lý', tone: 'amber' };
   }
 }
 
 export function isAreaReady(snap: Snapshot | null, nowMs: number): boolean {
   if (!snap) return false;
-  return phaseOf(snap, nowMs) === 'READY';
+  const phase = phaseOf(snap, nowMs);
+  return phase === 'WAITING_FOR_TEAM' || phase === 'PRE_EVENT';
 }
 
 export function hasActiveRound(snap: Snapshot | null): boolean {
@@ -627,43 +840,51 @@ export function pad(n: number): string {
   return String(n).padStart(3, '0');
 }
 
+/** MM:SS.hh — the same formatting the authoritative messages use. */
+export function formatClockCs(ms: number): string {
+  const abs = Math.max(0, ms);
+  const m = Math.floor(abs / 60_000);
+  const s = Math.floor((abs % 60_000) / 1000);
+  const cs = Math.floor((abs % 1000) / 10);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
 /* ------------------------------------------------------ must-not-be-hidden-by */
 
 export interface AlertInfo {
-  id: 'STALL' | 'REVIEW' | 'OVERTIME' | 'DEGRADED' | 'AUDIO' | 'PAUSE' | 'RESET';
+  id: 'STALL' | 'REVIEW' | 'PENDING' | 'BYPASS' | 'DEGRADED' | 'AUDIO' | 'PRESTART' | 'FULL';
   tone: Tone;
   text: string;
 }
 
 /**
- * Scenario B / P0-05 / P0-02: safety- and prize-critical notices are surfaced on
- * the main screen, never only inside “Xem thêm”. Warnings only — nothing here
- * stops a clock or changes a state by itself.
+ * Safety- and prize-critical notices are surfaced on the main screen, never only
+ * inside “Xem thêm”. Warnings only — nothing here stops a clock or changes a state.
  */
 export function resolveAlerts(snap: Snapshot, nowMs: number, staleData: boolean): AlertInfo[] {
   const out: AlertInfo[] = [];
   const round = snap.active_round;
   const stallMs = snap.event.config.stall_warn_ms ?? STALL_WARN_MS;
-  const since = stallSince(round, nowMs);
+  const since = stallSince(round, nowMs, roundLimitMs(round, snap.event.config.game_limit_ms));
+  const phase = phaseOf(snap, nowMs);
   if (round && since !== null && since > stallMs) {
     out.push({
       id: 'STALL',
       tone: 'warn',
-      text: `Đội #${pad(round.team_number)} rời 305 được ${Math.floor(since / 1000)}s — GATE chưa chốt giờ`,
+      text: `${teamLabel(round, snap.event.next_team_number)} ở lại khu vực được ${Math.floor(since / 1000)}s — NPC 1 chưa xác nhận rời tầng 3`,
     });
   }
+  if (phase === 'READY_AT_FLOOR3') {
+    out.push({ id: 'PRESTART', tone: 'warn', text: 'ĐỘI CHƠI SẮP BẮT ĐẦU — NPC 1 chuẩn bị phổ biến luật' });
+  }
+  if (round && resultOfRound(snap, nowMs) === 'PENDING_VALIDATION') {
+    out.push({ id: 'PENDING', tone: 'warn', text: 'HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ' });
+  }
+  if (round && round.floor2_bypassed_at !== null) {
+    out.push({ id: 'BYPASS', tone: 'warn', text: 'Tầng 2 được NPC 1 bỏ qua — có ghi nhật ký' });
+  }
   if (round && round.needs_review && round.review_reasons.length > 0) {
-    out.push({ id: 'REVIEW', tone: 'warn', text: `Kết quả đội #${pad(round.team_number)} chờ xét lại` });
-  }
-  // A paused or restarted 5:00 is always visible to the whole room.
-  if (round && isGamePaused(round)) {
-    out.push({ id: 'PAUSE', tone: 'warn', text: `5:00 đội #${pad(round.team_number)} đang TẠM DỪNG` });
-  } else if (round && round.game_reset_count > 0 && round.game_stopped_at === null) {
-    out.push({ id: 'RESET', tone: 'warn', text: `5:00 đã RESET ${round.game_reset_count} lần — kết quả sẽ chờ SUPERVISOR xét` });
-  }
-  const phase = phaseOf(snap, nowMs);
-  if (phase === 'GAME_OVERTIME') {
-    out.push({ id: 'OVERTIME', tone: 'danger', text: 'Hết 5:00 — GATE hoàn tất lượt chơi' });
+    out.push({ id: 'REVIEW', tone: 'warn', text: `Kết quả ${teamLabel(round, snap.event.next_team_number)} chờ xét lại` });
   }
   if (staleData) {
     out.push({ id: 'DEGRADED', tone: 'warn', text: 'Dữ liệu có thể cũ — đang kiểm tra lại với máy chủ' });
@@ -680,83 +901,91 @@ export function pendingTasks(snap: Snapshot, role?: Role) {
   );
 }
 
-/* -------------------------------------------------------------- station relay */
+/* -------------------------------------------------------------- station strip */
 
 export type StationState = 'active' | 'idle';
 
 export interface StationInfo {
-  role: Role;
-  /** Short station name for the five-chip strip. */
+  role: StationRole;
+  /** Short station name for the four-chip strip. */
   label: string;
-  /** The leg of the relay this station owns right now — exactly the green chips. */
+  /** Position whose hand owns the round right now. */
   state: StationState;
   /** This operator has a tappable action: the pulsing handoff ring. */
   turn: boolean;
 }
 
-const STATION_ORDER: Role[] = ['LOBBY', 'GATE', 'CORRIDOR', 'ROOM305', 'SUPERVISOR'];
+const STATION_ORDER: StationRole[] = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'];
 
-const STATION_LABEL: Record<Role, string> = {
-  LOBBY: 'LOBBY',
+const STATION_LABEL: Record<StationRole, string> = {
+  LOBBY: '01 · SẢNH',
+  CORRIDOR: '02 · TẦNG 2',
   GATE: 'NPC 1',
-  CORRIDOR: 'NPC 2',
-  ROOM305: 'NPC 3',
-  SUPERVISOR: 'GIÁM SÁT',
+  ROOM305: 'NPC 2',
 };
 
 /**
- * Which stations own the current leg of the relay. The green chip is the station
- * the team is with, not the station that presses next: LOBBY stays lit while the
- * team walks up, and GATE lights up only once its 5:00 clock owns the round.
- * Reset is the one parallel window, so several stations light at the same time.
+ * Which position the team is actually with. The green chip is where the guests are,
+ * not who presses next: OPERATOR 02 wears it while the team climbs to floor 2, NPC 2
+ * wears it for the whole 5:00, and NPC 1 wears it again on the way out. Reset is the
+ * one parallel window, so several stations light at the same time there.
  */
-function owningStations(snap: Snapshot, nowMs: number): Set<Role> {
+function owningStations(snap: Snapshot, nowMs: number): Set<StationRole> {
   const phase = phaseOf(snap, nowMs);
-  // LOBBY calls the next team, including the first team of the event.
-  if (phase === 'PRE_EVENT') return new Set<Role>(['LOBBY']);
-  if (phase === 'ENDED') return new Set<Role>();
-
-  const round = activeRound(snap);
-  if (!round) {
-    const last = snap.rounds.at(-1);
-    // An aborted round the area has not cleared yet still belongs to the supervisor.
-    if (last && last.status === 'ABORTED' && last.system_ready_at === null) return new Set<Role>(['SUPERVISOR']);
-    return new Set<Role>(['LOBBY']);
-  }
-
-  switch (round.status) {
-    case 'LOBBY_CALL':
-    case 'TEAM_PREPARING':
-      return new Set<Role>(['LOBBY']);
-    case 'GAME_STARTED':
-      return new Set<Role>(['GATE']);
-    case 'CORRIDOR_ACTIVE':
-      return new Set<Role>(['CORRIDOR']);
-    case 'ROOM_REACHED':
-    case 'PUZZLE_COMPLETED':
-    case 'RETURNING':
-      return new Set<Role>(['ROOM305']);
-    case 'GAME_EXITED':
-    case 'RESETTING':
-    case 'RESET_CONFIRMED': {
-      // Reset runs in parallel: every station with an outstanding task stays lit.
-      const pending = new Set<Role>(pendingTasks(snap).map((t) => t.required_role));
-      return pending.size > 0 ? pending : new Set<Role>(['GATE']);
+  // OPERATOR 01 owns the floor whenever nobody is in play, including the first team.
+  if (phase === 'PRE_EVENT' || phase === 'WAITING_FOR_TEAM') return new Set<StationRole>(['LOBBY']);
+  if (phase === 'ENDED') return new Set<StationRole>();
+  const round = snap.active_round;
+  if (!round) return new Set<StationRole>(['LOBBY']);
+  switch (phase) {
+    case 'WAITING_FLOOR2_CONFIRMATION':
+      return new Set<StationRole>(['CORRIDOR']);
+    case 'READY_AT_FLOOR3':
+    case 'WAITING_FOR_EXIT':
+      return new Set<StationRole>(['GATE']);
+    case 'RUNNING':
+    case 'TIME_EXPIRED_PENDING_VALIDATION':
+      return new Set<StationRole>(['ROOM305']);
+    case 'EXIT_CONFIRMED': {
+      const pending = new Set<StationRole>(
+        pendingTasks(snap)
+          .map((t) => t.required_role)
+          .filter((r): r is StationRole => (STATION_ORDER as string[]).includes(r)),
+      );
+      return pending.size > 0 ? pending : new Set<StationRole>(['GATE']);
     }
     default:
-      return new Set<Role>(['LOBBY']);
+      return new Set<StationRole>(['LOBBY']);
   }
 }
 
-/** Five-station handoff strip: who owns the round now, and who must press next. */
+/** Four-position handoff strip: who owns the round now, and who must press next. */
 export function resolveStations(snap: Snapshot, nowMs: number): StationInfo[] {
   const owners = owningStations(snap, nowMs);
+  const pending = awaitingVerification(snap, nowMs);
   return STATION_ORDER.map((role) => ({
     role,
     label: STATION_LABEL[role],
     state: owners.has(role) ? 'active' : 'idle',
-    turn: resolvePrimary(role, snap, nowMs).action !== null,
+    // NPC 2 also owns a turn while an eligible claim sits unjudged: that control
+    // lives in its verification panel rather than in the single primary button.
+    turn: resolvePrimary(role, snap, nowMs).action !== null || (role === 'ROOM305' && pending),
   }));
+}
+
+/* ------------------------------------------------------------------- observer */
+
+export interface ObserverBoard {
+  seats: number;
+  capacity: number;
+  full: boolean;
+}
+
+/** The viewer-facing capacity line, from whatever the server reported. */
+export function observerBoard(devices?: number, capacity?: number): ObserverBoard {
+  const seats = devices ?? 0;
+  const cap = capacity ?? OBSERVER_CAPACITY;
+  return { seats, capacity: cap, full: seats >= cap };
 }
 
 export type { ResetTaskKey };

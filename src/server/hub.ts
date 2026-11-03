@@ -1,11 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { isSteppable, SystemClock, type Clock, type CommandRequest, type SteppableClock } from '../shared/types.ts' ;
+import { isSteppable, SystemClock, type Clock, type CommandRequest, type Snapshot, type SteppableClock } from '../shared/types.ts' ;
+import { OBSERVER_CAPACITY, OBSERVER_TTL_MS } from '../shared/constants.ts' ;
 import { ScreamEngine, initialState, type Account, type PersistedState } from './engine.ts' ;
 import { FileStore, MemoryStore, type StateStore } from './store.ts' ;
 import { analytics, roundMetrics } from '../shared/metrics.ts' ;
 
 export interface OperatorAccount extends Account {
+  /** Empty means “no passcode”: the open observer seat is password-free. */
   secret: string;
 }
 
@@ -13,17 +15,18 @@ export interface OperatorAccount extends Account {
 const DEFAULT_PASSCODE = '3110';
 
 /**
- * Dev / self-hosted operator accounts. In Supabase deployment these five
- * identities come from Supabase Auth + `sc.operator_profiles` and the app key is
- * never used (see README §Production).
+ * Dev / self-hosted operator accounts. In Supabase deployment these identities
+ * come from Supabase Auth + `sc.operator_profiles` and the app key is never used
+ * (see README §Production). The observer seat is deliberately secret-free.
  */
 export function devAccounts(): OperatorAccount[] {
   const roles: [string, Account['role'], string][] = [
     ['lobby', 'LOBBY', process.env.SC_PASSCODE_LOBBY ?? DEFAULT_PASSCODE],
-    ['gate', 'GATE', process.env.SC_PASSCODE_GATE ?? DEFAULT_PASSCODE],
     ['corridor', 'CORRIDOR', process.env.SC_PASSCODE_CORRIDOR ?? DEFAULT_PASSCODE],
+    ['gate', 'GATE', process.env.SC_PASSCODE_GATE ?? DEFAULT_PASSCODE],
     ['room305', 'ROOM305', process.env.SC_PASSCODE_ROOM305 ?? DEFAULT_PASSCODE],
     ['supervisor', 'SUPERVISOR', process.env.SC_PASSCODE_SUPERVISOR ?? DEFAULT_PASSCODE],
+    ['observer', 'OBSERVER', ''],
   ];
   return roles.map(([id, role, secret]) => ({
     id,
@@ -49,6 +52,8 @@ export interface Hub {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
   /** Total SSE delivery lag measured on the last broadcast (ms). */
   stats: { broadcasts: number; connectedClients: number };
+  /** Live observer seats, for tests and the local capacity report. */
+  observers(): { devices: number; capacity: number };
 }
 
 const TOKEN_SECRET_DEFAULT = 'scream-control-dev-token-secret';
@@ -77,6 +82,18 @@ export function createHub(options: HubOptions = {}): Hub {
 
   const clients = new Set<ServerResponse>();
   const stats = { broadcasts: 0, connectedClients: 0 };
+
+  /**
+   * Local observer presence: viewer id -> last beat. A seat is held while the beat
+   * is recent, so a refresh that keeps the same viewer id reuses its own seat
+   * instead of consuming another one, and an abandoned phone frees itself.
+   */
+  const observerSeats = new Map<string, number>();
+  const liveObservers = (): number => {
+    const cutoff = clock.nowMs() - OBSERVER_TTL_MS;
+    for (const [id, seen] of observerSeats) if (seen < cutoff) observerSeats.delete(id);
+    return observerSeats.size;
+  };
 
   const broadcast = (revision: number) => {
     stats.broadcasts += 1;
@@ -174,6 +191,52 @@ export function createHub(options: HubOptions = {}): Hub {
     return rows.join('\n');
   };
 
+  /**
+   * What a viewer is allowed to see. Redaction happens here, on the authoritative
+   * side, so switching routes or editing client state can never reveal an operating
+   * record: no actor identities, no transport diagnostics, no dispute flags, no
+   * claim list and no reset checklist — only the shared state of the game.
+   */
+  const redact = (snap: Snapshot): Snapshot => {
+    const keepRound = (r: PersistedState['rounds'][number] | null) =>
+      r === null
+        ? null
+        : {
+            ...r,
+            received_by_role: null,
+            received_by: null,
+            floor2_confirmed_by_role: null,
+            floor2_confirmed_by: null,
+            floor2_bypassed_by_role: null,
+            floor2_bypassed_by: null,
+            floor2_bypass_reason: null,
+            started_by_role: null,
+            started_by: null,
+            exit_by_role: null,
+            exit_by: null,
+            exit_reason: null,
+            finalized_by_role: null,
+            needs_review: false,
+            review_reasons: [],
+            start_press_ms: null,
+            stop_press_ms: null,
+            start_transport_ms: null,
+            stop_transport_ms: null,
+            hiding_layout: null as never,
+          };
+    return {
+      ...snap,
+      redacted: true,
+      event: { ...snap.event, config: { ...snap.event.config, hiding_layout: snap.event.config.hiding_layout } },
+      active_round: keepRound(snap.active_round) as Snapshot['active_round'],
+      rounds: snap.rounds.map((r) => keepRound(r) as Snapshot['rounds'][number]),
+      reset_tasks: [],
+      attempts: [],
+      operators: [],
+      log: [],
+    };
+  };
+
   const route = (req: IncomingMessage, res: ServerResponse): void => {
     const url = new URL(req.url ?? '/', 'http://local');
     const path = url.pathname.replace(/\/+$/, '');
@@ -198,7 +261,9 @@ export function createHub(options: HubOptions = {}): Hub {
           return;
         }
         const account = accounts.find((a) => a.id === body.account);
-        if (!account || typeof body.passcode !== 'string' || body.passcode !== account.secret) {
+        // An empty secret is the open observer seat: no passcode, no repeated challenge.
+        const passcodeOk = account !== undefined && (account.secret === '' || body.passcode === account.secret);
+        if (!account || typeof body.passcode !== 'string' || !passcodeOk) {
           send(res, 401, { error: 'SAI TÀI KHOẢN HOẶC MẬT KHẨU' });
           return;
         }
@@ -248,7 +313,52 @@ export function createHub(options: HubOptions = {}): Hub {
       const before = engine.revision;
       const snap = engine.snapshot();
       settle(before);
-      send(res, 200, snap);
+      send(res, 200, actor.role === 'OBSERVER' ? redact(snap) : snap);
+      return;
+    }
+
+    /**
+     * Observer capacity, enforced where it counts: the seat map is the authority, a
+     * beat renews the caller's own seat, and an id that already holds one never takes
+     * a second one — so refreshing a page cannot consume another viewer's slot.
+     */
+    if (path === '/api/observer/join' && req.method === 'POST') {
+      guard(res, async () => {
+        const { value: body } = await readBody(req);
+        const viewerId = typeof body.viewer_id === 'string' ? body.viewer_id.slice(0, 64) : '';
+        if (!viewerId) {
+          send(res, 400, { ok: false, code: 'NO_VIEWER' });
+          return;
+        }
+        liveObservers();
+        const held = observerSeats.has(viewerId);
+        if (!held && observerSeats.size >= OBSERVER_CAPACITY) {
+          send(res, 429, { ok: false, code: 'OBSERVER_FULL', capacity: OBSERVER_CAPACITY, devices: observerSeats.size });
+          return;
+        }
+        observerSeats.set(viewerId, clock.nowMs());
+        send(res, 200, { ok: true, code: held ? 'REUSED' : 'JOINED', capacity: OBSERVER_CAPACITY, devices: observerSeats.size });
+      });
+      return;
+    }
+
+    if (path === '/api/observer/beat' && req.method === 'POST') {
+      guard(res, async () => {
+        const { value: body } = await readBody(req);
+        const viewerId = typeof body.viewer_id === 'string' ? body.viewer_id : '';
+        if (viewerId && observerSeats.has(viewerId)) observerSeats.set(viewerId, clock.nowMs());
+        send(res, 200, { ok: true, devices: liveObservers(), capacity: OBSERVER_CAPACITY });
+      });
+      return;
+    }
+
+    if (path === '/api/observer/leave' && req.method === 'POST') {
+      guard(res, async () => {
+        const { value: body } = await readBody(req);
+        const viewerId = typeof body.viewer_id === 'string' ? body.viewer_id : '';
+        observerSeats.delete(viewerId);
+        send(res, 200, { ok: true, devices: liveObservers(), capacity: OBSERVER_CAPACITY });
+      });
       return;
     }
 
@@ -370,5 +480,5 @@ export function createHub(options: HubOptions = {}): Hub {
     }
   };
 
-  return { engine, clock, accounts, handler, stats };
+  return { engine, clock, accounts, handler, stats, observers: () => ({ devices: liveObservers(), capacity: OBSERVER_CAPACITY }) };
 }

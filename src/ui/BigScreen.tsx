@@ -1,38 +1,37 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { LiveStore } from '../client/liveStore';
-import { pad, resolveBigScreen } from '../client/selectors';
+import { pad, resolveBigScreen, resolveCountdown } from '../client/selectors';
 import { BIG_SCREEN_WARN_MS, type Role } from '../shared/constants';
-import { formatClockSec } from '../shared/metrics';
+import { formatClockCs, formatClockSec } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
-import { StationStrip } from './StationStrip';
 import { alarms } from './sound';
 
 interface Props {
   store: LiveStore;
   role: Role;
   onClose(): void;
-  /** True when the display opened by itself because the game clock started. */
+  /** True when the display opened by itself because the countdown started. */
   autoOpened: boolean;
 }
 
 /**
- * Wall display for the 5-minute game countdown. GATE (or the supervisor) may
- * pause or restart the 5:00 from here; both are audited commands, and the display
- * closes itself when GATE stops the game clock.
+ * Wall display for the authoritative round countdown.
+ *
+ * It renders the same derived clock every phone renders, and it offers no control
+ * over the clock at all: the wall is for watching, and only the authoritative
+ * actions on the owning station can ever change what it shows.
  */
 export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const snap = state.snapshot;
-  const now = useNow(store, 'slow');
+  const now = useNow(store, 'raf');
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [digitsOnly, setDigitsOnly] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
 
   const clock = useMemo(() => (snap ? resolveBigScreen(snap, now) : null), [snap, now]);
-  const canControl = role === 'GATE' || role === 'SUPERVISOR';
-  const busy = state.pending !== null;
+  const hero = useMemo(() => (snap ? resolveCountdown(snap, now) : null), [snap, now]);
 
   // A wall display must never dim mid-round (where the browser allows it).
   useWakeLock(true);
@@ -51,8 +50,6 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
     }
   };
 
-  // A wall display should go fullscreen on its first touch; the overlay already
-  // covers the viewport, so a refusal simply leaves the digits on screen.
   const armedFullscreen = useRef(false);
   const armFullscreen = () => {
     if (armedFullscreen.current || !autoOpened) return;
@@ -69,9 +66,9 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
     };
   }, []);
 
-  const pattern = !clock || muted ? 'none' : clock.expired && !clock.paused ? 'critical' : clock.remainingMs <= BIG_SCREEN_WARN_MS ? 'warn' : 'none';
-
-  // While this screen is up it owns the alarm, so the dashboard stops re-arming it.
+  // The countdown stops visually at zero, so the alarm fires once at the boundary
+  // and then stays calm: no strobe, no repeated burst while people are walking out.
+  const pattern = !clock || muted ? 'none' : clock.expired ? 'critical' : clock.remainingMs <= BIG_SCREEN_WARN_MS ? 'warn' : 'none';
   useEffect(() => {
     alarms.setPattern(pattern);
   }, [pattern]);
@@ -86,28 +83,9 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [digitsOnly, onClose]);
 
-  // An accidental tap must never wipe a running clock: the reset needs a confirm.
-  useEffect(() => setConfirmReset(false), [clock?.resetCount, clock?.key]);
+  if (!clock || !hero) return null;
 
-  if (!clock) return null;
-
-  const overtimeMs = -clock.remainingMs;
-  const digits = formatClockSec(Math.max(0, clock.remainingMs));
-
-  const togglePause = () => {
-    alarms.unlock();
-    void store.act(clock.paused ? 'GAME_RESUME' : 'GAME_PAUSE');
-  };
-
-  const reset = () => {
-    alarms.unlock();
-    // A real command: restart the official 5:00 window. The round is then flagged
-    // for supervisor review.
-    void store.act('GAME_RESET');
-    setMuted(false);
-    setConfirmReset(false);
-  };
-
+  const tone = clock.expired ? '#e1362c' : clock.remainingMs <= BIG_SCREEN_WARN_MS ? '#f0a12a' : '#1fb96e';
   // In digits-only mode the whole surface is the gesture that brings the buttons back.
   const tap = digitsOnly ? () => setDigitsOnly(false) : undefined;
 
@@ -115,7 +93,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
     <div
       ref={rootRef}
       className={`safe-top safe-bottom fixed inset-0 z-[60] flex select-none flex-col items-center justify-center overflow-hidden bg-ink px-3 text-center ${
-        clock.expired ? 'alarm-flash' : ''
+        clock.expired ? 'alarm-glow' : ''
       }`}
       data-testid="big-screen"
       data-expired={clock.expired}
@@ -130,70 +108,52 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
         <div className="notch-top absolute inset-x-0 flex items-start justify-between gap-3 px-4 pt-3 text-[0.7rem] tracking-[0.16em] text-mute">
           <span data-testid="big-team">
             ĐỘI #{pad(clock.teamNumber)} · {formatClockSec(clock.limitMs)}
-            {clock.resetCount > 0 ? <span className="ml-2 text-ember" data-testid="big-reset-count">RESET {clock.resetCount}</span> : null}
           </span>
         </div>
       )}
 
-      {!digitsOnly && snap && (
-        <div className="mb-3 w-full max-w-[min(94vw,52rem)] px-3">
-          <StationStrip snap={snap} now={now} size="wall" self={role} />
-        </div>
-      )}
-
-      <p className={`digital text-bigscreen leading-none text-blood ${clock.paused ? 'opacity-70' : ''}`} data-testid="big-clock">
-        {digits}
+      {/* Minutes and seconds carry the whole screen; the fraction is deliberately
+          an order of magnitude smaller so it never competes with the clock. */}
+      <p className="digital wall-main font-bold leading-none" style={{ color: tone }}>
+        <span data-testid="big-clock" data-mode={hero.running ? 'GAME' : 'FROZEN'}>
+          {hero.mm}:{hero.ss}
+        </span>
+        <span className="wall-fraction" data-testid="big-fraction" aria-hidden>
+          {hero.cs}
+        </span>
       </p>
 
-      {clock.paused && (
-        <p className="digital mt-2 text-[clamp(1rem,4.5vw,2.4rem)] font-bold tracking-[0.24em] text-ember" data-testid="big-paused">
-          TẠM DỪNG 5:00
+      {!digitsOnly && <p className="mt-3 text-[clamp(0.9rem,3vw,1.6rem)] font-bold tracking-[0.1em] text-snow" data-testid="big-label">{hero.teamText.toUpperCase()}</p>}
+
+      {clock.pendingValidation && (
+        <p className="digital mt-2 text-[clamp(0.8rem,3vw,1.6rem)] font-bold tracking-[0.16em] text-ember" data-testid="big-pending">
+          HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ
         </p>
       )}
 
-      {clock.expired && !clock.paused && (
-        <p
-          className="alarm-blink digital mt-2 text-[clamp(1.2rem,6vw,3.5rem)] font-bold tracking-[0.24em] text-blood"
-          data-testid="big-expired"
-        >
-          HẾT GIỜ{overtimeMs > 1000 ? ` +${formatClockSec(overtimeMs)}` : ''}
+      {clock.result === 'WON' && clock.officialMs !== null && (
+        <div className="mt-2 flex flex-col items-center gap-1" data-testid="big-result">
+          <p className="text-[clamp(0.75rem,2.6vw,1.3rem)] font-bold tracking-[0.18em] text-jade/80">KẾT QUẢ CHÍNH THỨC</p>
+          <p className="digital text-[clamp(0.9rem,3.4vw,1.8rem)] font-bold tracking-[0.08em] text-jade">
+            THỜI GIAN HOÀN THÀNH: {formatClockCs(clock.officialMs)}
+          </p>
+        </div>
+      )}
+
+      {clock.result === 'ABORTED' && (
+        <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.16em] text-blood" data-testid="big-aborted">
+          LƯỢT CHƠI ĐÃ HỦY
+        </p>
+      )}
+
+      {!clock.pendingValidation && clock.expired && clock.result !== 'WON' && clock.result !== 'ABORTED' && (
+        <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.2em] text-blood" data-testid="big-expired">
+          HẾT GIỜ
         </p>
       )}
 
       {!digitsOnly && (
         <div className="notch-bottom absolute inset-x-0 flex flex-col gap-2 px-3 pb-4" data-testid="big-controls">
-          <div className="flex gap-2">
-            {confirmReset ? (
-              <button
-                type="button"
-                onClick={reset}
-                disabled={!canControl || busy}
-                className="min-h-[4.5rem] flex-1 rounded-panel bg-ember px-4 text-[0.9rem] font-extrabold uppercase tracking-[0.06em] text-[#1a1204] disabled:opacity-60"
-                data-testid="big-reset-confirm"
-              >
-                XÁC NHẬN RESET — MẤT GIỜ ĐANG CHẠY
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmReset(true)}
-                disabled={!canControl || busy}
-                className="min-h-[4.5rem] flex-1 rounded-panel bg-blood px-4 text-[1rem] font-extrabold uppercase tracking-[0.06em] text-[#140606] active:bg-[#c8382e] disabled:opacity-60"
-                data-testid="big-reset"
-              >
-                RESET 5:00
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={togglePause}
-              disabled={!canControl || busy}
-              className="min-h-[4.5rem] flex-1 rounded-panel border border-ember/50 bg-ember/10 px-4 text-[0.95rem] font-bold uppercase tracking-[0.06em] text-ember disabled:opacity-60"
-              data-testid="big-pause"
-            >
-              {clock.paused ? 'CHẠY TIẾP' : 'TẠM DỪNG'}
-            </button>
-          </div>
           <div className="flex flex-wrap justify-center gap-2">
             <GhostButton onClick={() => setDigitsOnly(true)} testid="big-focus">
               CHỈ SỐ TO
@@ -209,10 +169,10 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
             </GhostButton>
           </div>
           <p className="text-[0.65rem] leading-snug text-mute" data-testid="big-note">
-            {canControl
-              ? 'Reset đưa đồng hồ về 5:00 và làm kết quả chờ SUPERVISOR xét.'
-              : 'Chỉ GATE hoặc SUPERVISOR mới được reset hoặc tạm dừng 5:00.'}
-            {autoOpened ? ' Tự đóng khi GATE chốt giờ.' : ''}
+            {role === 'GATE'
+              ? 'Màn hình này không điều khiển được đồng hồ. NPC 1 bấm trên điện thoại của mình.'
+              : 'Chỉ hiển thị. Đồng hồ lượt chơi chỉ do NPC 1 mở và chỉ kết thúc theo mốc do NPC 2 chốt.'}
+            {autoOpened ? ' Tự đóng khi lượt chơi chốt.' : ''}
           </p>
         </div>
       )}

@@ -131,6 +131,23 @@ async function main() {
     try {
       await client.query("set local lock_timeout = '8s'; set local statement_timeout = '120s'");
       await client.query('select pg_advisory_xact_lock(30501)');
+      // Safety: refuse to migrate while an event is running. The advisory lock
+      // serialises against claim_station/reset_all_stations, but not against a
+      // half-open round. If sc.rounds is not yet present (a fresh DB), skip.
+      if (schemaExists) {
+        const { rows: live } = await client.query(`
+          select r.id, r.team_number, r.status,
+                 case when to_regclass('sc.completion_attempts') is null then 0
+                      else (select count(*) from sc.completion_attempts a
+                             where a.round_id = r.id and a.status in ('PENDING','LATE')) end
+                   as pending_claims
+          from sc.rounds r where r.status <> 'CLOSED' order by r.id`);
+        if (live.length) {
+          const detail = live.map(r => `#${r.team_number} ${r.status}${r.pending_claims > 0 ? ` (${r.pending_claims} pending)` : ''}`).join(', ');
+          throw new Error(`Refusing to migrate: ${live.length} round(s) still open — ${detail}. Đóng sự kiện và reset xong trước khi chạy db-push.`);
+        }
+        console.log('Safety check: no active round, no pending claim.');
+      }
       if (singleUrl) {
         const { rows: flags } = await client.query('select allow_test_clock from sc.runtime_flags where id');
         if (flags[0]?.allow_test_clock !== false) throw new Error('Production test clock is enabled; review required.');

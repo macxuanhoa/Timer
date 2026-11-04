@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LiveStore } from '../client/liveStore';
 import type { StoredSession } from './session';
 import { analytics, formatClockCs, formatClockMs, formatClockSec, formatDuration, formatSeconds, formatWallTime, leaderboard, roundMetrics } from '../shared/metrics';
@@ -40,13 +40,25 @@ interface Props {
   /** Opens the wall display; present while a game is running. */
   onOpenBigScreen?(): void;
   onLogout?(): void;
+  /** Which of the three information groups the sheet opens on (operator IA). */
+  initialTab?: 'ops' | 'admin' | 'report';
 }
 
-/** Bottom sheet: never navigates away, so live timers keep rendering underneath. */
-export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScreen, onLogout }: Props) {
+type SheetTab = 'ops' | 'admin' | 'report';
+
+/** Bottom sheet: never navigates away, so live timers keep rendering underneath.
+ * V3.2 UX: the former stack of seven accordions is now three flat information
+ * groups — Điều hành (live process), Quản trị (supervisor-only controls, the
+ * board release is the first thing there), Báo cáo (history, stats, audit).
+ * Nothing was removed and no business call changed. */
+export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScreen, onLogout, initialTab = 'ops' }: Props) {
   const state = store.getSnapshot();
   const snap = state.snapshot;
   const isSupervisor = account.role === 'SUPERVISOR';
+  const [tab, setTab] = useState<SheetTab>(initialTab);
+  // Re-open where the caller meant to land; a supervisor's stale 'admin' tab
+  // must not leak into another device's session.
+  useEffect(() => { if (open) setTab(initialTab === 'admin' && !isSupervisor ? 'ops' : initialTab); }, [open, initialTab, isSupervisor]);
 
   const rows = useMemo(() => (snap ? leaderboard(snap) : []), [snap]);
   // `analytics` is built entirely from persisted timestamps and never reads the
@@ -58,13 +70,14 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
     snap !== null && snap.active_round !== null
       ? liveStatus(snap.active_round, snap.attempts ?? [], roundLimitMs(snap.active_round, snap.event.config.game_limit_ms), now) === 'RUNNING'
       : false;
+  const activeTab: SheetTab = tab === 'admin' && !isSupervisor ? 'ops' : tab;
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="sheet-overlay" />
         <Dialog.Content className="sheet-content flex flex-col" data-testid="details-sheet" aria-describedby={undefined}>
-          <header className="flex items-center justify-between border-b border-hair px-4 py-3">
+          <header className="flex items-center justify-between gap-2 border-b border-hair px-4 pt-3">
             <Dialog.Title className="text-[0.8rem] font-semibold tracking-[0.16em] text-snow">
               {snap ? `${snap.rounds.length} LƯỢT CHƠI` : 'ĐANG ĐỒNG BỘ'}
             </Dialog.Title>
@@ -73,10 +86,27 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
             </Dialog.Close>
           </header>
 
+          <nav className="sheet-tabs" role="tablist" aria-label="Nhóm thông tin">
+            <button type="button" role="tab" aria-selected={activeTab === 'ops'} data-testid="sheet-tab-ops"
+              className={`sheet-tab${activeTab === 'ops' ? ' is-active' : ''}`} onClick={() => setTab('ops')}>
+              ĐIỀU HÀNH
+            </button>
+            {isSupervisor && (
+              <button type="button" role="tab" aria-selected={activeTab === 'admin'} data-testid="sheet-tab-admin"
+                className={`sheet-tab${activeTab === 'admin' ? ' is-active' : ''}`} onClick={() => setTab('admin')}>
+                QUẢN TRỊ
+              </button>
+            )}
+            <button type="button" role="tab" aria-selected={activeTab === 'report'} data-testid="sheet-tab-report"
+              className={`sheet-tab${activeTab === 'report' ? ' is-active' : ''}`} onClick={() => setTab('report')}>
+              BÁO CÁO
+            </button>
+          </nav>
+
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {!snap ? (
               <p className="py-10 text-center text-[0.8rem] text-mute">Đang tải dữ liệu…</p>
-            ) : (
+            ) : activeTab === 'ops' ? (
               <div className="flex flex-col gap-2">
                 {/* Wall display + station switch: the only two actions that are not
                     a handoff, so they live here instead of the operator screen. */}
@@ -102,11 +132,23 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
                     </button>
                   )}
                 </div>
-                <Section title="Chi tiết lượt chơi" testid="section-rounds">
-                  <RoundDetails snap={snap} now={now} />
-                </Section>
                 <Section title="Trạng thái NPC" testid="section-npc">
                   <NpcStatus snap={snap} account={account} store={store} now={now} />
+                </Section>
+                <Section title="Kết nối & cảnh báo" testid="section-connectivity">
+                  <Connectivity store={store} now={now} />
+                </Section>
+              </div>
+            ) : activeTab === 'admin' ? (
+              <div className="flex flex-col gap-2">
+                <Section title="Quản lý" testid="section-admin">
+                  <Management store={store} snap={snap} />
+                </Section>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <Section title="Chi tiết lượt chơi" testid="section-rounds">
+                  <RoundDetails snap={snap} now={now} />
                 </Section>
                 <Section title="Bảng xếp hạng" testid="section-leaderboard">
                   {rows.length === 0 ? (
@@ -135,17 +177,12 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
                 <Section title="Hiệu suất vận hành" testid="section-performance">
                   {stats && <Performance stats={stats} store={store} now={now} />}
                 </Section>
-                <Section title="Kết nối & cảnh báo" testid="section-connectivity">
-                  <Connectivity store={store} now={now} />
-                </Section>
                 <Section title="Lịch sử thao tác" testid="section-history">
                   <History snap={snap} />
                 </Section>
-                {isSupervisor && (
-                  <Section title="Quản lý" testid="section-admin">
-                    <Management store={store} snap={snap} />
-                  </Section>
-                )}
+                <button type="button" onClick={() => exportCsv(snap)} className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow" data-testid="export-csv">
+                  XUẤT CSV
+                </button>
               </div>
             )}
           </div>
@@ -159,13 +196,10 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
 
 function Section({ title, testid, children }: { title: string; testid: string; children: React.ReactNode }) {
   return (
-    <details className="rounded-panel border border-hair bg-ink/40" data-testid={testid}>
-      <summary className="cursor-pointer list-none px-3 py-3 text-[0.8rem] font-semibold tracking-[0.08em] text-snow marker:hidden">
-        {title}
-        <span className="float-right text-mute">＋</span>
-      </summary>
-      <div className="border-t border-hair/60 px-3 py-3">{children}</div>
-    </details>
+    <section className="rounded-panel border border-hair bg-ink/40" data-testid={testid}>
+      <h3 className="px-3 pt-3 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-mute">{title}</h3>
+      <div className="px-3 py-3">{children}</div>
+    </section>
   );
 }
 
@@ -251,6 +285,41 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
 
 function isSlowReset(value: number | null, target: number | null): boolean {
   return value !== null && target !== null && value > target * 1.5;
+}
+
+/** Rounds + full audit trail as CSV. Lives in the report tab: export is a
+ * reading action, not a control. */
+function exportCsv(snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>) {
+  const limit = snap.event.config.game_limit_ms;
+  const lines = ['team_number,result,official_ms,deadline_ms,prep_ms,exit_ms,reset_ms,claims,rejected,floor2'];
+  for (const r of snap.rounds) {
+    const m = roundMetrics(r, snap.reset_tasks, undefined, snap.attempts ?? [], limit);
+    lines.push(
+      [
+        r.team_number,
+        m.result,
+        m.game_ms ?? '',
+        r.deadline_at ?? '',
+        m.prep_ms ?? '',
+        r.exit_confirmed_at ?? '',
+        m.reset_total_ms ?? '',
+        m.claims,
+        m.rejected,
+        r.floor2_bypassed_at !== null ? 'bypassed' : r.floor2_confirmed_at !== null ? 'confirmed' : 'pending',
+      ].join(','),
+    );
+  }
+  lines.push('');
+  lines.push('revision,at_iso,action,actor_role,actor_id,from_state,to_state,idempotency_key');
+  for (const l of snap.log) {
+    lines.push([l.revision, new Date(l.at_ms).toISOString(), l.action, l.actor_role, l.actor_id, l.from_state ?? '', l.to_state ?? '', l.idempotency_key].join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scream-305-${new Date(snap.server_now_ms).toISOString().slice(0, 16).replace(/[:T]/g, '-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function NpcStatus({
@@ -519,43 +588,77 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
     }
   };
 
-  const exportCsv = () => {
-    const limit = snap.event.config.game_limit_ms;
-    const lines = ['team_number,result,official_ms,deadline_ms,prep_ms,exit_ms,reset_ms,claims,rejected,floor2'];
-    for (const r of snap.rounds) {
-      const m = roundMetrics(r, snap.reset_tasks, undefined, snap.attempts ?? [], limit);
-      lines.push(
-        [
-          r.team_number,
-          m.result,
-          m.game_ms ?? '',
-          r.deadline_at ?? '',
-          m.prep_ms ?? '',
-          r.exit_confirmed_at ?? '',
-          m.reset_total_ms ?? '',
-          m.claims,
-          m.rejected,
-          r.floor2_bypassed_at !== null ? 'bypassed' : r.floor2_confirmed_at !== null ? 'confirmed' : 'pending',
-        ].join(','),
-      );
-    }
-    lines.push('');
-    lines.push('revision,at_iso,action,actor_role,actor_id,from_state,to_state,idempotency_key');
-    for (const l of snap.log) {
-      lines.push([l.revision, new Date(l.at_ms).toISOString(), l.action, l.actor_role, l.actor_id, l.from_state ?? '', l.to_state ?? '', l.idempotency_key].join(','));
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `scream-305-${new Date(snap.server_now_ms).toISOString().slice(0, 16).replace(/[:T]/g, '-')}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
   return (
     <div className="flex flex-col gap-4" data-testid="management">
+      {/* Discoverability first (V3.2 UX brief): who holds a seat, then the one
+          control a supervisor needs most often — releasing the board. */}
+      <div className="flex flex-col gap-1" data-testid="admin-bindings">
+        <p className="text-[0.7rem] tracking-[0.1em] text-mute">VỊ TRÍ ĐANG BIND</p>
+        {snap.operators.length === 0 ? (
+          <p className="text-[0.7rem] text-mute" data-testid="admin-bindings-empty">Chưa có thiết bị nào đang giữ vị trí.</p>
+        ) : snap.operators.map((op) => (
+          <p key={op.role} className="flex items-center justify-between gap-2 border-b border-hair/40 py-1.5 text-[0.7rem] last:border-0">
+            <span className="font-semibold text-snow">{ROLE_LABEL[op.role]}</span>
+            <span className="truncate text-[0.64rem] text-mute">
+              {op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác'}
+              {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
+            </span>
+          </p>
+        ))}
+      </div>
+
+      {USING_SUPABASE && (
+        <div className="flex flex-col gap-2" data-testid="release-panel">
+          <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
+          <p className="text-[0.66rem] leading-snug text-mute">
+            Thu hồi mọi máy đang giữ chỗ trực, trả về CÒN TRỐNG để ca mới chọn lại vị trí. Đồng hồ,
+            kết quả, lần báo hoàn thành và checklist vẫn còn nguyên. Chỉ máy đang giữ ghế Quản trị
+            mới làm được việc này.
+          </p>
+          {/* Normal path: two taps, and PostgreSQL still refuses if the floor is busy. */}
+          <button
+            type="button"
+            disabled={releasing}
+            onClick={() => { if (!armed) { setArmed(true); return; } void releaseBoard(false); }}
+            className="rounded-panel border border-hair bg-panel px-3 py-3.5 text-[0.78rem] font-semibold text-snow disabled:opacity-50"
+            data-testid="release-confirm"
+          >
+            {releasing ? 'ĐANG GIẢI PHÓNG…' : armed ? 'XÁC NHẬN GIẢI PHÓNG BẢNG' : 'GIẢI PHÓNG BẢNG'}
+          </button>
+          {armed ? (
+            <p className="text-[0.64rem] leading-snug text-ember" data-testid="release-armed">
+              Lần bấm này sẽ đuổi toàn bộ thiết bị đang trực. Bảng chỉ được giải phóng khi
+              không còn đội trong khu vực.
+            </p>
+          ) : null}
+          {/* Emergency path: the same sweep, but it also closes any still-open round
+              as a recorded safety cancellation. Hidden until deliberately opened. */}
+          <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
+            <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
+              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
+            </summary>
+            <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
+              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
+              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
+            </p>
+            <button
+              type="button"
+              disabled={releasing}
+              onClick={() => void releaseBoard(true)}
+              className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-bold text-blood disabled:opacity-50"
+              data-testid="release-force"
+            >
+              {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG KHẨN CẤP (HỦY LƯỢT ĐANG MỞ)'}
+            </button>
+          </details>
+          {released !== null && (
+            <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-col gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">ĐIỀU KHIỂN SỰ KIỆN · QUẢN TRỊ VIÊN</p>
+        <p className="text-[0.7rem] tracking-[0.1em] text-mute">CẤU HÌNH LƯỢT CHƠI</p>
         <p className="text-[0.7rem] text-mute" data-testid="cfg-duration-current">
           Thời lượng lượt chơi hiện hành: <span className="text-snow">{formatClockSec(snap.event.config.game_limit_ms)}</span>.
           {round && round.game_started_at !== null ? ' Thời lượng mới sẽ áp dụng từ lượt tiếp theo.' : ''}
@@ -618,56 +721,6 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           LƯU CẤU HÌNH
         </button>
       </div>
-
-      {USING_SUPABASE && (
-        <div className="flex flex-col gap-2" data-testid="release-panel">
-          <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
-          <p className="text-[0.66rem] leading-snug text-mute">
-            Thu hồi mọi máy đang giữ chỗ trực, trả về CÒN TRỐNG để ca mới chọn lại vị trí. Đồng hồ,
-            kết quả, lần báo hoàn thành và checklist vẫn còn nguyên. Chỉ máy đang giữ ghế Quản trị
-            mới làm được việc này.
-          </p>
-          {/* Normal path: two taps, and PostgreSQL still refuses if the floor is busy. */}
-          <button
-            type="button"
-            disabled={releasing}
-            onClick={() => { if (!armed) { setArmed(true); return; } void releaseBoard(false); }}
-            className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] font-semibold text-snow disabled:opacity-50"
-            data-testid="release-confirm"
-          >
-            {releasing ? 'ĐANG GIẢI PHÓNG…' : armed ? 'XÁC NHẬN GIẢI PHÓNG BẢNG' : 'GIẢI PHÓNG BẢNG'}
-          </button>
-          {armed ? (
-            <p className="text-[0.64rem] leading-snug text-ember" data-testid="release-armed">
-              Lần bấm này sẽ đuổi toàn bộ thiết bị đang trực. Bảng chỉ được giải phóng khi
-              không còn đội trong khu vực.
-            </p>
-          ) : null}
-          {/* Emergency path: the same sweep, but it also closes any still-open round
-              as a recorded safety cancellation. Hidden until deliberately opened. */}
-          <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
-            <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
-              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
-            </summary>
-            <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
-              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
-              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
-            </p>
-            <button
-              type="button"
-              disabled={releasing}
-              onClick={() => void releaseBoard(true)}
-              className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-bold text-blood disabled:opacity-50"
-              data-testid="release-force"
-            >
-              {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG KHẨN CẤP (HỦY LƯỢT ĐANG MỞ)'}
-            </button>
-          </details>
-          {released !== null && (
-            <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
-          )}
-        </div>
-      )}
 
       <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
@@ -894,10 +947,6 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </button>
         </div>
       )}
-
-      <button type="button" onClick={exportCsv} className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow" data-testid="export-csv">
-        XUẤT CSV
-      </button>
     </div>
   );
 }

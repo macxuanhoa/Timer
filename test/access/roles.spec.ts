@@ -304,7 +304,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
   // The control lives in the admin sheet of a supervisor phone: two deliberate
   // taps, an armed warning between them, and an emergency path kept one click away.
   await sup.page.getByTestId('open-details').click();
-  await sup.page.getByTestId('section-admin').locator('> summary').click();
+  await sup.page.getByTestId('sheet-tab-admin').click();
   await expect(sup.page.getByTestId('release-panel')).toBeVisible();
   await sup.page.screenshot({path:'shots/admin-release-peek.png'});
   await sup.page.getByTestId('release-confirm').click();

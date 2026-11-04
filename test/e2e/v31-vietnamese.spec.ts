@@ -113,7 +113,7 @@ async function freshSession(sup: { page: Page; context: BrowserContext }, pages:
 /** Supervisor stores a new round duration via the details sheet. */
 async function configureDuration(sup: Page, minutes: string, seconds: string) {
   await sup.getByTestId('open-details').click();
-  await sup.getByTestId('section-admin').locator('summary').click();
+  await sup.getByTestId('sheet-tab-admin').click();
   await sup.getByTestId('cfg-duration-min').fill(minutes);
   await sup.getByTestId('cfg-duration-sec').fill(seconds);
   await sup.getByTestId('cfg-save').click();
@@ -217,12 +217,12 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
     await expectVietnamese(gate.page, 'CLOSED: gate');
 
     // Supervisor admin sheet: every label the operator may open must be Vietnamese,
-    // including the correction form and the release panel.
+    // including the correction form and the release panel. V3.2 IA: scan each tab.
     await sup.page.getByTestId('open-details').click();
-    for (const testid of ['section-rounds', 'section-npc', 'section-leaderboard', 'section-performance', 'section-connectivity', 'section-history', 'section-admin']) {
-      await sup.page.getByTestId(testid).locator('summary').click();
+    for (const tab of ['sheet-tab-ops', 'sheet-tab-report', 'sheet-tab-admin']) {
+      await sup.page.getByTestId(tab).click();
+      await expectVietnamese(sup.page, `SUPERVISOR sheet ${tab}`);
     }
-    await expectVietnamese(sup.page, 'SUPERVISOR admin sheet');
     await sup.page.getByTestId('close-details').click();
 
     // Offline sweep — the DEGRADED/OFFLINE path must show TRANSPORT_LABEL, not the

@@ -201,16 +201,15 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
 
     // The ranking carries the claim-based time, and the wall clock shows ms detail.
     await lobby.page.getByTestId('open-details').click();
-    await lobby.page.getByTestId('section-leaderboard').locator('summary').click();
+    // V3.2 IA: the report tab shows rounds, ranking and audit flat — no accordions.
+    await lobby.page.getByTestId('sheet-tab-report').click();
     await expect(lobby.page.getByTestId('leaderboard-table')).toContainText('#001');
-    await lobby.page.getByTestId('section-rounds').locator('summary').click();
     await expect(lobby.page.getByTestId('round-detail-1')).toContainText('Điểm chính thức');
     await expect(lobby.page.getByTestId('claims-1')).toContainText('Lần 1');
     // V3.1 §IV: the attempt decision reads `CHƯA ĐÚNG` (from ATTEMPT_LABEL.INVALID),
     // never the raw `INVALID` key. The uppercase is the deliberate visual weight of
     // the label layer, matching the operator's "seen as a decision" style.
     await expect(lobby.page.getByTestId('claims-1')).toContainText('CHƯA ĐÚNG');
-    await lobby.page.getByTestId('section-history').locator('summary').click();
     // The audit line is written for a human on the floor, not as an action id.
     await expect(lobby.page.getByTestId('history')).toContainText('ghi nhận báo hoàn thành');
     await expect(lobby.page.getByTestId('history')).toContainText('đã rời tầng 3');

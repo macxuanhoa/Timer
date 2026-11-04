@@ -21,7 +21,7 @@ import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
 import { ROLE_SHORT, ROLE_LABEL, TEAM_NAME_MAX, TRANSPORT_LABEL, type Role } from '../shared/constants';
 import { roundLimitMs } from '../shared/machine';
-import { formatClockCs, formatClockSec, leaderboard } from '../shared/metrics';
+import { formatClockCs, formatClockSec, formatWallTime, leaderboard } from '../shared/metrics';
 import type { ActionType, CommandMeta, Round } from '../shared/types';
 import { DetailsSheet } from './DetailsSheet';
 import { BigScreen } from './BigScreen';
@@ -91,6 +91,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
   const [bigOpen, setBigOpen] = useState(false);
   const [bigAuto, setBigAuto] = useState(false);
   const [journeyOpen, setJourneyOpen] = useState(false);
+  const [sheetTab, setSheetTab] = useState<'ops' | 'admin' | 'report'>('ops');
 
   const phase = snap ? phaseOf(snap, now) : 'PRE_EVENT';
   const countdown = useMemo(() => (snap ? resolveCountdown(snap, now) : null), [snap, now]);
@@ -215,6 +216,18 @@ export function Dashboard({ store, account, onLogout }: Props) {
         />
       ) : (
         <main className="flex min-h-0 flex-1 flex-col justify-evenly gap-2.5 overflow-y-auto px-3 pb-2">
+          {phase === 'ENDED' ? (
+            /* The clock and relay are over: the finished state itself is the most
+               important fact on screen, so it replaces the idle 05:00 hero entirely.
+               The picker stays reachable — the board is open again for the next shift. */
+            <EventEndedCard
+              rounds={snap.rounds.length}
+              successful={snap.rounds.filter((r) => r.result === 'WON').length}
+              endedAt={snap.event.event_ended_at ?? snap.server_now_ms}
+              onOpenReport={() => { setSheetTab('report'); setSheetOpen(true); }}
+            />
+          ) : (
+            <>
           {/* ------------------------------------------------------- team card */}
           <section className="card tm-card" data-testid="active-team">
             <div className="flex items-center justify-between gap-2">
@@ -325,6 +338,8 @@ export function Dashboard({ store, account, onLogout }: Props) {
           <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName={teamName} />
 
           {phase === 'EXIT_CONFIRMED' ? <AttemptHistory attempts={attempts} /> : null}
+            </>
+          )}
         </main>
       )}
 
@@ -342,7 +357,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
           </div>
           <button
             type="button"
-            onClick={() => setSheetOpen(true)}
+            onClick={() => { setSheetTab('ops'); setSheetOpen(true); }}
             className="flex shrink-0 items-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2.5 py-2 text-[10px] font-semibold text-snow active:bg-panel2"
             data-testid="open-details"
           >
@@ -358,6 +373,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
 
       <DetailsSheet
         open={sheetOpen}
+        initialTab={sheetTab}
         onClose={() => setSheetOpen(false)}
         store={store}
         account={account}
@@ -385,6 +401,34 @@ export function Dashboard({ store, account, onLogout }: Props) {
 }
 
 /* --------------------------------------------------------------- flow screens */
+
+/** Whole-event summary shown in place of the idle clock once the event ended. */
+function EventEndedCard({ rounds, successful, endedAt, onOpenReport }: {
+  rounds: number; successful: number; endedAt: number; onOpenReport(): void;
+}) {
+  return (
+    <section className="ended-card flex w-full flex-col items-center gap-3 px-4 py-8 text-center" data-testid="event-ended-card">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full border border-jade/50 bg-jade/10">
+        <CheckIcon className="h-6 w-6 text-jade" />
+      </span>
+      <p className="text-[1.05rem] font-extrabold tracking-[0.06em] text-snow">SỰ KIỆN ĐÃ KẾT THÚC</p>
+      <p className="text-[0.72rem] leading-snug text-mute" data-testid="event-ended-summary">
+        {rounds} lượt · {successful} đội thành công · đóng lúc {formatWallTime(endedAt)}
+      </p>
+      <button
+        type="button"
+        onClick={onOpenReport}
+        className="w-full rounded-panel border border-hair bg-panel px-4 py-3.5 text-[0.78rem] font-semibold text-snow active:bg-panel2"
+        data-testid="open-report"
+      >
+        XEM BÁO CÁO & LỊCH SỬ
+      </button>
+      <p className="text-[0.66rem] leading-snug text-mute" data-testid="ended-board-note">
+        Bảng vị trí vẫn mở cho ca tiếp theo — chọn lại vị trí ở màn hình đầu tiên.
+      </p>
+    </section>
+  );
+}
 
 function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
   const [busy, setBusy] = useState(false);

@@ -367,6 +367,49 @@
   outline: none;
 }
 
+/* V3.2 operator IA: the sheet opens as three flat information groups instead of
+   a stack of accordions — Điều hành / Quản trị / Báo cáo. Tab targets are ≥44px
+   tall combined with padding, thumb-reachable at 320-430px, and the active state
+   reads from the underline alone (no colour-only signal). */
+.sheet-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--color-hair);
+}
+.sheet-tab {
+  flex: 1;
+  min-height: 40px;
+  padding: 11px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--color-mute);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.sheet-tab.is-active {
+  color: var(--color-snow);
+  border-bottom-color: var(--color-blood);
+}
+.sheet-tab:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: -2px;
+  border-radius: 6px 6px 0 0;
+}
+
+/* The finished-event state replaces the idle clock on the dashboard. */
+.ended-card {
+  border: 1px solid color-mix(in srgb, var(--color-jade) 40%, var(--color-hair));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-jade) 7%, var(--color-panel));
+}
+
+@media (min-width: 700px) {
+  .sheet-tabs { padding: 10px 20px 0; }
+  .sheet-tab { padding: 13px 10px; font-size: 11.5px; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .sheet-overlay[data-state='open'],
   .sheet-content[data-state='open'] {

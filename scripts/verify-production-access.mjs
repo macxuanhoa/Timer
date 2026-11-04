@@ -10,6 +10,7 @@
  * are claim + immediate release of a slot that was FREE before the test,
  * using throwaway probe identities, always cleaned up in finally. */
 import { writeFileSync } from 'node:fs';
+import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.VITE_SUPABASE_URL;
 const anon = process.env.VITE_SUPABASE_ANON_KEY;
@@ -57,8 +58,18 @@ const newIdentity = async () => {
 };
 
 const probes = [];
-const tokenOf = async (probe) => (probe.token || (await signIn(probe.refresh)).access_token);
-const fresh = async () => { const p = await newIdentity(); probes.push(p); return p; };
+// GoTrue email sign-ups are blocked by validation and rate limits on this
+// project, so probe identities use anonymous sessions — the same mechanism
+// every real phone uses on first launch.
+const fresh = async () => {
+  const c = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const { data, error } = await c.auth.signInAnonymously();
+  if (error) throw new Error(`anon sign-in: ${error.message}`);
+  const p = { id: data.session.user.id, token: data.session.access_token };
+  probes.push(p);
+  return p;
+};
+const tokenOf = async (p) => p.token;
 
 let boardSnapshot;
 try {
@@ -85,13 +96,13 @@ try {
     const probe = await fresh();
     const claimed = await rpc('claim_station', { p_role: free.role }, await tokenOf(probe));
     assert(claimed.ok === true, `claim failed: ${JSON.stringify(claimed)}`);
-    const who = await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe));
-    assert(who.role === free.role, `whoami=${who.role}`);
+    const who = await rpc('whoami', {}, await tokenOf(probe));
+    assert(who?.role === free.role, `whoami=${JSON.stringify(who)}`);
     const refused = await rpc('claim_station', { p_role: 'CORRIDOR' }, await tokenOf(probe));
-    assert(refused.code === 'ALREADY_BOUND', `second seat not blocked: ${JSON.stringify(refused)}`);
+    assert(refused.code === 'ALREADY_BOUND_OTHER_ROLE', `second seat not blocked: ${JSON.stringify(refused)}`);
     const released = await rpc('release_device', {}, await tokenOf(probe));
     assert(released.ok === true, 'release failed');
-    assert((await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe))).ok === false, 'still bound after release');
+    assert((await rpc('whoami', {}, await tokenOf(probe))) === null, 'still bound after release');
     return `slot ${free.role} round-trip`;
   });
 
@@ -99,7 +110,7 @@ try {
     const probe = await fresh();
     const answer = await rpc('claim_station', { p_role: 'SUPERVISOR' }, await tokenOf(probe));
     assert(answer.code === 'ADMIN_NOT_ALLOWED', `unexpected: ${JSON.stringify(answer)}`);
-    assert((await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe))).ok === false, 'refused claim still bound');
+    assert((await rpc('whoami', {}, await tokenOf(probe))) === null, 'refused claim still bound');
   });
 
   await run('reset_all_stations is refused from a non-admin caller', async () => {
@@ -113,9 +124,9 @@ try {
   await run('observer wrapper joins, beats and leaves through public RPCs', async () => {
     const probe = await fresh();
     const token = await tokenOf(probe);
-    const joined = await rpc('observer_join', {}, token);
+    const joined = await rpc('observer_join', { p_viewer_id: `probe-${crypto.randomUUID().slice(0, 8)}` }, token);
     assert(joined.ok === true, `join: ${JSON.stringify(joined)}`);
-    const beat = await rpc('observer_beat', {}, token);
+    const beat = await rpc('observer_beat', { p_viewer_id: 'probe-beat' }, token);
     assert(beat.seat?.user_id === probe.id || beat.ok === true, `beat: ${JSON.stringify(beat)}`);
     const board = await rpc('station_board', {});
     assert(board.observer_devices >= 1, `observer_devices=${board.observer_devices}`);

@@ -46,6 +46,9 @@ export function Home({ onEnter, canSelect = true, error }: {
   const adminRoute = isAdminRoute();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // The panel mirrors the REAL server-side permission (whoami binding), never a guess:
+  // an authorised device is never shown raw UUID/SQL boilerplate again.
+  const [adminState, setAdminState] = useState<'checking' | 'ready' | 'none' | 'error'>('checking');
   const loading = useRef(false);
   const refresh = useRef<() => Promise<void>>(async () => {});
   const entering = useRef(false);
@@ -55,6 +58,27 @@ export function Home({ onEnter, canSelect = true, error }: {
     if (!USING_SUPABASE || !adminRoute) return;
     void import('../client/supabaseAuth').then(({ myDeviceId }) =>
       myDeviceId().then(setDeviceId).catch(() => setDeviceId(null)));
+  }, [adminRoute]);
+
+  /** Ask the backend who this device really is: a live SUPERVISOR binding can only
+   *  exist for an allow-listed device, so it is the authoritative granted state. */
+  const checkAdmin = useRef(async () => {});
+  useEffect(() => {
+    if (!adminRoute) return;
+    if (!USING_SUPABASE) { setAdminState('ready'); return; }
+    let disposed = false;
+    checkAdmin.current = async () => {
+      setAdminState('checking');
+      try {
+        const { currentProfile } = await import('../client/supabaseAuth');
+        const profile = await currentProfile();
+        if (!disposed) setAdminState(profile?.role === 'SUPERVISOR' ? 'ready' : 'none');
+      } catch {
+        if (!disposed) setAdminState('error');
+      }
+    };
+    void checkAdmin.current();
+    return () => { disposed = true; };
   }, [adminRoute]);
 
   useEffect(() => {
@@ -112,7 +136,11 @@ export function Home({ onEnter, canSelect = true, error }: {
       // one-device-one-seat rule, and the /admin allow-list gates the admin seat.
       onEnter(await selectStation(role));
     } catch (err) {
-      setMessage(err instanceof Error && err.name === 'AccessError' ? err.message : 'MẤT KẾT NỐI — CHẠM LẠI VỊ TRÍ ĐỂ TIẾP TỤC');
+      const text = err instanceof Error && err.name === 'AccessError' ? err.message : 'MẤT KẾT NỐI — CHẠM LẠI VỊ TRÍ ĐỂ TIẾP TỤC';
+      setMessage(text);
+      // A refused admin claim (revoked allow-list entry) drops the panel back to the
+      // setup guidance instead of leaving a stale "granted" badge on screen.
+      if (role === 'SUPERVISOR' && /QUẢN TRỊ/.test(text)) setAdminState('none');
       await refresh.current();
     } finally {
       entering.current = false; setBusy(null);
@@ -176,34 +204,65 @@ export function Home({ onEnter, canSelect = true, error }: {
             );
           })}
         </div>
-        {/* V3.2: the admin seat is not offered on the public board at all. It only
-            appears on the private /admin route, where the organiser's device uuid is
-            shown once so it can be placed on the allow-list. Players never see this. */}
+        {/* V3.2: the admin seat is not offered on the public board at all. On the private
+           /admin route the panel mirrors the real permission: a granted device sees one
+           badge and one button; anything else sees short guidance with the UUID/SQL tucked
+           into "advanced setup" until deliberately opened. Players never see this. */}
         {adminRoute ? (
           <div className="home-admin-line" data-testid="admin-panel">
-            <p className="home-pin-note">
-              Máy này là <strong className="digital" data-testid="admin-device-id">{deviceId ?? '…'}</strong>.
-              Nếu đây là lần đầu, mở Supabase → SQL Editor và chạy một lần:
-            </p>
-            <pre className="home-admin-sql" data-testid="admin-bootstrap-sql">{`insert into sc.admin_devices (user_id, note)
+            {adminState === 'checking' ? (
+              <p className="home-pin-note" data-testid="admin-checking">ĐANG KIỂM TRA QUYỀN MÁY…</p>
+            ) : adminState === 'ready' ? (
+              <>
+                <p className="home-admin-granted" data-testid="admin-granted">
+                  <span aria-hidden="true">✓</span> THIẾT BỊ ĐÃ ĐƯỢC CẤP QUYỀN
+                </p>
+                <button type="button" data-testid="home-admin-open" className="home-admin-primary"
+                  disabled={!fresh || busy !== null || !canSelect}
+                  onClick={() => void claim('SUPERVISOR')}>
+                  {busy === 'SUPERVISOR' ? 'ĐANG VÀO…' : 'VÀO BẢNG QUẢN TRỊ'}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="home-pin-note" data-testid="admin-guide">
+                  {adminState === 'error'
+                    ? 'CHƯA KIỂM TRA ĐƯỢC QUYỀN DO MẤT KẾT NỐI.'
+                    : 'VÀO KHU QUẢN TRỊ khi máy đã có trong danh sách cấp quyền. Cấp mới lần đầu? Mở mục Thiết lập nâng cao bên dưới rồi gửi mã máy cho người phụ trách.'}
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" data-testid="home-admin-open" className="home-admin-primary flex-1"
+                    disabled={!fresh || busy !== null || !canSelect}
+                    onClick={() => void claim('SUPERVISOR')}>
+                    {busy === 'SUPERVISOR' ? 'ĐANG VÀO…' : 'VÀO QUẢN TRỊ'}
+                  </button>
+                  {USING_SUPABASE && adminState === 'error' ? (
+                    <button type="button" data-testid="admin-recheck" className="flex-1 rounded-[10px] border border-hair bg-panel px-3 py-2 text-[10.5px] font-semibold text-snow/90"
+                      onClick={() => void checkAdmin.current()}>KIỂM TRA LẠI QUYỀN</button>
+                  ) : null}
+                </div>
+                <details className="home-admin-advanced" data-testid="admin-advanced">
+                  <summary>THIẾT LẬP NÂNG CAO — LẤY MÃ MÁY & LỆNH CẤP QUYỀN</summary>
+                  <p className="home-pin-note">
+                    Mã máy này: <strong className="digital" data-testid="admin-device-id">{deviceId ?? '…'}</strong>.
+                    Người phụ trách chạy MỘT lần trong Supabase → SQL Editor (quyền luôn được
+                    kiểm tra lại phía máy chủ; trang này không tự cấp quyền):
+                  </p>
+                  <pre className="home-admin-sql" data-testid="admin-bootstrap-sql">{`insert into sc.admin_devices (user_id, note)
   values ('${deviceId ?? '<uuid-máy-này>'}', 'máy quản trị');`}</pre>
-            <div className="flex gap-2">
-              <button type="button" data-testid="admin-copy"
-                className="flex-1 rounded-[10px] border border-hair bg-panel px-3 py-2 text-[10.5px] font-semibold text-snow/90"
-                onClick={() => {
-                  if (!deviceId) return;
-                  void navigator.clipboard?.writeText(deviceId).catch(() => undefined);
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1500);
-                }}>
-                {copied ? 'ĐÃ SAO CHÉP' : 'SAO CHÉP MACHINE ID'}
-              </button>
-              <button type="button" data-testid="home-admin-open" className="flex-1"
-                disabled={!fresh || busy !== null || !canSelect}
-                onClick={() => void claim('SUPERVISOR')}>
-                {busy === 'SUPERVISOR' ? 'ĐANG VÀO…' : 'VÀO QUẢN TRỊ'}
-              </button>
-            </div>
+                  <button type="button" data-testid="admin-copy"
+                    className="w-full rounded-[10px] border border-hair bg-panel px-3 py-2 text-[10.5px] font-semibold text-snow/90"
+                    onClick={() => {
+                      if (!deviceId) return;
+                      void navigator.clipboard?.writeText(deviceId).catch(() => undefined);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1500);
+                    }}>
+                    {copied ? 'ĐÃ SAO CHÉP' : 'SAO CHÉP MÃ MÁY'}
+                  </button>
+                </details>
+              </>
+            )}
           </div>
         ) : null}
         <div aria-live="polite" className="home-feedback">

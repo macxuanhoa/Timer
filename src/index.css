@@ -555,6 +555,55 @@
    snippet must never ride up over the last station tile (home-pin-note carries a
    negative margin tuned for the sheet), and the code sample needs to wrap. */
 .home-admin-line .home-pin-note { margin: 0; }
+
+/* State-driven /admin panel: granted badge first, and the uuid/SQL live only
+   inside a deliberately opened "advanced setup" disclosure. */
+.home-admin-granted {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--color-jade);
+}
+.home-admin-granted span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--color-jade);
+  border-radius: 999px;
+  font-size: 11px;
+}
+.home-admin-line button.home-admin-primary { font-weight: 700; }
+.home-admin-line details.home-admin-advanced {
+  width: 100%;
+  border: 1px solid var(--color-hair);
+  border-radius: 10px;
+  background: var(--color-ink);
+}
+.home-admin-advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--color-mute);
+}
+.home-admin-advanced > summary::-webkit-details-marker { display: none; }
+.home-admin-advanced > summary::after { content: '＋'; float: right; color: var(--color-mute); }
+.home-admin-advanced[open] > summary::after { content: '–'; }
+.home-admin-advanced > summary:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.home-admin-advanced > *:not(summary) { margin: 0 12px 10px; }
+.home-admin-advanced > *:first-of-type:not(summary) { margin-top: 2px; }
 .home-admin-sql {
   margin: 0;
   padding: 10px 12px;

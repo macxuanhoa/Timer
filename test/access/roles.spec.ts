@@ -100,10 +100,14 @@ async function waitBound(p: Awaited<ReturnType<typeof phone>>, role: string) {
 
 async function claim(p: Awaited<ReturnType<typeof phone>>, role: string) {
   if (role === 'SUPERVISOR') {
-    // The admin panel only exists on /admin, and it shows the device uuid the
-    // organiser needs before the allow-list will let the seat bind.
+    // The admin panel only exists on /admin. V3.2 UX: the uuid now lives inside a
+    // deliberately-opened "advanced setup" disclosure, because a state-aware page
+    // must not shout raw SQL at an operator whose device is already granted.
     await p.page.goto('/admin');
     await expect(p.page.getByTestId('admin-panel')).toBeVisible();
+    const advanced = p.page.getByTestId('admin-advanced');
+    await expect(advanced).toBeVisible({ timeout: 10_000 });
+    await advanced.locator('> summary').click();
     const shown = p.page.getByTestId('admin-device-id');
     await expect(shown).not.toHaveText('…', { timeout: 10_000 });
     await allowAdmin((await shown.innerText()).trim());

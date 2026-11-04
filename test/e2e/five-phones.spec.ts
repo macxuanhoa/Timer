@@ -552,7 +552,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('19. root Home offers four stations plus an open viewer seat', async ({ page }) => {
+  test('19. root Home offers four stations plus an open viewer seat, and no admin entry', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTestId('scream-home')).toBeVisible();
 
@@ -563,12 +563,18 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     for (const role of ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'OBSERVER']) {
       await expect(page.getByTestId(`station-${role}`)).toHaveAttribute('data-state', /available|unknown|full/);
     }
-    // The retained admin is not offered as a station; it opens a PIN sheet.
+    // V3.2: the retained admin is not a board tile and the public page never even
+    // shows the admin line — there is no PIN sheet anywhere to reach.
     await expect(page.getByTestId('station-SUPERVISOR')).toHaveCount(0);
+    await expect(page.getByTestId('home-admin-open')).toHaveCount(0);
+    await expect(page.getByTestId('admin-panel')).toHaveCount(0);
     await expect(page.locator('input')).toHaveCount(0);
+  });
+
+  test('19b. /admin binds the retained admin with a single tap, no credential', async ({ page }) => {
+    await page.goto('/admin');
+    await expect(page.getByTestId('admin-panel')).toBeVisible();
     await page.getByTestId('home-admin-open').click();
-    await page.getByLabel('PIN quản trị', { exact: true }).fill('12345678');
-    await page.getByRole('button', { name: 'VÀO QUẢN TRỊ' }).click();
     await expect(page.getByTestId('dashboard')).toBeVisible();
     await expect(page.getByTestId('role-tag')).toHaveText('TRỊ');
   });

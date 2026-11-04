@@ -28,7 +28,6 @@ import { USING_SUPABASE } from '../client/gateway';
 import { disputedRounds } from '../shared/metrics';
 import { pad } from '../client/selectors';
 import { alarms } from './sound';
-import { EyeIcon, EyeOffIcon } from './icons';
 import { StationStrip } from './StationStrip';
 import type { Round } from '../shared/types';
 
@@ -458,11 +457,11 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   const [minutes, setMinutes] = useState(String(Math.floor(snap.event.config.game_limit_ms / 60_000)));
   const [seconds, setSeconds] = useState(String(Math.floor((snap.event.config.game_limit_ms % 60_000) / 1000)));
   const [abortKind, setAbortKind] = useState<AbortKind>('technical');
-  // The board release is a supervisor action since V3.1 §6.1: the same secret, the
-  // same peek-and-hide field, but only from a phone that actually holds the seat.
-  const [releaseSecret, setReleaseSecret] = useState('');
-  const [releaseShown, setReleaseShown] = useState(false);
+  // V3.2: the board release is a supervisor action with no secret to type — the
+  // caller's own binding is the authorisation. Two taps confirm; a third, separate
+  // emergency path forces a release while a round is still open.
   const [releasing, setReleasing] = useState(false);
+  const [armed, setArmed] = useState(false);
   const [released, setReleased] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [reopen, setReopen] = useState<{ round_id: string; task_key: string; reason: string }>({
@@ -499,19 +498,20 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
 
   /**
    * Every occupied station returns to CÒN TRỐNG so a new shift can pick its seat
-   * again. The secret is verified inside PostgreSQL, and the answer is the same
-   * authoritative floor predicate the picker shows — so this can never run over a
-   * team that is still inside, and never touches a clock, a result or a checklist.
+   * again. PostgreSQL verifies the caller holds the SUPERVISOR seat — there is no
+   * secret any more — and the answer is the same authoritative floor predicate the
+   * picker shows. `force` is the emergency path: it aborts a still-open round as a
+   * safety cancellation before freeing the seats. Rounds, claims and history are
+   * never deleted by either path.
    */
-  const releaseBoard = async () => {
-    setReleasing(true); setReleased(null);
+  const releaseBoard = async (force: boolean) => {
+    setReleasing(true); setReleased(null); setArmed(false);
     try {
       const { resetAllStations, resetErrorMessage } = await import('../client/supabaseAuth');
-      const result = await resetAllStations(releaseSecret);
+      const result = await resetAllStations(force);
       setReleased(result?.ok
         ? (result.freed ?? 0) > 0 ? `ĐÃ GIẢI PHÓNG ${result.freed} VỊ TRÍ · BẢNG CÒN TRỐNG` : 'BẢNG ĐÃ TRỐNG — KHÔNG CÓ VỊ TRÍ NÀO BỊ ĐÁ'
         : resetErrorMessage(result));
-      if (result?.ok) { setReleaseSecret(''); setReleaseShown(false); }
     } catch {
       setReleased('MẤT KẾT NỐI — CHƯA GIẢI PHÓNG ĐƯỢC. KIỂM TRA MẠNG RỒI BẤM LẠI');
     } finally {
@@ -627,35 +627,42 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
             kết quả, lần báo hoàn thành và checklist vẫn còn nguyên. Chỉ máy đang giữ ghế Quản trị
             mới làm được việc này.
           </p>
-          <div className="home-pin-field">
-            <input
-              type={releaseShown ? 'text' : 'password'}
-              autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
-              maxLength={64} minLength={10}
-              aria-label="Mật khẩu giải phóng bảng" value={releaseSecret}
-              onChange={(e) => { setReleaseSecret(e.target.value); setReleased(null); }}
-              disabled={releasing}
-              className="w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
-              data-testid="release-secret"
-            />
-            <button type="button" className="home-pin-peek" data-testid="release-peek" disabled={releasing}
-              aria-label={releaseShown ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} aria-pressed={releaseShown}
-              onClick={() => setReleaseShown((shown) => !shown)}>
-              {releaseShown ? <EyeOffIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
-            </button>
-          </div>
-          {/* No pre-computed hint here: the answer comes from the same PostgreSQL
-              predicate that guards the RPC, so the operator reads one truth instead
-              of two that could drift apart. */}
+          {/* Normal path: two taps, and PostgreSQL still refuses if the floor is busy. */}
           <button
             type="button"
-            disabled={releasing || releaseSecret.trim().length < 10}
-            onClick={() => void releaseBoard()}
-            className="rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-semibold text-blood disabled:opacity-50"
+            disabled={releasing}
+            onClick={() => { if (!armed) { setArmed(true); return; } void releaseBoard(false); }}
+            className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] font-semibold text-snow disabled:opacity-50"
             data-testid="release-confirm"
           >
-            {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG TOÀN BỘ VỊ TRÍ'}
+            {releasing ? 'ĐANG GIẢI PHÓNG…' : armed ? 'XÁC NHẬN GIẢI PHÓNG BẢNG' : 'GIẢI PHÓNG BẢNG'}
           </button>
+          {armed ? (
+            <p className="text-[0.64rem] leading-snug text-ember" data-testid="release-armed">
+              Lần bấm này sẽ đuổi toàn bộ thiết bị đang trực. Bảng chỉ được giải phóng khi
+              không còn đội trong khu vực.
+            </p>
+          ) : null}
+          {/* Emergency path: the same sweep, but it also closes any still-open round
+              as a recorded safety cancellation. Hidden until deliberately opened. */}
+          <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
+            <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
+              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
+            </summary>
+            <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
+              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
+              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
+            </p>
+            <button
+              type="button"
+              disabled={releasing}
+              onClick={() => void releaseBoard(true)}
+              className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-bold text-blood disabled:opacity-50"
+              data-testid="release-force"
+            >
+              {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG KHẨN CẤP (HỦY LƯỢT ĐANG MỞ)'}
+            </button>
+          </details>
           {released !== null && (
             <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
           )}

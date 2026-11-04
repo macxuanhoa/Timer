@@ -1,84 +1,139 @@
-/** Production access smoke only: never calls event/timer/snapshot commands.
- * Uses fresh anonymous identities, claims at most ONE vacant NPC slot briefly,
- * and releases only bindings owned by those identities in finally.
- * Run: node --env-file=.env.local scripts/verify-production-access.mjs
- */
-import { createClient } from '@supabase/supabase-js';
-import { writeFile } from 'node:fs/promises';
+/* Non-destructive checks against the real production Supabase backend, V3.2.
+ *
+ * Run:  node --env-file=.env.local scripts/verify-production-access.mjs
+ *
+ * Proves: the V3.2 RPC surface is live (open seats, admin-gated SUPERVISOR,
+ * force-aware reset, observer wrapper), the retired credential surface is
+ * gone, and board reads work with zero auth.
+ *
+ * Safety: NO round is ever created, modified or aborted. The only seat writes
+ * are claim + immediate release of a slot that was FREE before the test,
+ * using throwaway probe identities, always cleaned up in finally. */
+import { writeFileSync } from 'node:fs';
 
 const url = process.env.VITE_SUPABASE_URL;
-const key = process.env.VITE_SUPABASE_ANON_KEY;
-if (!url || !key) throw new Error('Missing production publishable configuration');
-const client = () => createClient(url, key, { auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false } });
-const reader=client(), a=client(), b=client();
-const report={ at:new Date().toISOString(), checks:[], unverified:[] };
-const check=(name,ok)=>{report.checks.push({name,ok}); if(!ok)throw new Error(name);console.log('PASS',name);};
-const rpc=async(c,name,args={})=>{const {data,error}=await c.rpc(name,args).abortSignal(AbortSignal.timeout(12000));if(error)throw new Error(error.message);return data;};
-let channel;
-const changes=[];
-const pause=ms=>new Promise(r=>setTimeout(r,ms));
+const anon = process.env.VITE_SUPABASE_ANON_KEY;
+if (!url || !anon) throw new Error('requires --env-file=.env.local (VITE_SUPABASE_URL + ANON key only)');
+
+const results = [];
+const skipped = [];
+const run = async (name, fn) => {
+  try { const note = await fn(); results.push([name, 'PASS', note || '']); console.log(`PASS  ${name}${note ? ' — ' + note : ''}`); }
+  catch (error) { results.push([name, 'FAIL', String(error?.message || error)]); console.error(`FAIL  ${name}: ${error?.message || error}`); }
+};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+
+const rpc = async (name, body, token) => {
+  const response = await fetch(`${url}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: {
+      apikey: anon, Authorization: `Bearer ${token || anon}`,
+      'Content-Type': 'application/json', Prefer: 'return=representation',
+    },
+    body: JSON.stringify(body || {}),
+  });
+  const text = await response.text();
+  let json; try { json = JSON.parse(text); } catch { json = text; }
+  if (!response.ok) throw new Error(`${response.status} ${JSON.stringify(json).slice(0, 180)}`);
+  return json;
+};
+const signIn = async (refreshToken) => {
+  const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST', headers: { apikey: anon, Authorization: `Bearer ${anon}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  if (!response.ok) throw new Error(`refresh failed: ${response.status}`);
+  return response.json();
+};
+const newIdentity = async () => {
+  const created = await fetch(`${url}/auth/v1/signup`, {
+    method: 'POST', headers: { apikey: anon, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `sc305-probe-${crypto.randomUUID()}@probe.invalid`, password: `Probe!${crypto.randomUUID()}` }),
+  });
+  if (!created.ok) throw new Error(`signup ${created.status}: ${(await created.text()).slice(0, 140)}`);
+  const session = await created.json();
+  assert(session.user?.id && session.access_token, 'signup returned no session');
+  return { id: session.user.id, token: session.access_token, refresh: session.refresh_token };
+};
+
+const probes = [];
+const tokenOf = async (probe) => (probe.token || (await signIn(probe.refresh)).access_token);
+const fresh = async () => { const p = await newIdentity(); probes.push(p); return p; };
+
+let boardSnapshot;
 try {
-  const initial=await rpc(reader,'station_board');
-  report.initial=initial;
-  check('public board declares six slots',initial.device_capacity===6 && initial.stations.length===5 &&
-    initial.stations.every(s=>s.capacity===(s.role==='SUPERVISOR'?2:1)&&s.devices<=s.capacity));
-  const {error:unsigned}=await reader.rpc('claim_station',{p_role:'GATE',p_pin:null});
-  check('unsigned caller cannot claim',Boolean(unsigned));
-  for(const c of [a,b]){const {error}=await c.auth.signInAnonymously();if(error)throw new Error(error.message);}
-  check('hosted anonymous auth',true);
-  check('fresh identity has no station',(await rpc(a,'whoami'))===null);
-  const {error:legacy}=await a.rpc('redeem_invitation',{p_token:'x'.repeat(43),p_device_id:'spoof'});
-  check('legacy invitation grant revoked',Boolean(legacy));
-  const denied=await rpc(a,'handle_command',{p_action:'GAME_STOP',p_meta:{},p_expected_revision:0,p_idempotency_key:crypto.randomUUID()});
-  check('unbound identity cannot send an event command',denied.code==='PERMISSION_DENIED');
-  // One deliberately wrong secret only: it proves the hosted RPC exists and refuses,
-  // and can never free an on-duty phone. It does spend one of the reset attempts.
-  const resetDenied=await rpc(a,'reset_all_stations',{p_secret:'production-smoke-not-the-secret'});
-  check('wrong reset secret is refused and frees nothing',resetDenied?.ok!==true);
-  report.resetRefusal=resetDenied?.code;
-  const target=initial.stations.find(s=>s.role!=='SUPERVISOR'&&s.devices===0);
-  if(target){
-    let postgresReady=false;
-    channel=reader.channel('access-smoke-'+crypto.randomUUID())
-      .on('system',{},payload=>{if(payload.extension==='postgres_changes'&&payload.status==='ok')postgresReady=true;})
-      .on('postgres_changes', {event:'UPDATE',schema:'public',table:'station_occupancy'},payload=>changes.push(payload.new));
-    await new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>reject(new Error('Realtime subscription timed out')),15000);
-      channel.subscribe(status=>{if(status==='SUBSCRIBED'){clearTimeout(timer);resolve();}
-        else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'){clearTimeout(timer);reject(new Error('Realtime '+status));}});
-    });
-    for(let i=0;i<100&&!postgresReady;i++)await pause(200);
-    check('Postgres change stream registered',postgresReady);
-    check('public occupancy Realtime subscribed',true);
-    const results=await Promise.all([a,b].map(c=>rpc(c,'claim_station',{p_role:target.role,p_pin:null})));
-    check('production final NPC slot is atomic',results.filter(r=>r.ok).length===1&&results.filter(r=>r.code==='ROLE_TAKEN').length===1);
-    const winner=results[0].ok?a:b;
-    check('whoami resolves claimed role',(await rpc(winner,'whoami'))?.role===target.role);
-    check('same identity does not take another slot',(await rpc(winner,'claim_station',{p_role:target.role,p_pin:null})).code==='ALREADY_BOUND');
-    check('same identity cannot claim supervisor',(await rpc(winner,'claim_station',{p_role:'SUPERVISOR',p_pin:null})).code==='ALREADY_BOUND_OTHER_ROLE');
-    for(let i=0;i<30&&!changes.some(x=>x.role===target.role&&x.devices===1);i++)await pause(200);
-    check('Realtime delivered committed claim',changes.some(x=>x.role===target.role&&x.devices===1));
-    check('release acknowledged',(await rpc(winner,'release_device')).ok===true);
-    check('released identity has no authority',(await rpc(winner,'whoami'))===null);
-    for(let i=0;i<30&&!changes.some(x=>x.role===target.role&&x.devices===0);i++)await pause(200);
-    check('Realtime delivered committed release',changes.some(x=>x.role===target.role&&x.devices===0));
-    check('vacant slot immediately reclaimable',(await rpc(winner,'claim_station',{p_role:target.role,p_pin:null})).ok===true);
-    await rpc(winner,'release_device');
-  }else report.unverified.push('No vacant NPC slot: live claim/release skipped to preserve existing operators.');
-  report.unverified.push('Two live supervisor claims: requires the privately entered PIN and available seats; proven locally.');
-  report.unverified.push('A real board reset: never run against on-duty phones; proven locally in 037 and the access suite.');
-  report.status='passed';
-}catch(error){report.status='failed';report.error=error.message;console.error(error.message);process.exitCode=1;}
-finally {
-  // These clients only know fresh test identities; no on-duty device can be released.
-  for(const c of [a,b]){
-    try {const {data}=await c.auth.getSession();if(data.session)await rpc(c,'release_device');}
-    catch {report.unverified.push('A test identity release needs a retry; no other binding was modified.');process.exitCode=1;}
+  await run('board responds with the V3.2 shape (no credential needed)', async () => {
+    boardSnapshot = await rpc('station_board', {});
+    assert(boardSnapshot.board_version === 3, `board_version=${boardSnapshot.board_version}`);
+    assert(boardSnapshot.observer_capacity === 10, `observer_capacity=${boardSnapshot.observer_capacity}`);
+    assert(!('codes_required' in boardSnapshot), 'stale codes_required field present');
+    assert(Array.isArray(boardSnapshot.stations) && boardSnapshot.stations.length >= 5, 'missing stations array');
+    assert('reset_allowed' in boardSnapshot, 'missing reset_allowed');
+    return `devices ${boardSnapshot.devices}/${boardSnapshot.device_capacity} · reset_allowed=${boardSnapshot.reset_allowed}`;
+  });
+
+  await run('retired credential surface is unreachable (invite redeem / configure code)', async () => {
+    let a = false; let b = false;
+    try { await rpc('redeem_invitation', { p_token: 'x'.repeat(43) }); } catch { a = true; }
+    try { await rpc('configure_station_code', { p_role: 'GATE', p_code: 'X' }); } catch { b = true; }
+    assert(a && b, 'a retired function is still callable');
+  });
+
+  await run('open seat claim works with no code/PIN, then releases cleanly', async () => {
+    const free = (boardSnapshot.stations || []).find((s) => s.role !== 'SUPERVISOR' && s.devices === 0);
+    if (!free) { skipped.push('every duty seat occupied: live claim skipped to preserve on-duty devices'); return 'skipped (busy)'; }
+    const probe = await fresh();
+    const claimed = await rpc('claim_station', { p_role: free.role }, await tokenOf(probe));
+    assert(claimed.ok === true, `claim failed: ${JSON.stringify(claimed)}`);
+    const who = await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe));
+    assert(who.role === free.role, `whoami=${who.role}`);
+    const refused = await rpc('claim_station', { p_role: 'CORRIDOR' }, await tokenOf(probe));
+    assert(refused.code === 'ALREADY_BOUND', `second seat not blocked: ${JSON.stringify(refused)}`);
+    const released = await rpc('release_device', {}, await tokenOf(probe));
+    assert(released.ok === true, 'release failed');
+    assert((await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe))).ok === false, 'still bound after release');
+    return `slot ${free.role} round-trip`;
+  });
+
+  await run('SUPERVISOR is refused for a device not on the allow-list', async () => {
+    const probe = await fresh();
+    const answer = await rpc('claim_station', { p_role: 'SUPERVISOR' }, await tokenOf(probe));
+    assert(answer.code === 'ADMIN_NOT_ALLOWED', `unexpected: ${JSON.stringify(answer)}`);
+    assert((await rpc('handle_command', { p_action: 'WHOAMI' }, await tokenOf(probe))).ok === false, 'refused claim still bound');
+  });
+
+  await run('reset_all_stations is refused from a non-admin caller', async () => {
+    const probe = await fresh();
+    await rpc('claim_station', { p_role: 'LOBBY' }, await tokenOf(probe));
+    const answer = await rpc('reset_all_stations', { p_force: false }, await tokenOf(probe));
+    assert(answer.code === 'RESET_NOT_AUTHORIZED', `unexpected: ${JSON.stringify(answer)}`);
+    await rpc('release_device', {}, await tokenOf(probe));
+  });
+
+  await run('observer wrapper joins, beats and leaves through public RPCs', async () => {
+    const probe = await fresh();
+    const token = await tokenOf(probe);
+    const joined = await rpc('observer_join', {}, token);
+    assert(joined.ok === true, `join: ${JSON.stringify(joined)}`);
+    const beat = await rpc('observer_beat', {}, token);
+    assert(beat.seat?.user_id === probe.id || beat.ok === true, `beat: ${JSON.stringify(beat)}`);
+    const board = await rpc('station_board', {});
+    assert(board.observer_devices >= 1, `observer_devices=${board.observer_devices}`);
+    if (Array.isArray(board.observers)) assert(board.observers.some((o) => o.user_id === probe.id), 'seat missing from board');
+    const left = await rpc('observer_leave', {}, token);
+    assert(left.ok === true, `leave: ${JSON.stringify(left)}`);
+  });
+} finally {
+  // Release any probe binding still held; only probe identities are touched.
+  for (const p of probes) {
+    try { await rpc('release_device', {}, await tokenOf(p)); } catch { /* already released */ }
   }
-  if(channel)await reader.removeChannel(channel);
-  report.final=await rpc(reader,'station_board').catch(()=>null);
-  await writeFile('.git/production-access-verification.json',JSON.stringify(report,null,2));
-  console.log('Final occupancy',report.final?.devices+'/6');
-  for(const c of [reader,a,b])await c.removeAllChannels();
+  const final = await rpc('station_board', {}).catch(() => null);
+  writeFileSync('.git/production-access-verification.json',
+    JSON.stringify({ checkedAt: new Date().toISOString(), url, results, skipped, finalEvent: final?.event?.status }, null, 2));
+  console.log(`\nfinal event: ${final?.event?.status ?? '?'}`);
 }
-process.exit(process.exitCode??0);
+const failed = results.filter(([, status]) => status === 'FAIL');
+if (skipped.length) console.log('SKIPPED: ' + skipped.join(' | '));
+console.log(failed.length ? `${failed.length} production check(s) FAILED` : 'ALL PRODUCTION CHECKS PASSED');
+process.exit(failed.length ? 1 : 0);

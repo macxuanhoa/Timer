@@ -438,11 +438,6 @@ export interface StationBoard {
    */
   reset_allowed?: boolean;
   reset_block_reason?: ResetBlockReason | null;
-  /**
-   * True when the four operating positions require a crew code. The board never
-   * carries a code or a hash — only whether codes are in force.
-   */
-  codes_required?: boolean;
   stations: StationSlot[];
 }
 

@@ -4,19 +4,21 @@ import { createRequire } from 'node:module';
 const { Pool } = createRequire(import.meta.url)('pg');
 // Deliberately fixed to loopback + a test-only database, never production env.
 const pool = new Pool({ host: '127.0.0.1', port: 55436, database: 'sc305_access', user: 'postgres', password: 'postgres', max: 16 });
-const PIN = '9876543210';
-const RESET = 'greenwich99';
-/** V3.1 §5: one crew code per operating position, installed as a bcrypt hash. */
-const CODES: Record<string, string> = { LOBBY: 'SANNH01', CORRIDOR: 'TANG202', GATE: 'CUANPC1', ROOM305: 'PHONG305' };
+/** V3.2: no crew codes, no PIN, no reset secret. Seats bind with one tap; the
+ *  admin seat is gated only by the sc.admin_devices allow-list this file seeds. */
 const STATIONS = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'];
 const contexts: BrowserContext[] = [];
 
 async function identity() {
   const uid = randomUUID(); await pool.query('insert into auth.users(id) values($1)',[uid]); return uid;
 }
+/** Put a device on the admin allow-list, exactly as -AllowAdminDevice does. */
+async function allowAdmin(uid: string) {
+  await pool.query('insert into sc.admin_devices(user_id, note) values($1,$2) on conflict (user_id) do nothing', [uid, 'access-test']);
+}
 const queries: Record<string,string> = {
   station_board: 'select public.station_board() as result', whoami: 'select public.whoami() as result',
-  claim_station: 'select public.claim_station($1,$2) as result', release_device: 'select public.release_device() as result',
+  claim_station: 'select public.claim_station($1) as result', release_device: 'select public.release_device() as result',
   snapshot: 'select public.snapshot() as result', state_revision: 'select public.state_revision() as result',
   server_now_ms: 'select public.server_now_ms() as result', operation_status: 'select public.operation_status($1) as result',
   handle_command: 'select public.handle_command($1,$2,$3,$4) as result',
@@ -28,10 +30,10 @@ const queries: Record<string,string> = {
 };
 async function rpc(uid: string | null, name: string, body: Record<string,unknown> = {}) {
   if (!queries[name]) throw new Error('Unknown RPC');
-  const args = name === 'claim_station' ? [body.p_role,body.p_pin] : name === 'handle_command' ?
+  const args = name === 'claim_station' ? [body.p_role] : name === 'handle_command' ?
     [body.p_action,body.p_meta,body.p_expected_revision,body.p_idempotency_key] : name === 'operation_status' ?
     [body.p_idempotency_key] : name === 'redeem_invitation' ? [body.p_token,body.p_device_id] :
-    name === 'reset_all_stations' ? [body.p_secret] :
+    name === 'reset_all_stations' ? [body.p_force ?? false] :
     name === 'observer_join' || name === 'observer_beat' ? [body.p_viewer_id ?? null] : [];
   const client = await pool.connect();
   try {
@@ -44,7 +46,7 @@ async function rpc(uid: string | null, name: string, body: Record<string,unknown
   } catch (err) { await client.query('rollback'); throw err; }
   finally { client.release(); }
 }
-async function phone(browser: Browser) {
+async function phone(browser: Browser, path = '/') {
   const context = await browser.newContext({ viewport: { width:390,height:844 }, serviceWorkers:'block' });
   contexts.push(context);
   let uid: string | null = null;
@@ -73,15 +75,15 @@ async function phone(browser: Browser) {
     await route.fulfill({status:404,json:{message:'Local transport only'}});
   });
   const page = await context.newPage();
-  await page.goto('/');
+  await page.goto(path);
   await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/);
   return {context,page, uid:()=>uid, offline:(x:boolean)=>{offline=x;}, blockBoard:(x:boolean)=>{boardBlocked=x;}, dropRelease:()=>{releaseDropAfterCommit=true;}};
 }
 
 /**
- * A station is a tap and its crew code. The retained admin is not: it is reached
- * from the quiet management line and authenticates with its own PIN, while the
- * viewing seat asks for nothing at all (V3.1 §5.2).
+ * A station is a single tap: no code sheet, no challenge. The retained admin is
+ * not a board tile at all: it lives on the /admin route, and its seat binds only
+ * after the device uuid has been placed on the allow-list (V3.2).
  */
 async function boundRole(p: Awaited<ReturnType<typeof phone>>) {
   return pool.query('select role from sc.operators where user_id=$1 and revoked_at is null', [p.uid()]);
@@ -96,11 +98,16 @@ async function waitBound(p: Awaited<ReturnType<typeof phone>>, role: string) {
   await expect.poll(async () => (await boundRole(p)).rows[0]?.role).toBe(role);
 }
 
-async function claim(p: Awaited<ReturnType<typeof phone>>, role: string, code?: string) {
+async function claim(p: Awaited<ReturnType<typeof phone>>, role: string) {
   if (role === 'SUPERVISOR') {
+    // The admin panel only exists on /admin, and it shows the device uuid the
+    // organiser needs before the allow-list will let the seat bind.
+    await p.page.goto('/admin');
+    await expect(p.page.getByTestId('admin-panel')).toBeVisible();
+    const shown = p.page.getByTestId('admin-device-id');
+    await expect(shown).not.toHaveText('…', { timeout: 10_000 });
+    await allowAdmin((await shown.innerText()).trim());
     await p.page.getByTestId('home-admin-open').click();
-    await p.page.getByLabel('PIN quản trị',{exact:true}).fill(PIN);
-    await p.page.getByRole('button',{name:'VÀO QUẢN TRỊ'}).click();
     await expect(p.page.getByTestId('dashboard')).toBeVisible();
     return;
   }
@@ -110,9 +117,6 @@ async function claim(p: Awaited<ReturnType<typeof phone>>, role: string, code?: 
     await waitBound(p, 'OBSERVER');
     return;
   }
-  // The picker now asks for the position's crew code before it will claim the seat.
-  await p.page.getByLabel('Mã vị trí',{exact:true}).fill(code ?? CODES[role]);
-  await p.page.getByTestId('home-code-confirm').click();
   await expect(p.page.getByTestId('dashboard')).toBeVisible();
 }
 
@@ -124,12 +128,10 @@ async function act(uid: string | null, action: string, meta: Record<string, unkn
 test.beforeEach(async () => {
   await pool.query('update sc.operators set revoked_at=now() where revoked_at is null');
   await pool.query('delete from sc.observer_seats');
+  await pool.query('delete from sc.admin_devices');
   // Each case owns the event pointer, so a previous case can leave a round closed
   // rather than still occupying the floor.
   await pool.query("update sc.rounds set status='CLOSED' where status <> 'CLOSED'");
-  await pool.query('select sc.configure_station_access($1,false)',[PIN]);
-  await pool.query('select sc.configure_station_reset($1)',[RESET]);
-  for (const [role, code] of Object.entries(CODES)) await pool.query('select sc.configure_station_code($1,$2)',[role,code]);
 });
 test.afterEach(async()=>{await Promise.all(contexts.splice(0).map(c=>c.close()));});
 test.afterAll(async()=>{await pool.end();});
@@ -140,7 +142,7 @@ for (const role of STATIONS) test(role+': root → claim → dashboard; occupied
   await claim(a,role);
   await expect(b.page.getByTestId('station-'+role)).toBeDisabled();
   await expect(b.page.getByTestId('station-'+role)).toHaveAttribute('data-state','full');
-  const uid=await identity(); expect((await rpc(uid,'claim_station',{p_role:role,p_pin:null})).code).toBe('ROLE_TAKEN');
+  const uid=await identity(); expect((await rpc(uid,'claim_station',{p_role:role})).code).toBe('ROLE_TAKEN');
   await a.page.getByTestId('return-home').click();
   await expect(a.page.getByTestId('scream-home')).toBeVisible();
   await expect(b.page.getByTestId('station-'+role)).toBeEnabled();
@@ -165,21 +167,28 @@ test('the picker shows four stations plus the open viewer seat, never the admin'
   expect((await rpc(a.uid(),'observer_beat',{p_viewer_id:'probe'})).ok).toBe(true);
 });
 
-test('SUPERVISOR requires PIN, accepts two phones, refuses the third',async({browser})=>{
-  const a=await phone(browser);
+test('the admin seat binds only for an allow-listed device, two phones max',async({browser})=>{
+  // The /admin UI first, on a clean board: a stranger is refused in operator words
+  // and stays on the picker; seeding its uuid opens the seat with no further challenge.
+  const a=await phone(browser,'/admin');
+  await expect(a.page.getByTestId('admin-panel')).toBeVisible();
   await a.page.getByTestId('home-admin-open').click();
-  await a.page.getByLabel('PIN quản trị',{exact:true}).fill('1111111111');
-  await a.page.getByRole('button',{name:'VÀO QUẢN TRỊ'}).click();
-  await expect(a.page.getByRole('alert').last()).toHaveText('PIN KHÔNG ĐÚNG');
-  await a.page.getByLabel('PIN quản trị',{exact:true}).fill(PIN);
-  await a.page.getByRole('button',{name:'VÀO QUẢN TRỊ'}).click();
+  await expect(a.page.getByTestId('home-error')).toContainText('CHƯA ĐƯỢC CẤP QUYỀN QUẢN TRỊ');
+  await expect(a.page.getByTestId('dashboard')).toHaveCount(0);
+  await allowAdmin(a.uid()!);
+  await a.page.getByTestId('home-admin-open').click();
   await expect(a.page.getByTestId('dashboard')).toBeVisible();
-  // The retained admin is off the board by design, so its occupancy is server-side.
-  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
-  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).code).toBe('ROLE_TAKEN');
-  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).code).toBe('ROLE_TAKEN');
-  await a.page.getByTestId('return-home').click();
-  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
+  await expect(a.page.getByTestId('role-tag')).toHaveText('TRỊ');
+  // A stranger without the allow-list cannot take the admin seat at all — the
+  // refusal precedes the seat search, so it never consumes capacity.
+  const stranger=await identity();
+  expect((await rpc(stranger,'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ADMIN_NOT_ALLOWED');
+  // Capacity holds: the second allowed device takes slot 2, a third is told the
+  // position is full — never a credential challenge.
+  const second=await identity(); await allowAdmin(second);
+  expect((await rpc(second,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  const third=await identity(); await allowAdmin(third);
+  expect((await rpc(third,'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ROLE_TAKEN');
 });
 
 test('a viewer is read-only in the database, whatever it sends',async({browser})=>{
@@ -229,7 +238,7 @@ test('ten viewers fit, the eleventh is refused, and a seat survives a refresh',a
   const rejoin = await rpc(await identity(),'observer_join',{p_viewer_id:'v-new'});
   expect(rejoin.ok).toBe(true);
   // A station can never take a viewer seat, and a viewer can never take a station.
-  expect((await rpc(seats[0].uid(),'claim_station',{p_role:'GATE',p_pin:null})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
+  expect((await rpc(seats[0].uid(),'claim_station',{p_role:'GATE'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
   const station = await phone(browser); await claim(station,'GATE');
   expect((await rpc(station.uid(),'observer_join',{p_viewer_id:'x'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
 });
@@ -240,7 +249,7 @@ test('refresh, new PWA tab and legacy deep link restore exactly one binding; rev
   const second=await a.context.newPage(); await second.goto('/i/'+ 'x'.repeat(43));
   await expect(second.getByTestId('role-tag')).toHaveText('NPC 1'); await expect(second).toHaveURL('http://127.0.0.1:5177/');
   const board=await rpc(null,'station_board'); expect(board.devices).toBe(1);
-  expect((await rpc(a.uid(),'claim_station',{p_role:'CORRIDOR',p_pin:null})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
+  expect((await rpc(a.uid(),'claim_station',{p_role:'CORRIDOR'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
   await pool.query('update sc.operators set revoked_at=now() where user_id=$1',[a.uid()]);
   await expect(a.page.getByTestId('scream-home')).toBeVisible();
   expect((await rpc(a.uid(),'handle_command',{p_action:'CONFIRM_EXIT',p_meta:{},p_expected_revision:0,p_idempotency_key:randomUUID()})).code).toBe('PERMISSION_DENIED');
@@ -258,24 +267,24 @@ test('offline release keeps dashboard and occupancy; a lost committed reply is s
   await expect(b.page.getByTestId('station-GATE')).toBeEnabled();
 });
 
-test('supervisor releases the board; a wrong secret, a stranger or a live floor keeps every seat', async ({browser}) => {
+test('supervisor releases the board; a stranger or a live floor keeps every seat', async ({browser}) => {
   const lobby=await phone(browser); await claim(lobby,'LOBBY');
   const corridor=await phone(browser); await claim(corridor,'CORRIDOR');
   const gate=await phone(browser); await claim(gate,'GATE');
   const room=await phone(browser); await claim(room,'ROOM305');
   const sup=await phone(browser); await claim(sup,'SUPERVISOR');
-  const spare=await identity();
-  expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
+  const spare=await identity(); await allowAdmin(spare);
+  expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
   const picker=await phone(browser);
   await expect(picker.page.getByTestId('station-count')).toHaveText('6/6');
 
-  // A team on the clock: a stranger with the secret is refused before the secret
-  // matters, and the supervisor is refused because the floor is not idle (§6.1-6.2).
+  // A team on the clock: a duty phone is refused outright, and the supervisor is
+  // refused because the floor is not idle (§6.1-6.2). No secret enters either call.
   expect((await act(lobby.uid(),'CALL_TEAM')).ok).toBe(true);
   expect((await act(corridor.uid(),'CONFIRM_FLOOR2')).ok).toBe(true);
   expect((await act(gate.uid(),'START_GAME')).ok).toBe(true);
-  expect((await rpc(lobby.uid(),'reset_all_stations',{p_secret:RESET})).code).toBe('RESET_NOT_AUTHORIZED');
-  expect((await rpc(sup.uid(),'reset_all_stations',{p_secret:RESET})).code).toBe('RESET_GAME_RUNNING');
+  expect((await rpc(lobby.uid(),'reset_all_stations',{p_force:false})).code).toBe('RESET_NOT_AUTHORIZED');
+  expect((await rpc(sup.uid(),'reset_all_stations',{p_force:false})).code).toBe('RESET_GAME_RUNNING');
   await expect(picker.page.getByTestId('home-floor-busy')).toContainText('NPC 1 chưa xác nhận rời tầng 3');
   // The release is no longer a control on the picker at all.
   await expect(picker.page.getByTestId('home-reset-open')).toHaveCount(0);
@@ -287,32 +296,21 @@ test('supervisor releases the board; a wrong secret, a stranger or a live floor 
   const exited = await rpc(gate.uid(),'snapshot');
   expect(exited.rounds.at(-1).result).toBe('ABORTED');
   expect(exited.rounds.at(-1).exit_confirmed_at).not.toBeNull();
-  expect((await rpc(sup.uid(),'reset_all_stations',{p_secret:RESET})).code).toBe('RESET_AREA_OPEN');
+  expect((await rpc(sup.uid(),'reset_all_stations',{p_force:false})).code).toBe('RESET_AREA_OPEN');
   expect((await act(gate.uid(),'RESET_DONE')).ok).toBe(true);
   expect((await act(room.uid(),'RESET_DONE')).ok).toBe(true);
   expect((await act(gate.uid(),'GATE_FINALIZE')).ok).toBe(true);
-  expect((await rpc(sup.uid(),'reset_all_stations',{p_secret:'sai-mat-khau-12345'})).code).toBe('RESET_INVALID');
 
-  // The control lives in the admin sheet of a supervisor phone: hidden by default,
-  // peekable, and a placeholder value is what the screenshot ever captures.
+  // The control lives in the admin sheet of a supervisor phone: two deliberate
+  // taps, an armed warning between them, and an emergency path kept one click away.
   await sup.page.getByTestId('open-details').click();
-  await sup.page.getByTestId('section-admin').locator('summary').click();
-  const secretField = sup.page.getByLabel('Mật khẩu giải phóng bảng',{exact:true});
-  await expect(secretField).toHaveAttribute('type','password');
-  await sup.page.getByTestId('release-peek').click();
-  await expect(sup.page.getByTestId('release-peek')).toHaveAttribute('aria-pressed','true');
-  await secretField.fill('mat-khau-demo');
-  await expect(secretField).toHaveValue('mat-khau-demo');
+  await sup.page.getByTestId('section-admin').locator('> summary').click();
+  await expect(sup.page.getByTestId('release-panel')).toBeVisible();
   await sup.page.screenshot({path:'shots/admin-release-peek.png'});
-  await sup.page.getByTestId('release-peek').click();
-  await expect(secretField).toHaveAttribute('type','password');
-  await expect(secretField).toHaveValue('mat-khau-demo');
-
-  await secretField.fill('greenwich98');
   await sup.page.getByTestId('release-confirm').click();
-  await expect(sup.page.getByTestId('release-result')).toHaveText('MẬT KHẨU RESET KHÔNG ĐÚNG');
+  await expect(sup.page.getByTestId('release-armed')).toBeVisible();
+  // Arming alone must not release anything: the board is untouched until the tap.
   await expect(picker.page.getByTestId('station-count')).toHaveText('6/6');
-  await expect(gate.page.getByTestId('dashboard')).toBeVisible();
 
   const fingerprint = async () => (await pool.query(
     "select md5(coalesce(string_agg(to_jsonb(r)::text,'|' order by r.id),'')) || md5(coalesce(string_agg(to_jsonb(a)::text,'|' order by a.id),'')) as h " +
@@ -321,9 +319,8 @@ test('supervisor releases the board; a wrong secret, a stranger or a live floor 
   const beforeClaims = await pool.query('select count(*)::int n from sc.completion_attempts');
   const beforeFp = await fingerprint();
 
-  await secretField.fill(RESET);
-  await sup.page.screenshot({path:'shots/admin-release-secret.png'});
   await sup.page.getByTestId('release-confirm').click();
+  await sup.page.screenshot({path:'shots/admin-release-secret.png'});
   await expect(picker.page.getByTestId('station-count')).toHaveText('0/6');
   await picker.page.screenshot({path:'shots/admin-release-free-board.png'});
   await expect(picker.page.getByTestId('station-GATE')).toBeEnabled();
@@ -343,12 +340,11 @@ test('supervisor releases the board; a wrong secret, a stranger or a live floor 
   expect(closed.rows[0].result).toBe('ABORTED');
   expect(closed.rows[0].official_duration_ms).toBeNull();
 
-  // A new crew claims with its crew code and still has to walk the real checklist:
+  // A new crew claims with a single tap and still has to walk the real checklist:
   // OPERATOR_02 owns no physical check, and closure needs both floor-3 confirmations.
   const cor=await identity(); const rom=await identity(); const gat2=await identity();
-  expect((await rpc(cor,'claim_station',{p_role:'CORRIDOR',p_pin:null})).code).toBe('CODE_INVALID');
   for (const [uid,role] of [[cor,'CORRIDOR'],[rom,'ROOM305'],[gat2,'GATE']] as [string,string][]) {
-    expect((await rpc(uid,'claim_station',{p_role:role,p_pin:CODES[role]})).ok).toBe(true);
+    expect((await rpc(uid,'claim_station',{p_role:role})).ok).toBe(true);
   }
   // CORRIDOR never owns a physical reset (§5.3): the permission layer refuses it
   // before any state question. GATE and ROOM305 hold the reset right, but the round
@@ -360,73 +356,61 @@ test('supervisor releases the board; a wrong secret, a stranger or a live floor 
   expect((await act(rom,'RESET_DONE')).code).toBe('INVALID_STATE');
 });
 
-test('the release is inert without a secret, refuses guesses and repeats safely', async () => {
+test("the release is authorised by the caller's own admin binding, not a secret", async () => {
   const gate=await identity();
-  expect((await rpc(gate,'claim_station',{p_role:'GATE',p_pin:CODES.GATE})).ok).toBe(true);
-  const sup=await identity();
-  expect((await rpc(sup,'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
-  // A stranger holding the secret is not a supervisor: the role answer comes first.
-  await pool.query('select sc.configure_station_reset(null)');
-  expect((await rpc(gate,'reset_all_stations',{p_secret:'whatever-value'})).code).toBe('RESET_NOT_AUTHORIZED');
-  expect((await rpc(sup,'reset_all_stations',{p_secret:'whatever-value'})).code).toBe('RESET_NOT_CONFIGURED');
-  await pool.query('select sc.configure_station_reset($1)',[RESET]);
-  expect((await rpc(sup,'reset_all_stations',{p_secret:'Greenwich99'})).code).toBe('RESET_INVALID');
+  expect((await rpc(gate,'claim_station',{p_role:'GATE'})).ok).toBe(true);
+  const sup=await identity(); await allowAdmin(sup);
+  expect((await rpc(sup,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  // A duty phone is refused before any floor question: the answer is the role.
+  expect((await rpc(gate,'reset_all_stations',{p_force:false})).code).toBe('RESET_NOT_AUTHORIZED');
   expect((await rpc(sup,'whoami'))?.role).toBe('SUPERVISOR');
-  expect((await rpc(sup,'reset_all_stations',{p_secret:RESET})).freed).toBe(2);
+  expect((await rpc(sup,'reset_all_stations',{p_force:false})).freed).toBe(2);
   expect(await rpc(sup,'whoami')).toBeNull();
   expect(await rpc(gate,'whoami')).toBeNull();
   // A repeat release on an empty board still unbinds every live operator row,
   // including the caller itself (§5.3 "Không dùng reset làm thay đổi thời gian").
-  // That is the same convention the earlier release in this test asserts: sup's own
-  // seat counted in `freed:2` on line 370, so a caller who then rebinds and repeats
-  // sees exactly its own binding counted here.
-  const sup2=await identity();
-  expect((await rpc(sup2,'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})).ok).toBe(true);
-  expect((await rpc(sup2,'reset_all_stations',{p_secret:RESET})).freed).toBe(1);
-  expect((await rpc(await identity(),'claim_station',{p_role:'GATE',p_pin:CODES.GATE})).ok).toBe(true);
+  const sup2=await identity(); await allowAdmin(sup2);
+  expect((await rpc(sup2,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  expect((await rpc(sup2,'reset_all_stations',{p_force:false})).freed).toBe(1);
+  // A stranger without the allow-list cannot even bind admin to attempt a release.
+  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ADMIN_NOT_ALLOWED');
 });
 
-test('crew codes guard the four operating positions and never the viewing seat', async ({browser}) => {
-  // The picker says a code is in force, and asks for it before it will claim a seat.
+test('seats bind with one tap; only the admin seat is gated, and the allow-list is unreadable', async ({browser}) => {
+  // The picker asks for nothing: no code sheet, no input field anywhere.
   const a=await phone(browser);
   await expect(a.page.getByTestId('station-GATE')).toBeEnabled();
+  await expect(a.page.locator('input')).toHaveCount(0);
   await a.page.getByTestId('station-GATE').click();
-  await expect(a.page.getByLabel('Mã vị trí',{exact:true})).toBeVisible();
-  // A wrong code is refused in words an operator understands, and stays on the picker.
-  await a.page.getByLabel('Mã vị trí',{exact:true}).fill('SANNH01');   // the lobby code
-  await a.page.getByTestId('home-code-confirm').click();
-  await expect(a.page.getByTestId('home-error')).toHaveText('SAI MÃ VỊ TRÍ');
-  await expect(a.page.getByTestId('dashboard')).toHaveCount(0);
-  // The right code for the right position opens it, and the seat is then held.
-  await a.page.getByLabel('Mã vị trí',{exact:true}).fill(CODES.GATE);
-  await a.page.getByTestId('home-code-confirm').click();
   await expect(a.page.getByTestId('dashboard')).toBeVisible();
   await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
-  // The same identity cannot buy a second position with a second code.
-  expect((await rpc(a.uid(),'claim_station',{p_role:'LOBBY',p_pin:CODES.LOBBY})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
-  // A refresh does not ask for the code again: the binding is what authorises.
+  // The same identity cannot hold a second position.
+  expect((await rpc(a.uid(),'claim_station',{p_role:'LOBBY'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
+  // A refresh does not challenge again: the binding is what authorises.
   await a.page.reload();
   await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
   // The viewing seat still opens with nothing at all, and a viewer cannot upgrade.
   const v=await phone(browser); await claim(v,'OBSERVER');
-  expect((await rpc(v.uid(),'claim_station',{p_role:'ROOM305',p_pin:CODES.ROOM305})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
-  // Brute force is capped per identity, and the code never reaches the audit trail.
-  const x=await identity();
-  for (let i=0;i<5;i++) expect((await rpc(x,'claim_station',{p_role:'LOBBY',p_pin:'SAIKHONG'})).code).toBe('CODE_INVALID');
-  expect((await rpc(x,'claim_station',{p_role:'LOBBY',p_pin:CODES.LOBBY})).code).toBe('CODE_RATE_LIMITED');
-  const leaked = await pool.query("select count(*)::int n from sc.access_audit where metadata::text like '%SAIKHONG%' or metadata::text like '%SANNH01%'");
-  expect(leaked.rows[0].n).toBe(0);
-  // No hash, and no code, is readable through the API.
-  const hashes = await pool.query("select count(*)::int n from sc.station_codes where code_hash = any($1)", [[Object.values(CODES)]]);
-  expect(hashes.rows[0].n).toBe(0);
+  expect((await rpc(v.uid(),'claim_station',{p_role:'ROOM305'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
+  // The board dropped the credential vocabulary; the allow-list is invisible to the
+  // API: RLS on, zero policies, zero grants, and the table is owner-readable only.
+  const board = await rpc(null,'station_board');
+  expect(board.codes_required).toBeUndefined();
+  expect(String(board.board_version)).toBe('3');
+  const readable = await pool.query(
+    "select (has_column_privilege('authenticated','sc.admin_devices','user_id','SELECT') or" +
+    " has_column_privilege('anon','sc.admin_devices','user_id','SELECT'))::int as n");
+  expect(readable.rows[0].n).toBe(0);
+  const policies = await pool.query("select count(*)::int n from pg_policies where tablename='admin_devices'");
+  expect(policies.rows[0].n).toBe(0);
   const granted = await pool.query(
     "select count(*)::int n from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace " +
-    "where ns.nspname in ('sc','public') and p.proname in ('configure_station_code','station_code_state') " +
+    "where ns.nspname in ('sc','public') and p.proname in ('configure_station_code','station_code_state','configure_station_access','configure_station_reset') " +
     "and has_function_privilege('authenticated', p.oid, 'execute')");
   expect(granted.rows[0].n).toBe(0);
-  const board = await rpc(null,'station_board');
-  expect(board.codes_required).toBe(true);
-  expect(String(board.board_version)).toBe('3');
+  // And an admin refusal never writes any secret-like value into the audit.
+  const leaked = await pool.query("select count(*)::int n from sc.access_audit where metadata::text like '%SANNH01%' or metadata::text like '%9876543210%' or metadata::text like '%greenwich%'");
+  expect(leaked.rows[0].n).toBe(0);
 });
 
 test('stale occupancy becomes neutral and disabled, reconnect refetches; old link cannot grant a role', async({browser})=>{
@@ -442,15 +426,17 @@ test('stale occupancy becomes neutral and disabled, reconnect refetches; old lin
 
 test('real parallel PostgreSQL transactions enforce last NPC slot, supervisor slot, viewer seat and identity exclusivity',async()=>{
   const ids=await Promise.all(Array.from({length:10},()=>identity()));
-  // V3.1 §5: every operating seat is guarded by a crew code, so a parallel claim
-  // test has to present the code. Without it every call fails at `CODE_INVALID`
-  // before reaching the seat-slot race this test is meant to observe.
-  let results=await Promise.all(ids.map(uid=>rpc(uid,'claim_station',{p_role:'GATE',p_pin:CODES.GATE})));
+  // V3.2 binds seats with a single tap, so the parallel race below measures exactly
+  // what it is meant to: the seat_slot uniqueness under the advisory lock.
+  let results=await Promise.all(ids.map(uid=>rpc(uid,'claim_station',{p_role:'GATE'})));
   expect(results.filter(r=>r.ok)).toHaveLength(1); expect(results.filter(r=>r.code==='ROLE_TAKEN')).toHaveLength(9);
-  await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:PIN});
-  results=await Promise.all((await Promise.all(Array.from({length:8},()=>identity()))).map(uid=>rpc(uid,'claim_station',{p_role:'SUPERVISOR',p_pin:PIN})));
-  expect(results.filter(r=>r.ok)).toHaveLength(1);
-  const same=await identity(); results=await Promise.all(['CORRIDOR','ROOM305'].map(p_role=>rpc(same,'claim_station',{p_role,p_pin:CODES[p_role]})));
+  // Admin needs the allow-list first; seed every racer so the race tests the slot
+  // limit, not the gate.
+  const adminIds=await Promise.all(Array.from({length:9},()=>identity()));
+  for (const uid of adminIds) await allowAdmin(uid);
+  results=await Promise.all(adminIds.map(uid=>rpc(uid,'claim_station',{p_role:'SUPERVISOR'})));
+  expect(results.filter(r=>r.ok)).toHaveLength(2);
+  const same=await identity(); results=await Promise.all(['CORRIDOR','ROOM305'].map(p_role=>rpc(same,'claim_station',{p_role})));
   expect(results.filter(r=>r.ok)).toHaveLength(1); expect(results.filter(r=>r.code==='ALREADY_BOUND_OTHER_ROLE')).toHaveLength(1);
   // Ten viewing seats are claimed by twenty simultaneous phones: exactly ten win.
   const viewers=await Promise.all(Array.from({length:20},()=>identity()));
@@ -467,7 +453,8 @@ test('post-migration workflow: one flow, one claim-based score, guarded exceptio
       // The viewing seat is taken through the presence endpoint, with no credential.
       expect((await rpc(ids[role],'observer_join',{p_viewer_id:'probe'})).ok).toBe(true);
     } else {
-      expect((await rpc(ids[role],'claim_station',{p_role:role,p_pin:role==='SUPERVISOR'?PIN:CODES[role]})).ok).toBe(true);
+      if (role === 'SUPERVISOR') await allowAdmin(ids[role]);
+      expect((await rpc(ids[role],'claim_station',{p_role:role})).ok).toBe(true);
     }
   }
 

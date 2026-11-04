@@ -110,20 +110,28 @@ afterAll(() => {
 });
 
 describe('PASS 4 — real HTTP synchronisation between the phones', () => {
-  it('authenticates operators and lets the observer in without a passcode', async () => {
+  it('authenticates every seat without a passcode, and refuses only unknown accounts', async () => {
     const anonymous = await fetch(`${baseUrl}/api/snapshot`);
     expect(anonymous.status).toBe(401);
+    // V3.2: choosing a station IS the claim — no passcode is checked any more.
+    const gate = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'gate' }),
+    });
+    expect(gate.status).toBe(200);
+    // Only an account that does not exist is refused.
     const wrong = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: 'gate', passcode: 'nope' }),
+      body: JSON.stringify({ account: 'nobody' }),
     });
     expect(wrong.status).toBe(401);
-    // The viewer seat is open: an empty passcode is the documented behaviour.
+    // The viewer seat is open: no passcode is the documented behaviour.
     const viewer = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: 'observer', passcode: '' }),
+      body: JSON.stringify({ account: 'observer' }),
     });
     expect(viewer.status).toBe(200);
     const token = (await viewer.json()).token as string;

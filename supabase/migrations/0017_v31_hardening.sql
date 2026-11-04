@@ -5,10 +5,13 @@
 --
 --   IV  P0  ABORT_ROUND stops inventing a physical departure, and a claim recorded
 --           before the deadline keeps its right to be verified.
---   V   P1  The four operating positions are guarded by per-role crew codes; the
---           viewer seat stays open, the admin PIN stays separate.
---   VI  P1  The board release reads one authoritative floor predicate, is limited to
---           a bound supervisor, and agrees with the button the operator sees.
+--   V   P1  V3.2: the four operating positions bind with no credential at all —
+--           opening the link and tapping a free seat is the whole ritual. Only the
+--           retained admin is gated: a device must appear in sc.admin_devices, and
+--           that allow-list is readable and writable by the owner alone.
+--   VI  P1  The board release is a supervisor action with a server-side role check
+--           instead of a typed secret, reads one authoritative floor predicate, and
+--           grows an emergency force path that cancels an open round before sweeping.
 --   VII     The 90-minute session clock is retired from the operating surface; the
 --           round duration becomes configurable and is snapshotted per round.
 --   X   P2  Refusal messages name the real areas in Vietnamese instead of enum keys.
@@ -188,57 +191,55 @@ revoke all on function sc._duration_ok(bigint), sc._round_limit_ms(sc.rounds),
   from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 3. Crew codes for the four operating positions
+-- 3. V3.2 access model: open seats, one gated admin route
 -- ---------------------------------------------------------------------------
--- One code per role, so a code that opens the gate does not open the lobby (§5.3).
--- Only the bcrypt hash is stored; the code itself never reaches the database, the
--- audit, the snapshot or this repository.
-create table if not exists sc.station_codes (
-  role       text primary key,
-  code_hash  text not null,
-  updated_at timestamptz not null default now(),
-  updated_by text
+-- The four operating positions and the viewer seat need no credential. Slot
+-- exclusivity below is enforced by the advisory lock plus the seat_slot search, so
+-- two phones can never hold the same position. The admin seat is the only thing
+-- still gated: a device may bind it only when its uuid appears in sc.admin_devices.
+-- Players never read or write that table; not even SELECT is granted beyond owner.
+create table if not exists sc.admin_devices (
+  user_id    uuid primary key,
+  note       text,
+  created_at timestamptz not null default now()
 );
-alter table sc.station_codes drop constraint if exists station_codes_role_check;
-alter table sc.station_codes add constraint station_codes_role_check
-  check (role in ('LOBBY','CORRIDOR','GATE','ROOM305'));
-revoke all on sc.station_codes from public, anon, authenticated;
+alter table sc.admin_devices enable row level security;
+-- No policies at all: RLS with an empty policy set hides every row from every
+-- non-owner role, and there is no grant to fall back on either. Reading the list
+-- through the API is impossible by construction; the /admin bootstrap screen shows
+-- the device its own uuid (from the auth token, not from this table) so the
+-- organiser can paste it into the SQL editor once.
+revoke all on sc.admin_devices from public, anon, authenticated;
 
--- Owner-only, exactly like sc.configure_station_access: never granted, never exposed
--- through PostgREST. Rotation is a fresh call for the same role.
-create or replace function sc.configure_station_code(p_role text, p_code text)
-returns jsonb language plpgsql security definer set search_path = '' as $$
-begin
-  if p_role is null or p_role not in ('LOBBY','CORRIDOR','GATE','ROOM305') then
-    return jsonb_build_object('ok', false, 'code', 'INVALID_ROLE');
-  end if;
-  -- 4–12 characters of A–Z / 0–9, normalised to upper case so a code can be read
-  -- out over a noisy floor without ambiguity.
-  if p_code is null or char_length(p_code) < 4 or char_length(p_code) > 12
-     or upper(p_code) !~ '^[A-Z0-9]{4,12}$' then
-    return jsonb_build_object('ok', false, 'code', 'CODE_TOO_WEAK');
-  end if;
-  insert into sc.station_codes(role, code_hash, updated_at)
-  values (p_role, extensions.crypt(upper(p_code), extensions.gen_salt('bf', 10)), now())
-  on conflict (role) do update
-    set code_hash = excluded.code_hash, updated_at = excluded.updated_at;
-  -- Deliberately no echo of the code, and no hash in the answer.
-  return jsonb_build_object('ok', true, 'code', 'CODE_SET', 'role', p_role);
-end $$;
-
--- What the picker may know: whether a position is code-guarded at all. Booleans only,
--- and only ever published through sc.station_board() — the function itself stays
--- owner-readable so no client can enumerate it directly.
-create or replace function sc.station_code_state() returns jsonb
+-- The only path any client has to the allow-list: a boolean, never the rows.
+create or replace function sc.is_admin_device(p_user_id uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
-  select jsonb_build_object(
-    'LOBBY', exists (select 1 from sc.station_codes c where c.role = 'LOBBY' and c.code_hash <> ''),
-    'CORRIDOR', exists (select 1 from sc.station_codes c where c.role = 'CORRIDOR' and c.code_hash <> ''),
-    'GATE', exists (select 1 from sc.station_codes c where c.role = 'GATE' and c.code_hash <> ''),
-    'ROOM305', exists (select 1 from sc.station_codes c where c.role = 'ROOM305' and c.code_hash <> ''))
+  select p_user_id is not null and exists (select 1 from sc.admin_devices a where a.user_id = p_user_id)
 $$;
+revoke all on function sc.is_admin_device(uuid) from public, anon;
+grant execute on function sc.is_admin_device(uuid) to authenticated;
 
-revoke all on function sc.configure_station_code(text, text) from public, anon, authenticated;
+-- V3.1 credentials are withdrawn: the crew-code table, the rate limiter that
+-- guarded brute force, and every function that installed a secret. The audit trail
+-- (sc.access_audit) stays — it is history, and history is never deleted.
+drop function if exists public.claim_station(text, text);
+drop function if exists sc.claim_station(text, text);
+drop function if exists public.reset_all_stations(text);
+drop function if exists sc.reset_all_stations(text);
+drop function if exists sc.configure_station_code(text, text);
+drop function if exists sc.station_code_state();
+drop function if exists sc.configure_station_access(text, boolean);
+drop function if exists public.configure_station_access(text, boolean);
+drop function if exists sc.configure_station_reset(text);
+drop function if exists public.configure_station_reset(text);
+drop table if exists sc.station_codes;
+drop table if exists sc.access_rate_limits;
+-- The credential columns on the config row go too: nothing reads them any more,
+-- and keeping them would invite a stale secret to be trusted by a future code path.
+alter table sc.station_access_config drop column if exists supervisor_pin_hash;
+alter table sc.station_access_config drop column if exists pin_version;
+alter table sc.station_access_config drop column if exists reset_secret_hash;
+alter table sc.station_access_config drop column if exists reset_version;
 
 -- ---------------------------------------------------------------------------
 -- 4. The 90-minute session business is retired from the permission surface
@@ -252,17 +253,18 @@ delete from sc.role_permissions
 
 -- The historical columns keep their values for tracing, and nothing reads them as a
 -- deadline any more: sc._derive and the shared machine both work from the round only.
--- ---- copied from 0016 (lines 332..410) then edited for V3.1 ----
-create or replace function sc.claim_station(p_role text, p_pin text default null) returns jsonb
+-- ---- copied from 0016 (lines 332..410) then rewritten for V3.2 ----
+-- One tap binds a seat. No code, no PIN: the advisory lock plus the seat_slot
+-- search below is what makes “one device, one position” real, and a refresh of an
+-- already-bound phone short-circuits before anything else is considered. The single
+-- exception is SUPERVISOR: that seat belongs to the organiser allow-list.
+create or replace function sc.claim_station(p_role text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   v_uid uuid := (select auth.uid());
   v_bound sc.operators;
   v_capacity int;
   v_slot smallint;
-  v_hash text;
-  v_person_attempts int;
-  v_global_attempts int;
 begin
   if v_uid is null then
     return jsonb_build_object('ok', false, 'code', 'NOT_AUTHENTICATED');
@@ -279,10 +281,17 @@ begin
     -- Same identity, same seat: a refresh never consumes another viewer slot.
     if p_role = 'OBSERVER' then
       insert into sc.observer_seats(user_id, viewer_id, seen_at)
-      values (v_uid, left(coalesce(p_pin, ''), 64), now())
+      values (v_uid, null, now())
       on conflict (user_id) do update set seen_at = now();
     end if;
     return jsonb_build_object('ok', true, 'code', 'ALREADY_BOUND', 'role', v_bound.role);
+  end if;
+  -- The admin seat is the one position a stranger may not take, even by accident:
+  -- the uuid has to have been placed on the allow-list by the owner first. Checked
+  -- before the seat search so a refused attempt never consumes a supervisor slot.
+  if p_role = 'SUPERVISOR' and not sc.is_admin_device(v_uid) then
+    insert into sc.access_audit(user_id, role, action) values (v_uid, p_role, 'ADMIN_REFUSED');
+    return jsonb_build_object('ok', false, 'code', 'ADMIN_NOT_ALLOWED');
   end if;
   v_capacity := case p_role when 'SUPERVISOR' then 2 when 'OBSERVER' then 10 else 1 end;
   -- A viewer must not be locked out by a stale seat, so abandoned seats go first.
@@ -296,54 +305,6 @@ begin
     return jsonb_build_object('ok', false,
       'code', case when p_role = 'OBSERVER' then 'OBSERVER_FULL' else 'ROLE_TAKEN' end,
       'capacity', v_capacity);
-  end if;
-  -- V3.1 §5: the four operating positions belong to staff. The crew code arrives in
-  -- p_pin (the viewer never sends one, the admin sends its own PIN) and is checked
-  -- against the hash of exactly this role, so a code that opens the gate does not
-  -- open the lobby. It is verified after the seat check and after the early return
-  -- for an existing binding, so refreshing a phone that already holds its seat is
-  -- never asked to prove itself again (§5.3 item 11).
-  if p_role in ('LOBBY','CORRIDOR','GATE','ROOM305') then
-    select code_hash into v_hash from sc.station_codes where role = p_role;
-    if v_hash is null then
-      return jsonb_build_object('ok', false, 'code', 'CODE_NOT_CONFIGURED');
-    end if;
-    delete from sc.access_rate_limits where window_start < now() - interval '15 minutes';
-    select attempts into v_person_attempts from sc.access_rate_limits where key = 'code:' || v_uid::text;
-    select attempts into v_global_attempts from sc.access_rate_limits where key = 'code:global';
-    if coalesce(v_person_attempts, 0) >= 5 or coalesce(v_global_attempts, 0) >= 30 then
-      return jsonb_build_object('ok', false, 'code', 'CODE_RATE_LIMITED');
-    end if;
-    insert into sc.access_rate_limits(key, window_start, attempts)
-    values ('code:' || v_uid::text, now(), 1), ('code:global', now(), 1)
-    on conflict (key) do update set attempts = sc.access_rate_limits.attempts + 1;
-    if p_pin is null or upper(btrim(p_pin)) !~ '^[A-Z0-9]{4,12}$'
-       or extensions.crypt(upper(btrim(p_pin)), v_hash) <> v_hash then
-      insert into sc.access_audit(user_id, role, action) values (v_uid, p_role, 'CODE_REFUSED');
-      return jsonb_build_object('ok', false, 'code', 'CODE_INVALID');
-    end if;
-    delete from sc.access_rate_limits where key = 'code:' || v_uid::text;
-  end if;
-  if p_role = 'SUPERVISOR' then
-    select supervisor_pin_hash into v_hash from sc.station_access_config where id;
-    if v_hash is null then
-      return jsonb_build_object('ok', false, 'code', 'PIN_NOT_CONFIGURED');
-    end if;
-    delete from sc.access_rate_limits where window_start < now() - interval '15 minutes';
-    select attempts into v_person_attempts from sc.access_rate_limits where key = v_uid::text;
-    select attempts into v_global_attempts from sc.access_rate_limits where key = 'global';
-    if coalesce(v_person_attempts, 0) >= 5 or coalesce(v_global_attempts, 0) >= 30 then
-      return jsonb_build_object('ok', false, 'code', 'PIN_RATE_LIMITED');
-    end if;
-    insert into sc.access_rate_limits(key, window_start, attempts)
-    values (v_uid::text, now(), 1), ('global', now(), 1)
-    on conflict (key) do update set attempts = sc.access_rate_limits.attempts + 1;
-    if p_pin is null or length(p_pin) > 12 or p_pin !~ '^[0-9]{8,12}$'
-       or extensions.crypt(p_pin, v_hash) <> v_hash then
-      insert into sc.access_audit(user_id, role, action) values (v_uid, p_role, 'PIN_REFUSED');
-      return jsonb_build_object('ok', false, 'code', 'PIN_INVALID');
-    end if;
-    delete from sc.access_rate_limits where key = v_uid::text;
   end if;
   insert into sc.operators(user_id, role, display_name, revoked_at, bound_at, device_id, is_anonymous, seat_slot)
   values (v_uid, p_role, p_role, null, now(), v_uid::text, sc._is_anonymous_caller(), v_slot)
@@ -432,8 +393,6 @@ language sql stable security definer set search_path = '' as $$
         and r.game_started_at is not null and r.exit_confirmed_at is null),
     'reset_allowed', sc._floor_block_reason() is null,
     'reset_block_reason', sc._floor_block_reason(),
-    -- Only whether codes are in force; never a code and never a hash.
-    'codes_required', exists (select 1 from sc.station_codes),
     'stations', jsonb_agg(jsonb_build_object('role', role, 'capacity', capacity_max,
       'devices', devices, 'occupied', devices >= capacity_max) order by ord))
   from seats;
@@ -1397,80 +1356,133 @@ end $$;
 
 
 -- ---------------------------------------------------------------------------
--- 6. The board release: a supervisor action, on one predicate with the button
+-- 6. The board release: authorised by the caller's own admin binding, V3.2
 -- ---------------------------------------------------------------------------
--- §6.1: knowing the secret was never the point — the release revokes every duty
--- binding, so only a phone that actually holds the SUPERVISOR seat may ask for it.
--- §6.2: the refusal comes from the same sc._floor_block_reason() the public board
--- publishes, so the picker can never offer what the RPC is about to refuse.
-create or replace function sc.reset_all_stations(p_secret text) returns jsonb
+-- There is no secret any more: only a device currently holding the SUPERVISOR seat
+-- may sweep the board, and that check is the same role lookup every other command
+-- already makes. The normal path refuses while the floor is unfinished, reading the
+-- one predicate the public board publishes so the button and the RPC can never
+-- disagree. The emergency path (force) first closes any still-open round as a
+-- recorded safety cancellation — history is written, never deleted — and only then
+-- frees the seats. Neither path ever touches a score, a claim or a checklist.
+create or replace function sc.reset_all_stations(p_force boolean default false) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   v_uid uuid := (select auth.uid());
   v_role text;
-  v_hash text;
-  v_version bigint;
-  v_person_attempts int;
-  v_global_attempts int;
+  v_now bigint;
   v_freed int;
   v_block text;
+  v_event sc.events;
+  v_open sc.rounds;
+  v_rows int;
+  v_revision bigint := 0;
 begin
   if v_uid is null then
     return jsonb_build_object('ok', false, 'code', 'NOT_AUTHENTICATED');
   end if;
   perform pg_advisory_xact_lock(30501);
+  v_now := sc.now_ms();
   select role into v_role from sc.operators where user_id = v_uid and revoked_at is null;
   if v_role is distinct from 'SUPERVISOR' then
     insert into sc.access_audit(user_id, role, action)
       values (v_uid, v_role, 'RESET_NOT_AUTHORIZED');
     return jsonb_build_object('ok', false, 'code', 'RESET_NOT_AUTHORIZED');
   end if;
-  select reset_secret_hash, reset_version into v_hash, v_version from sc.station_access_config where id;
-  if v_hash is null then
-    return jsonb_build_object('ok', false, 'code', 'RESET_NOT_CONFIGURED');
-  end if;
-  delete from sc.access_rate_limits where window_start < now() - interval '15 minutes';
-  select attempts into v_person_attempts from sc.access_rate_limits where key = 'reset:' || v_uid::text;
-  select attempts into v_global_attempts from sc.access_rate_limits where key = 'reset:global';
-  if coalesce(v_person_attempts, 0) >= 5 or coalesce(v_global_attempts, 0) >= 10 then
-    return jsonb_build_object('ok', false, 'code', 'RESET_RATE_LIMITED');
-  end if;
-  insert into sc.access_rate_limits(key, window_start, attempts)
-  values ('reset:' || v_uid::text, now(), 1), ('reset:global', now(), 1)
-  on conflict (key) do update set attempts = sc.access_rate_limits.attempts + 1;
-  if p_secret is null or char_length(p_secret) > 64 or extensions.crypt(p_secret, v_hash) <> v_hash then
-    insert into sc.access_audit(user_id, role, action) values (v_uid, v_role, 'RESET_REFUSED');
-    return jsonb_build_object('ok', false, 'code', 'RESET_INVALID');
-  end if;
-  delete from sc.access_rate_limits where key = 'reset:' || v_uid::text;
-  -- Only a caller that proved the secret is allowed to learn what the floor is doing.
   v_block := sc._floor_block_reason();
-  if v_block is not null then
+  if v_block is not null and not coalesce(p_force, false) then
     insert into sc.access_audit(user_id, role, action, metadata) values
-      (v_uid, v_role, 'RESET_BLOCKED_FLOOR', jsonb_build_object('secret_ok', true, 'reason', v_block));
+      (v_uid, v_role, 'RESET_BLOCKED_FLOOR', jsonb_build_object('reason', v_block));
     return jsonb_build_object('ok', false, 'code',
       case v_block when 'RUNNING' then 'RESET_GAME_RUNNING'
                    when 'PENDING_CLAIM' then 'RESET_PENDING_CLAIM'
                    else 'RESET_AREA_OPEN' end,
       'block_reason', v_block);
   end if;
+  select * into v_event from sc.events
+   where id = (select event_id from sc.state where id = true);
+  -- Emergency path: every still-open round is accounted for before the seats go.
+  -- A round that already holds a validated win keeps its result and its official
+  -- time; anything unresolved becomes a recorded safety cancellation. Both land in
+  -- the immutable action log with the supervisor as author, exactly like a press.
+  if v_block is not null and p_force then
+    for v_open in select * from sc.rounds
+                   where event_id = v_event.id and status <> 'CLOSED' order by id loop
+      update sc.rounds
+         set aborted_at       = coalesce(aborted_at, v_now),
+             abort_kind       = coalesce(abort_kind, 'safety'),
+             abort_reason     = coalesce(abort_reason, 'Emergency reset'),
+             exit_confirmed_at = coalesce(exit_confirmed_at, v_now),
+             exit_by_role     = coalesce(exit_by_role, v_role),
+             exit_by          = coalesce(exit_by, v_uid),
+             status = 'CLOSED', stage = greatest(stage, 6),
+             result  = case when validated_attempt_id is not null or result = 'WON'
+                            then 'WON' else 'ABORTED' end,
+             outcome = case when validated_attempt_id is not null or result = 'WON'
+                            then 'WON' else 'ABORTED' end,
+             system_ready_at = v_now
+       where id = v_open.id returning * into v_open;
+      if v_open.result <> 'WON' then
+        perform sc._review(v_open.id, 'ROUND_ABORTED');
+      end if;
+      v_revision := sc._commit(v_event, 'ABORT_ROUND', v_open, 'WAITING_FOR_EXIT', 'CLOSED',
+        'emergency-reset-' || v_open.id || '-' || v_now,
+        jsonb_build_object('reason', coalesce(v_open.abort_reason, 'Emergency reset'),
+                           'kind', coalesce(v_open.abort_kind, 'safety'),
+                           'forced', true),
+        'GIẢI PHÓNG KHẨN CẤP · đội #' || lpad(v_open.team_number::text, 3, '0') || ' đã đóng lượt',
+        v_now, v_role, v_uid::text);
+    end loop;
+  end if;
   update sc.operators set revoked_at = now() where revoked_at is null;
-  get diagnostics v_freed = row_count;
+  get diagnostics v_rows = row_count;
+  v_freed := v_rows;
+  -- Presence rows are live seats, not history: the sweep clears them, and the TTL
+  -- machinery lets a viewer that stays connected simply take its seat again.
+  delete from sc.observer_seats;
   insert into sc.access_audit(user_id, role, action, metadata) values
-    (v_uid, v_role, 'STATIONS_RESET', jsonb_build_object('freed', v_freed, 'secret_version', v_version));
-  -- Deliberately nothing else: no tick, no round write, no reset task write, no event
-  -- row, and no touch of either clock. The pending checklist survives this release.
-  return jsonb_build_object('ok', true, 'code', 'STATIONS_RESET', 'freed', v_freed);
+    (v_uid, v_role, 'STATIONS_RESET',
+     jsonb_build_object('freed', v_freed, 'forced', coalesce(p_force, false)));
+  if v_revision > 0 then
+    update sc.events set revision = revision + 1 where id = v_event.id returning revision into v_revision;
+    update sc.state set revision = v_revision, updated_at = v_now where id = true;
+  end if;
+  return jsonb_build_object('ok', true, 'code', 'STATIONS_RESET', 'freed', v_freed,
+                            'revision', v_revision);
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 7. Grants for the surface this release adds
+-- 7. Grants for the surface this release adds or reshapes
 -- ---------------------------------------------------------------------------
--- The board already reaches anon; the code state is only ever exposed through it, so
--- sc.station_code_state() stays owner-readable and the picker learns the booleans from
--- station_board(). sc.configure_station_code() is never granted to any web role.
-revoke all on function sc.station_code_state() from public, anon, authenticated;
-revoke all on function sc.configure_station_code(text, text) from public, anon, authenticated;
+-- The two client-facing RPCs change shape, so the public wrappers are rebuilt here.
+-- claim_station is open by design; reset_all_stations stays authenticated-only, and
+-- inside PostgreSQL it is the caller's own SUPERVISOR binding that authorises it.
+create or replace function public.claim_station(p_role text) returns jsonb
+language sql security definer set search_path = '' as $$ select sc.claim_station(p_role) $$;
+revoke all on function public.claim_station(text) from public, anon;
+grant execute on function public.claim_station(text) to authenticated;
+
+create or replace function public.reset_all_stations(p_force boolean default false) returns jsonb
+language sql security definer set search_path = '' as $$ select sc.reset_all_stations(p_force) $$;
+revoke all on function public.reset_all_stations(boolean) from public, anon;
+grant execute on function public.reset_all_stations(boolean) to authenticated;
+
+-- observer_join (0016) called the two-parameter claim internally; retarget it at
+-- the V3.2 signature. The presence bookkeeping and the capacity answer are
+-- unchanged, and the seat still opens with no credential of any kind.
+create or replace function public.observer_join(p_viewer_id text) returns jsonb
+language sql security definer set search_path = '' as $$
+  select sc.claim_station('OBSERVER') ||
+         (select jsonb_build_object('devices', count(*), 'capacity', 10)
+            from sc.observer_seats s
+            join sc.operators o on o.user_id = s.user_id and o.revoked_at is null and o.role = 'OBSERVER'
+           where s.seen_at > now() - sc._observer_ttl())
+$$;
+revoke all on function public.observer_join(text) from public, anon;
+grant execute on function public.observer_join(text) to authenticated;
+
+revoke all on function sc.claim_station(text), sc.reset_all_stations(boolean)
+  from public, anon, authenticated;
 revoke all on function sc._floor_block_reason() from public, anon, authenticated;
 
 notify pgrst, 'reload schema';

@@ -13,9 +13,10 @@
  *   npm run db:push -- --baseline  record 0001_init.sql as already applied
  *
  * Env overrides: SUPABASE_PROJECT_REF, SUPABASE_REGION.
- * The supervisor PIN, the station reset secret and the four crew codes are read from
- * the environment only when the matching flag is set, and are installed as bcrypt
- * hashes — the values themselves never reach a table, a log, a file or the browser.
+ * V3.2 removes every typed secret: the four operating seats and the viewer seat
+ * bind with no credential at all. The only gated seat is the retained admin, and
+ * it is gated by an allow-list table — --allow-admin-device records one device
+ * uuid there, which is an identifier the /admin screen shows, not a secret.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -26,21 +27,28 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = path.join(root, 'supabase', 'migrations');
 const baseline = process.argv.includes('--baseline');
 const singleUrl = process.argv.includes('--single-url');
-const configurePin = process.argv.includes('--configure-supervisor-pin');
-const configureReset = process.argv.includes('--configure-station-reset');
-const configureCodes = process.argv.includes('--configure-station-codes');
+const allowAdminDevice = process.argv.includes('--allow-admin-device');
 const reportPath = path.join(root, '.git', 'production-migration.json');
 
 async function fingerprint(client) {
+  // Business rows must survive the upgrade intact, but 0016 legitimately rewrites
+  // the status vocabulary and 0017 drops credential columns: comparing whole-row
+  // hashes would fail on every real upgrade. So the fingerprint pins the IDENTITY
+  // of each row set — counts and primary keys — not column values.
+  const sets = [
+    ['events', "select count(*)::int as count, md5(string_agg(id::text, ',' order by id)) as hash from sc.events"],
+    ['rounds', "select count(*)::int as count, md5(string_agg(id::text, ',' order by id)) as hash from sc.rounds"],
+    ['action_log', "select count(*)::int as count, md5(string_agg(seq::text, ',' order by seq)) as hash from sc.action_log"],
+    ['reset_tasks', "select count(*)::int as count, md5(string_agg(round_id::text || '/' || task_key, ',' order by round_id, task_key)) as hash from sc.reset_tasks"],
+    ['state', 'select count(*)::int as count, md5(string_agg(event_id::text, \',\' order by event_id)) as hash from sc.state'],
+  ];
   const out = {};
-  for (const table of ['events', 'rounds', 'action_log', 'reset_tasks', 'state']) {
-    const { rows } = await client.query(`select count(*)::int as count,
-      md5(coalesce(string_agg(row_hash, ',' order by row_hash), '')) as hash
-      from (select md5(to_jsonb(t)::text) as row_hash from sc.${table} t) q`);
-    out[table] = rows[0];
+  for (const [table, sql] of sets) {
+    try { out[table] = (await client.query(sql)).rows[0]; }
+    catch { out[table] = { count: 0, hash: null }; }
   }
   const { rows } = await client.query(`select count(*)::int as count,
-    md5(coalesce(string_agg(user_id::text || role || display_name || bound_at::text || coalesce(device_id,''), ',' order by user_id),'')) as hash
+    md5(coalesce(string_agg(user_id::text || '/' || role, ',' order by user_id, role), '')) as hash
     from sc.operators where revoked_at is null`);
   out.active_bindings = rows[0];
   return out;
@@ -100,30 +108,16 @@ async function main() {
       '0017_v31_hardening.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
-    const pin = configurePin ? process.env.SC_SUPERVISOR_PIN : null;
-    delete process.env.SC_SUPERVISOR_PIN;
-    if (configurePin && !/^\d{8,12}$/.test(pin ?? '')) throw new Error('An 8–12 digit PIN is required through the hidden prompt.');
-    const resetSecret = configureReset ? process.env.SC_STATION_RESET_SECRET : null;
-    delete process.env.SC_STATION_RESET_SECRET;
-    const resetLength = (resetSecret ?? '').length;
-    if (configureReset && (resetLength < 10 || resetLength > 64)) {
-      throw new Error('The station reset secret must be 10–64 characters, entered through the hidden prompt.');
-    }
-    // Crew codes arrive as one JSON map from the hidden prompts; each value is a
-    // 4–12 character A–Z0–9 code for exactly one operating position (§5.3).
-    let codes = null;
-    if (configureCodes) {
-      const raw = process.env.SC_STATION_CODES;
-      delete process.env.SC_STATION_CODES;
-      try { codes = JSON.parse(raw ?? ''); } catch { codes = null; }
-      const entries = Object.entries(codes ?? {});
-      if (entries.length !== 4 || !['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'].every(r => entries.some(([k]) => k === r))) {
-        throw new Error('All four crew codes (LOBBY, CORRIDOR, GATE, ROOM305) must be provided.');
-      }
-      for (const [role, code] of entries) {
-        if (!/^[A-Z0-9]{4,12}$/.test(String(code ?? '').toUpperCase())) {
-          throw new Error(`The crew code for ${role} must be 4–12 characters of A-Z or 0-9.`);
-        }
+    // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act
+    // is recording an organiser device uuid on the admin allow-list; SC_ADMIN_DEVICE
+    // carries an identifier the /admin screen displays, so nothing secret is kept in
+    // argv or history (the ps1 reads it through a hidden prompt for tidiness only).
+    let adminDevice = null;
+    if (allowAdminDevice) {
+      adminDevice = (process.env.SC_ADMIN_DEVICE ?? '').trim().toLowerCase();
+      delete process.env.SC_ADMIN_DEVICE;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(adminDevice)) {
+        throw new Error('SC_ADMIN_DEVICE must be a device uuid shown by the /admin screen (8-4-4-4-12 hex).');
       }
     }
     const report = { status: 'pending', at: new Date().toISOString(), pending };
@@ -134,14 +128,29 @@ async function main() {
       // Safety: refuse to migrate while an event is running. The advisory lock
       // serialises against claim_station/reset_all_stations, but not against a
       // half-open round. If sc.rounds is not yet present (a fresh DB), skip.
+      // Postgres analyses every table name at parse time, so sc.completion_attempts
+      // (created by 0016) may only be queried once the probe says it exists — never
+      // behind a CASE arm. An active round is never judged ready by exit_confirmed_at
+      // alone: crew verification and pending claims are reported too. A legacy
+      // GATE_CLEARED round that was already finalised is NOT live — the floor is idle
+      // and 0016's own upgrade maps it to CLOSED — so it does not block the migration.
       if (schemaExists) {
-        const { rows: live } = await client.query(`
+        const { rows: relRows } = await client.query(
+          "select to_regclass('sc.completion_attempts') is not null as has_attempts");
+        const live = (await client.query(relRows[0].has_attempts ? `
           select r.id, r.team_number, r.status,
-                 case when to_regclass('sc.completion_attempts') is null then 0
-                      else (select count(*) from sc.completion_attempts a
-                             where a.round_id = r.id and a.status in ('PENDING','LATE')) end
+                 (select count(*) from sc.completion_attempts a
+                    where a.round_id = r.id and a.status in ('PENDING','LATE'))
                    as pending_claims
-          from sc.rounds r where r.status <> 'CLOSED' order by r.id`);
+          from sc.rounds r
+          where r.status <> 'CLOSED'
+            and not (r.status = 'GATE_CLEARED' and r.system_ready_at is not null)
+          order by r.id` : `
+          select r.id, r.team_number, r.status, 0::bigint as pending_claims
+          from sc.rounds r
+          where r.status <> 'CLOSED'
+            and not (r.status = 'GATE_CLEARED' and r.system_ready_at is not null)
+          order by r.id`)).rows;
         if (live.length) {
           const detail = live.map(r => `#${r.team_number} ${r.status}${r.pending_claims > 0 ? ` (${r.pending_claims} pending)` : ''}`).join(', ');
           throw new Error(`Refusing to migrate: ${live.length} round(s) still open — ${detail}. Đóng sự kiện và reset xong trước khi chạy db-push.`);
@@ -152,11 +161,16 @@ async function main() {
         const { rows: flags } = await client.query('select allow_test_clock from sc.runtime_flags where id');
         if (flags[0]?.allow_test_clock !== false) throw new Error('Production test clock is enabled; review required.');
         await client.query('lock table sc.operators in share row exclusive mode');
-        // The unified flow adds two tables the upgrade itself rewrites: reading them in
-        // share mode proves the fingerprint covers the claims and seats that must survive.
-        await client.query(
-          'lock table sc.events, sc.rounds, sc.action_log, sc.reset_tasks, sc.state, sc.completion_attempts, sc.observer_seats in share mode',
-        );
+        // The upgrade rewrites several tables: reading them in share mode proves the
+        // fingerprint covers the bindings and seats that must survive. Tables created
+        // by the pending migrations themselves cannot be locked yet, so lock only
+        // relations that exist right now — built from a catalogue probe, not a literal.
+        const { rows: existRows } = await client.query(`
+          select name, to_regclass('sc.' || name) is not null as present
+          from unnest(array['events','rounds','action_log','reset_tasks','state',
+                            'completion_attempts','observer_seats']) as name`);
+        const lockTargets = existRows.filter((r) => r.present).map((r) => `sc.${r.name}`).join(', ');
+        if (lockTargets) await client.query(`lock table ${lockTargets} in share mode`);
         report.before = await fingerprint(client);
         console.log('Production baseline:', JSON.stringify(report.before));
       }
@@ -168,29 +182,43 @@ async function main() {
         await client.query('insert into public._sc_migrations (name) values ($1)', [name]);
         console.log(`staged ${name}`);
       }
-      if (configurePin) await client.query('select sc.configure_station_access($1, false)', [pin]);
-      // Hashes only: the secret itself is never written to a table, log or file.
-      if (configureReset) await client.query('select sc.configure_station_reset($1)', [resetSecret]);
-      // Hashes only, and never the same code twice in the same statement text.
-      for (const [role, code] of Object.entries(codes ?? {})) {
-        await client.query('select sc.configure_station_code($1, $2)', [role, String(code).toUpperCase()]);
-        console.log(`staged crew code for ${role}`);
+      if (adminDevice) {
+        // Idempotent: re-running with the same uuid just refreshes the note.
+        await client.query(
+          'insert into sc.admin_devices (user_id, note) values ($1, $2) on conflict (user_id) do update set note = excluded.note',
+          [adminDevice, 'db-push'],
+        );
+        console.log('staged admin device on the allow-list');
       }
       if (singleUrl) {
         report.after = await fingerprint(client);
         if (JSON.stringify(report.before) !== JSON.stringify(report.after)) throw new Error('Event data or duty bindings changed; rolling back.');
         report.occupancy = (await client.query('select sc.station_board() as board')).rows[0].board;
-        const { rows } = await client.query(`select
-          has_function_privilege('authenticated','public.redeem_invitation(text,text)','EXECUTE') as legacy,
-          has_function_privilege('authenticated','sc.configure_station_access(text,boolean)','EXECUTE') as pin_exposed,
-          has_function_privilege('authenticated','sc.reset_all_stations(text)','EXECUTE') as reset_exposed,
-          has_function_privilege('authenticated','sc.configure_station_code(text,text)','EXECUTE') as codes_exposed,
-          has_function_privilege('authenticated','sc.station_code_state()','EXECUTE') as codes_listed,
-          has_function_privilege('anon','public.reset_all_stations(text)','EXECUTE') as reset_unsigned,
-          has_function_privilege('authenticated','public.reset_all_stations(text)','EXECUTE') as reset_granted`);
-        if (rows[0].legacy || rows[0].pin_exposed || rows[0].reset_exposed || rows[0].reset_unsigned || !rows[0].reset_granted
-          || rows[0].codes_exposed || rows[0].codes_listed) {
-          throw new Error('Unsafe access grants; rolling back.');
+        // Every retired function may be absent, and has_function_privilege('name(sig)')
+        // raises on a missing function — so walk pg_proc instead: whatever exists must
+        // follow the V3.2 rule, and the two public wrappers must be executable.
+        const { rows } = await client.query(`
+          select
+            coalesce(bool_or(has_function_privilege('authenticated', p.oid, 'EXECUTE')) filter (where
+              (n.nspname = 'public' and p.proname in ('redeem_invitation', 'accept_invitation'))
+              or (n.nspname = 'sc' and p.proname in ('configure_station_access', 'configure_station_reset',
+                    'configure_station_code', 'claim_station', 'reset_all_stations'))), false) as internal_exposed,
+            coalesce(bool_or(has_function_privilege('anon', p.oid, 'EXECUTE')) filter (where
+              n.nspname = 'public' and p.proname in ('reset_all_stations', 'claim_station', 'handle_command')),
+              false) as anon_exposed,
+            coalesce(bool_or(true) filter (where n.nspname = 'public'
+              and p.proname = 'reset_all_stations'
+              and has_function_privilege('authenticated', p.oid, 'EXECUTE')), false) as reset_granted,
+            coalesce(bool_or(true) filter (where n.nspname = 'public'
+              and p.proname = 'claim_station'
+              and has_function_privilege('authenticated', p.oid, 'EXECUTE')), false) as claim_granted,
+            coalesce(bool_or(has_column_privilege('authenticated', 'sc.admin_devices'::regclass, 'user_id', 'SELECT'))
+              filter (where to_regclass('sc.admin_devices') is not null), false) as allowlist_readable
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname in ('public', 'sc')`);
+        if (rows[0].internal_exposed || rows[0].anon_exposed
+          || !rows[0].reset_granted || !rows[0].claim_granted || rows[0].allowlist_readable) {
+          throw new Error(`Unsafe access grants; rolling back. ${JSON.stringify(rows[0])}`);
         }
       }
       await client.query('commit');

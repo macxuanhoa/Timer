@@ -58,7 +58,7 @@ describe('single URL: authority comes from whoami, never a token or cached role'
       return { ok: true, code: 'CLAIMED', role: 'SUPERVISOR' };
     });
     expect((await s.selectStation('ROOM305')).account.role).toBe('ROOM305');
-    expect(mock.claim).toHaveBeenCalledWith('ROOM305', undefined);
+    expect(mock.claim).toHaveBeenCalledWith('ROOM305');
   });
   it('shows a capacity/PIN refusal and stores no binding', async () => {
     const s = await boot(); mock.claim.mockResolvedValue({ ok: false, code: 'ROLE_TAKEN' });

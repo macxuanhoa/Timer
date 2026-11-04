@@ -3,10 +3,13 @@ import type { Role } from '../shared/constants';
 import type { StationBoard } from '../shared/types';
 
 /**
- * Passwordless operator access.
+ * Passwordless operator access (V3.2).
  *
- * The browser keeps its anonymous session and publishable key. The supervisor
- * PIN is sent once per claim, never saved; privileged keys stay outside this app.
+ * Opening the link and tapping a free seat is the whole joining ritual: the four
+ * operating positions and the viewer seat need no credential of any kind. Slot
+ * exclusivity is enforced inside PostgreSQL under one advisory lock, so two phones
+ * can never hold the same seat. The retained admin is not a station: it lives on a
+ * separate /admin route and only a device on the allow-list can bind it.
  */
 
 const URL_KEY = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -43,14 +46,8 @@ const CLAIM_ERROR: Record<string, string> = {
   OBSERVER_FULL: 'ĐÃ ĐỦ 10 NGƯỜI THEO DÕI — VUI LÒNG THỬ LẠI SAU',
   ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG GIỮ VỊ TRÍ KHÁC — VỀ HOME TRƯỚC KHI CHUYỂN',
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
-  PIN_INVALID: 'PIN KHÔNG ĐÚNG',
-  PIN_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
-  PIN_NOT_CONFIGURED: 'QUẢN TRỊ CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
-  // Crew codes guard the four operating positions (V3.1 §5).
-  CODE_INVALID: 'SAI MÃ VỊ TRÍ',
-  CODE_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ NGƯỜI PHỤ TRÁCH',
-  CODE_NOT_CONFIGURED: 'MÃ VỊ TRÍ CHƯA ĐƯỢC CẤP — LIÊN HỆ NGƯỜI PHỤ TRÁCH SỰ KIỆN',
-  CODE_REQUIRED: 'VỊ TRÍ NÀY CẦN MÃ — HÃY NHẬP MÃ DO NGƯỜI PHỤ TRÁCH CẤP',
+  // V3.2: the admin seat belongs to the organiser allow-list, never to a typed code.
+  ADMIN_NOT_ALLOWED: 'MÁY NÀY CHƯA ĐƯỢC CẤP QUYỀN QUẢN TRỊ — VÀO /admin TRÊN MÁY CỦA NGƯỜI TỔ CHỨC',
   INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
 };
 
@@ -68,11 +65,8 @@ export interface ResetResult {
 /** The board release is checked inside PostgreSQL; these are its refusal reasons. */
 const RESET_ERROR: Record<string, string> = {
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
-  RESET_INVALID: 'MẬT KHẨU RESET KHÔNG ĐÚNG',
-  RESET_RATE_LIMITED: 'ĐÃ THỬ QUÁ NHIỀU LẦN — CHỜ 15 PHÚT HOẶC LIÊN HỆ QUẢN TRỊ',
-  RESET_NOT_CONFIGURED: 'RESET CHƯA ĐƯỢC MỞ — LIÊN HỆ QUẢN TRỊ',
-  // Only a bound supervisor may release the whole board (V3.1 §6.1).
-  RESET_NOT_AUTHORIZED: 'CHỈ QUẢN TRỊ ĐÃ ĐĂNG NHẬP PIN MỚI ĐƯỢC GIẢI PHÓNG TOÀN BỘ BẢNG',
+  // V3.2: only a device currently holding the admin seat may sweep the board.
+  RESET_NOT_AUTHORIZED: 'CHỈ MÁY ĐANG GIỮ GHẾ QUẢN TRỊ MỚI ĐƯỢC GIẢI PHÓNG TOÀN BỘ BẢNG',
   RESET_GAME_RUNNING: 'VẪN CÒN ĐỘI TRONG KHU VỰC — NPC 1 CẦN XÁC NHẬN ĐÃ RỜI TẦNG 3 TRƯỚC',
   RESET_PENDING_CLAIM: 'CÒN LẦN BÁO HOÀN THÀNH CHỜ NPC 2 XÁC MINH — KHÔNG GIẢI PHÓNG BẢNG LÚC NÀY',
   RESET_AREA_OPEN: 'KHU VỰC CHƯA XÁC NHẬN RESET XONG — KHÔNG GIẢI PHÓNG BẢNG LÚC NÀY',
@@ -117,14 +111,24 @@ export async function ensureAnonymousSession(): Promise<void> {
 }
 
 /** The server derives identity from auth.uid(), never a caller-supplied device. */
-export async function claimStation(role: Role, pin?: string): Promise<ClaimResult> {
+export async function claimStation(role: Role): Promise<ClaimResult> {
   await ensureAnonymousSession();
   const { data, error } = await supabase().rpc('claim_station', {
     p_role: role,
-    p_pin: pin ?? null,
   });
   if (error) throw new Error(error.message);
   return data as ClaimResult;
+}
+
+/**
+ * The anonymous uuid of this device, for the /admin bootstrap screen: the organiser
+ * reads it out and inserts it into sc.admin_devices once, from the Supabase SQL
+ * editor. Players never see this screen, and nothing here is a secret to type.
+ */
+export async function myDeviceId(): Promise<string | null> {
+  await ensureAnonymousSession();
+  const { data } = await supabase().auth.getSession();
+  return data.session?.user.id ?? null;
 }
 
 /** The role this device currently holds, or null when it holds none. */
@@ -154,16 +158,19 @@ export async function leaveStation(): Promise<void> {
 }
 
 /**
- * Organiser sweep: free every occupied station at once. The secret is sent to
- * PostgreSQL and compared against a bcrypt hash there — the app never knows
- * whether a secret is configured beyond the server's own refusal, and the typed
- * secret is not kept in storage. This is an access action only: it never stops a
- * clock, closes a round or marks a physical reset, and PostgreSQL refuses it
- * outright while a team is inside the 5:00 window.
+ * Organiser sweep: free every occupied station at once, V3.2.
+ *
+ * There is no secret any more: PostgreSQL authorises the call by the caller's own
+ * binding — only a device currently holding the SUPERVISOR seat may sweep. The
+ * release is an access action and never stops a clock, closes a round or marks a
+ * physical reset. `force` is the emergency path: it aborts any still-open round
+ * (recording a safety cancellation) before freeing the seats, so the board can be
+ * reclaimed mid-event without leaving a live round nobody can close. Refused while
+ * a floor is unfinished unless force is set (V3.2 §2).
  */
-export async function resetAllStations(secret: string): Promise<ResetResult> {
+export async function resetAllStations(force = false): Promise<ResetResult> {
   await ensureAnonymousSession();
-  const { data, error } = await supabase().rpc('reset_all_stations', { p_secret: secret });
+  const { data, error } = await supabase().rpc('reset_all_stations', { p_force: force });
   if (error) throw new Error(error.message);
   return data as ResetResult;
 }

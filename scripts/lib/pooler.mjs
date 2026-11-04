@@ -23,6 +23,39 @@ export function requirePassword() {
 
 export async function connect() {
   const password = requirePassword();
+
+  // Target guard: an ambient DB_HOST (a leftover from an isolated rehearsal
+  // shell) must NEVER silently redirect a production script. The override is
+  // honoured only when the operator opts in explicitly with
+  // SC_ALLOW_ISOLATED_DB=yes; otherwise the script refuses and says why.
+  if (process.env.DB_HOST && process.env.SC_ALLOW_ISOLATED_DB !== 'yes') {
+    throw new Error(
+      `TargetGuard: DB_HOST=${process.env.DB_HOST} is set in this shell. Production scripts refuse an ambient database override. Open a fresh terminal, or set SC_ALLOW_ISOLATED_DB=yes deliberately for an isolated rehearsal database.`);
+  }
+  if (process.env.DB_HOST) {
+    const client = new pg.Client({
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      user: process.env.DB_USER || 'postgres',
+      password,
+      database: process.env.DB_NAME || 'postgres',
+      ssl: process.env.DB_SSL === 'disable' ? false : { rejectUnauthorized: false },
+      connectionTimeoutMillis: 15_000,
+      statement_timeout: 0,
+    });
+    await client.connect();
+    console.log(`connected: ${process.env.DB_HOST}:${process.env.DB_PORT || 5432} (ISOLATED REHEARSAL — not production)`);
+    return client;
+  }
+
+  // Production path: the only accepted target is the verified Supavisor pooler
+  // for the configured project. Both are printed WITHOUT any credential, and a
+  // foreign project ref is refused before a single byte is sent.
+  if (!hosts.some((h) => /pooler\.supabase\.com$/.test(h)) || !/^[a-z]{20}$/.test(projectRef)) {
+    throw new Error(`TargetGuard: unexpected pooler configuration for ref "${projectRef}" — refusing to connect.`);
+  }
+  console.log(`target: supavisor ${region} · project ${projectRef} · database postgres (no credentials shown)`);
+
   let lastError;
 
   for (const host of hosts) {

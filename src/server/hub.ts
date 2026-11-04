@@ -261,10 +261,11 @@ export function createHub(options: HubOptions = {}): Hub {
           return;
         }
         const account = accounts.find((a) => a.id === body.account);
-        // An empty secret is the open observer seat: no passcode, no repeated challenge.
-        const passcodeOk = account !== undefined && (account.secret === '' || body.passcode === account.secret);
-        if (!account || typeof body.passcode !== 'string' || !passcodeOk) {
-          send(res, 401, { error: 'SAI TÀI KHOẢN HOẶC MẬT KHẨU' });
+        // V3.2: no passcode anywhere. Choosing an account IS the claim; the four
+        // duty seats, the admin seat and the viewer seat all bind with nothing to
+        // type. Only the seat race is real, and it is guarded in the engine.
+        if (!account) {
+          send(res, 401, { error: 'TÀI KHOẢN KHÔNG TỒN TẠI' });
           return;
         }
         send(res, 200, {

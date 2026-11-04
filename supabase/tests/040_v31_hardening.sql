@@ -1,6 +1,6 @@
--- Local SQL validation only (scenario 040): the V3.1 hardening, on the real RPCs.
+-- Local SQL validation only (scenario 040): the V3.2 hardening, on the real RPCs.
 -- Everything runs inside one transaction and is rolled back, against a database that
--- has already been carried through 0001..0017, so it also proves the V3 → V3.1 path.
+-- has already been carried through 0001..0017, so it also proves the V3 → V3.2 path.
 \set ON_ERROR_STOP on
 reset role;
 
@@ -8,8 +8,7 @@ begin;
 
 update sc.operators set revoked_at = now() where revoked_at is null;
 delete from sc.observer_seats;
-delete from sc.station_codes;
-delete from sc.access_rate_limits;
+delete from sc.admin_devices;
 insert into auth.users(id) values
   ('22222222-0000-4000-8000-000000000011'),  -- OPERATOR_01 (LOBBY)
   ('22222222-0000-4000-8000-000000000012'),  -- OPERATOR_02 (CORRIDOR)
@@ -18,7 +17,7 @@ insert into auth.users(id) values
   ('22222222-0000-4000-8000-000000000015'),  -- SUPERVISOR
   ('22222222-0000-4000-8000-000000000016'),  -- viewer
   ('22222222-0000-4000-8000-000000000017'),  -- spare stranger identity
-  ('22222222-0000-4000-8000-000000000018')   -- second stranger, for the brute-force probe
+  ('22222222-0000-4000-8000-000000000018')   -- second stranger, for the admin probe
 on conflict (id) do nothing;
 
 -- A dedicated event, so this scenario owns the state pointer entirely.
@@ -51,115 +50,103 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 2. Crew codes: installed by the owner, verified by the server
+-- 2. V3.2 access: seats bind with one tap; only the admin seat is gated
 -- ---------------------------------------------------------------------------
 do $$
-declare v jsonb;
 begin
-  v := sc.configure_station_code('LOBBY', 'abc');         -- too short: refused
-  if v->>'code' <> 'CODE_TOO_WEAK' then raise exception 'ASSERT 040d: a short code must be refused: %', v; end if;
-  v := sc.configure_station_code('LOBBY', 'có khoảng trắng');  -- not A-Z0-9: refused
-  if v->>'code' <> 'CODE_TOO_WEAK' then raise exception 'ASSERT 040d2: an unspellable code must be refused: %', v; end if;
-  v := sc.configure_station_code('OBSERVER', 'NOBODY01'); -- not an operating position
-  if v->>'code' <> 'INVALID_ROLE' then raise exception 'ASSERT 040e: only the four positions get codes: %', v; end if;
-  perform sc.configure_station_code('LOBBY', 'SANNH01');
-  perform sc.configure_station_code('CORRIDOR', 'TANG202');
-  perform sc.configure_station_code('GATE', 'CUANPC1');
-  perform sc.configure_station_code('ROOM305', 'PHONG305');
-  if (select count(*) from sc.station_codes) <> 4 then
-    raise exception 'ASSERT 040f: four crew codes were expected';
+  -- The allow-list table is invisible to every web role: RLS is on, no policy
+  -- exists, and no grant survives either. A player cannot read, add or remove.
+  if has_table_privilege('anon', 'sc.admin_devices', 'SELECT') then
+    raise exception 'ASSERT 040d: anon must not read the admin allow-list';
   end if;
-  -- Only a hash is stored, and the code never appears in it.
-  if exists (select 1 from sc.station_codes where code_hash like '%SANNH01%') then
-    raise exception 'ASSERT 040g: a crew code must never be stored in the clear';
+  if has_table_privilege('authenticated', 'sc.admin_devices', 'SELECT') then
+    raise exception 'ASSERT 040e: authenticated must not read the admin allow-list';
   end if;
-  if not exists (select 1 from sc.station_codes where code_hash like '$2$10$%' or code_hash like '$2a$%' or code_hash like '$2b$%') then
-    raise exception 'ASSERT 040h: crew codes must be bcrypt hashes';
+  if exists (select 1 from pg_policies where schemaname = 'sc' and tablename = 'admin_devices') then
+    raise exception 'ASSERT 040f: the allow-list must stay policy-empty (deny by default)';
   end if;
-  if exists (select 1 from sc.station_codes where code_hash = 'SANNH01' or code_hash like 'SANNH01%') then
-    raise exception 'ASSERT 040h2: a crew code must never be stored verbatim';
+  -- The V3.1 credential surface is gone: no table, no installer, no board field.
+  if to_regclass('sc.station_codes') is not null then
+    raise exception 'ASSERT 040g: crew-code table must not survive V3.2';
   end if;
-end $$;
-
--- The board says codes are in force, and the code state itself is not enumerable.
-do $$
-declare b jsonb;
-begin
-  b := public.station_board();
-  if (b->>'codes_required')::text <> 'true' then
-    raise exception 'ASSERT 040i: the board must publish codes_required: %', b;
-  end if;
-  if has_function_privilege('authenticated', 'sc.station_code_state()', 'EXECUTE') then
-    raise exception 'ASSERT 040j: sc.station_code_state() must stay owner-only';
-  end if;
-  if has_function_privilege('authenticated', 'sc.configure_station_code(text,text)', 'EXECUTE') then
-    raise exception 'ASSERT 040k: crew codes must never be settable from the API';
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'sc' and table_name = 'station_access_config'
+                and column_name in ('supervisor_pin_hash', 'reset_secret_hash')) then
+    raise exception 'ASSERT 040h: credential columns must be dropped';
   end if;
 end $$;
 
 set local role authenticated;
-
 do $$
-declare v jsonb;
+declare v jsonb; b jsonb;
 begin
-  -- A stranger with no code cannot take the free LOBBY seat.
+  -- A stranger with a fresh identity takes a free seat with no code at all.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000017', true);
-  v := public.claim_station('LOBBY', null);
-  if v->>'code' <> 'CODE_INVALID' then raise exception 'ASSERT 040l: a missing code must be refused: %', v; end if;
-  v := public.claim_station('LOBBY', 'SAIKHONG');
-  if v->>'code' <> 'CODE_INVALID' then raise exception 'ASSERT 040m: a wrong code must be refused: %', v; end if;
-  -- The right code for a different position does not open this one.
-  v := public.claim_station('LOBBY', 'CUANPC1');
-  if v->>'code' <> 'CODE_INVALID' then raise exception 'ASSERT 040n: codes are per position: %', v; end if;
-  -- The right code for the right position opens it, and lower case is accepted.
-  v := public.claim_station('LOBBY', 'sannh01');
-  if not (v->>'ok')::boolean then raise exception 'ASSERT 040o: the correct code must open its own position: %', v; end if;
-  -- One identity, one position.
-  v := public.claim_station('GATE', 'CUANPC1');
-  if v->>'code' <> 'ALREADY_BOUND_OTHER_ROLE' then raise exception 'ASSERT 040p: one role per identity: %', v; end if;
-  -- The viewer seat still asks for nothing.
+  v := public.claim_station('LOBBY');
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040i: the first tap must bind: %', v; end if;
+  -- A second stranger gets the seat taken, not a credential challenge.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000018', true);
+  v := public.claim_station('LOBBY');
+  if v->>'code' <> 'ROLE_TAKEN' then raise exception 'ASSERT 040j: the seat race is exclusive: %', v; end if;
+  -- Same identity, different seat is refused before anything else.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000017', true);
+  v := public.claim_station('CORRIDOR');
+  if v->>'code' <> 'ALREADY_BOUND_OTHER_ROLE' then raise exception 'ASSERT 040k: one identity, one seat: %', v; end if;
+  -- The viewer seat still opens with nothing at all.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000016', true);
   v := public.observer_join('probe-040');
-  if not (v->>'ok')::boolean then raise exception 'ASSERT 040q: the viewer must stay password-free: %', v; end if;
-  -- A viewer cannot buy its way into a station with a code it does not have.
-  v := public.claim_station('ROOM305', 'PHONG305');
-  if v->>'code' <> 'ALREADY_BOUND_OTHER_ROLE' then raise exception 'ASSERT 040r: a viewer must not upgrade itself: %', v; end if;
-end $$;
-
--- Brute force is capped per identity, and a refusal never grants anything.
-do $$
-declare v jsonb; i int;
-begin
-  -- A fresh identity hammering one free seat: five plain refusals, then the cap.
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040l: the viewer must stay credential-free: %', v; end if;
+  -- The admin seat is the gated one: an unknown device is turned away before the
+  -- two supervisor slots are even considered.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000018', true);
-  for i in 1..5 loop
-    v := public.claim_station('GATE', 'SAIKHONG');
-    if v->>'code' <> 'CODE_INVALID' then raise exception 'ASSERT 040s: attempt % must be a plain refusal: %', i, v; end if;
-  end loop;
-  v := public.claim_station('GATE', 'CUANPC1');
-  if v->>'code' <> 'CODE_RATE_LIMITED' then raise exception 'ASSERT 040t: the sixth attempt must be rate limited: %', v; end if;
+  v := public.claim_station('SUPERVISOR');
+  if v->>'code' <> 'ADMIN_NOT_ALLOWED' then raise exception 'ASSERT 040m: admin needs the allow-list: %', v; end if;
+  -- Refusing an admin attempt never consumes a slot or a seat elsewhere.
+  b := public.station_board();
+  if (b->>'codes_required') is not null then
+    raise exception 'ASSERT 040n: the board no longer advertises codes: %', b;
+  end if;
+  if (b->>'board_version')::int <> 3 then
+    raise exception 'ASSERT 040o: the board keeps its V3.1 shape: %', b;
+  end if;
 end $$;
 
--- The audit records the refusals and never the code. Reading it at all is already an
--- owner-only act, which is itself part of the assertion.
+-- The allow-list itself is owner-only; here the owner (this script) seeds it, the
+-- same one-time act the organiser performs from the Supabase SQL editor.
 reset role;
-do $$
-begin
-  if not exists (select 1 from sc.access_audit where action = 'CODE_REFUSED') then
-    raise exception 'ASSERT 040u1: a refused code must leave an audit trail';
-  end if;
-  if exists (select 1 from sc.access_audit where action = 'CODE_REFUSED'
-              and metadata::text like '%SAIKHONG%') then
-    raise exception 'ASSERT 040u2: a refused code must never reach the audit';
-  end if;
-end $$;
-delete from sc.access_rate_limits;
-update sc.operators set revoked_at = now()
- where user_id in ('22222222-0000-4000-8000-000000000017', '22222222-0000-4000-8000-000000000018');
+insert into sc.admin_devices(user_id, note) values
+  ('22222222-0000-4000-8000-000000000015', 'seeded supervisor'),
+  ('22222222-0000-4000-8000-000000000017', 'lobby device promoted admin')
+on conflict (user_id) do nothing;
+
 set local role authenticated;
+do $$
+declare v jsonb;
+begin
+  -- Allowed now: identity 15 carries no duty seat, so its own claim is clean.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000015', true);
+  v := public.claim_station('SUPERVISOR');
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040p: an allowed device binds admin: %', v; end if;
+  -- The refresh is idempotent: it never re-asks and never takes the second slot.
+  v := public.claim_station('SUPERVISOR');
+  if v->>'code' <> 'ALREADY_BOUND' then raise exception 'ASSERT 040q: refresh keeps its own seat: %', v; end if;
+  -- A stranger hammering never drains admin slots: refusals precede the seat check.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000018', true);
+  for _ in 1..5 loop
+    v := public.claim_station('SUPERVISOR');
+    if v->>'code' <> 'ADMIN_NOT_ALLOWED' then raise exception 'ASSERT 040r: refusals stay clean: %', v; end if;
+  end loop;
+  -- A bound duty phone may not upgrade itself to admin even if it later lands on
+  -- the allow-list it was never given: identity 17 holds LOBBY already.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000017', true);
+  v := public.claim_station('SUPERVISOR');
+  if v->>'code' <> 'ALREADY_BOUND_OTHER_ROLE' then raise exception 'ASSERT 040s: a duty seat cannot be upgraded: %', v; end if;
+end $$;
 
--- Bind the remaining duty identities directly, as the earlier scenarios do.
 reset role;
+-- Free the duty identities used above and bind the full crew the way the earlier
+-- scenarios do: rows directly, so the sections below speak about commands only.
+update sc.operators set revoked_at = now() where revoked_at is null;
 insert into sc.operators (user_id, role, display_name, seat_slot) values
   ('22222222-0000-4000-8000-000000000011', 'LOBBY',      'T01', 1),
   ('22222222-0000-4000-8000-000000000012', 'CORRIDOR',   'T02', 1),
@@ -168,26 +155,6 @@ insert into sc.operators (user_id, role, display_name, seat_slot) values
   ('22222222-0000-4000-8000-000000000015', 'SUPERVISOR', 'TSV', 1)
 on conflict (user_id) do update set role = excluded.role, display_name = excluded.display_name,
   seat_slot = excluded.seat_slot, revoked_at = null, bound_at = now();
-
--- The admin PIN stays a separate secret from the crew codes, and installing it is an
--- owner-only act: the API cannot reach sc.configure_station_access at all.
-reset role;
-select sc.configure_station_access('9876543210', false);
-delete from sc.access_rate_limits;
-set local role authenticated;
-do $$
-declare v jsonb;
-begin
-  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000017', true);
-  v := public.claim_station('SUPERVISOR', 'SANNH01');   -- a crew code is not an admin PIN
-  if v->>'code' <> 'PIN_INVALID' then raise exception 'ASSERT 040w: the admin PIN is its own secret: %', v; end if;
-  v := public.claim_station('SUPERVISOR', '9876543210');
-  if not (v->>'ok')::boolean then raise exception 'ASSERT 040x: the correct PIN must open the admin seat: %', v; end if;
-end $$;
-
-reset role;
-delete from sc.access_rate_limits;
-update sc.operators set revoked_at = now() where user_id = '22222222-0000-4000-8000-000000000017';
 set local role authenticated;
 
 -- ---------------------------------------------------------------------------
@@ -511,8 +478,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 7. The board release: a supervisor action, refused for everybody else, and
---    never a change to a clock, a result or a claim
+-- 7. The board release: authorised by the caller's own admin binding, V3.2
 -- ---------------------------------------------------------------------------
 -- The fingerprint is taken by the owner: the claim table is deliberately unreadable
 -- through the API, so a caller that could not see it also cannot fake this check.
@@ -544,26 +510,23 @@ begin
     raise exception 'ASSERT 040cb: an idle floor has no block reason: %', b;
   end if;
 
-  -- A viewer that happens to know the secret may not clear the duty board.
+  -- A viewer may not clear the duty board: only a device holding admin binds.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000016', true);
-  v := public.reset_all_stations('greenwich99');
+  v := public.reset_all_stations(false);
   if v->>'code' <> 'RESET_NOT_AUTHORIZED' then
     raise exception 'ASSERT 040cc: a viewer must not be able to release the board: %', v;
   end if;
-  -- An operator position may not either: it is an admin access action.
+  -- A duty position may not either: it is an admin access action.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000011', true);
-  v := public.reset_all_stations('greenwich99');
+  v := public.reset_all_stations(false);
   if v->>'code' <> 'RESET_NOT_AUTHORIZED' then
     raise exception 'ASSERT 040cd: only the supervisor seat may release the board: %', v;
   end if;
-  -- The supervisor, with a wrong secret, is refused the same way as before.
+  -- The supervisor frees the seats and touches nothing else.
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000015', true);
-  v := public.reset_all_stations('sai-mat-khau');
-  if v->>'code' <> 'RESET_INVALID' then raise exception 'ASSERT 040ce: a wrong secret must be refused: %', v; end if;
-  -- And with the right one, it frees the seats and touches nothing else.
-  v := public.reset_all_stations('greenwich99');
+  v := public.reset_all_stations(false);
   if not (v->>'ok')::boolean then raise exception 'ASSERT 040cf: the release must succeed: %', v; end if;
-  if (v->>'freed')::int < 4 then raise exception 'ASSERT 040cg2: the release must report what it freed: %', v; end if;
+  if (v->>'freed')::int < 5 then raise exception 'ASSERT 040cg2: the release must count every duty seat it freed: %', v; end if;
 end $$;
 
 reset role;
@@ -587,6 +550,10 @@ begin
   if exists (select 1 from sc.operators where revoked_at is null) then
     raise exception 'ASSERT 040ci2: every duty binding must be freed by the release';
   end if;
+  -- The allow-list is untouched by a release: organisers do not lock themselves out.
+  if (select count(*) from sc.admin_devices) <> 2 then
+    raise exception 'ASSERT 040ci3: a board release must never trim the admin allow-list';
+  end if;
 end $$;
 
 -- Re-bind the duty identities for the last sections.
@@ -600,8 +567,8 @@ insert into sc.operators (user_id, role, display_name, seat_slot) values
   ('22222222-0000-4000-8000-000000000016', 'OBSERVER',   'VIEWER', 1)
 on conflict (user_id) do update set role = excluded.role, seat_slot = excluded.seat_slot,
   revoked_at = null, bound_at = now();
--- A team is on the clock again: the release must now be refused, and the board must
--- say so with the same words the RPC uses.
+-- A team is on the clock again: the plain release must now be refused, and the
+-- board must say so with the same words the RPC uses.
 set local role authenticated;
 do $$
 declare v jsonb; rev bigint; b jsonb;
@@ -609,6 +576,7 @@ begin
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000011', true);
   rev := (public.state_revision()->>'revision')::bigint;
   v := public.handle_command('CALL_TEAM', '{"team_name":"Do chặn release"}'::jsonb, rev, '040-call-block');
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040ci5: reception for the release-block probe failed: %', v; end if;
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000012', true);
   rev := (public.state_revision()->>'revision')::bigint;
   v := public.handle_command('CONFIRM_FLOOR2', '{}'::jsonb, rev, '040-floor2-block');
@@ -622,36 +590,57 @@ begin
     raise exception 'ASSERT 040cj: a live round must block the release, and say why: %', b;
   end if;
   perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000015', true);
-  v := public.reset_all_stations('greenwich99');
+  v := public.reset_all_stations(false);
   if v->>'code' <> 'RESET_GAME_RUNNING' then
     raise exception 'ASSERT 040ck: the RPC must refuse with the reason the board published: %', v;
   end if;
-  -- A pending in-time claim blocks the release for its own reason.
-  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000014', true);
-  rev := (public.state_revision()->>'revision')::bigint;
-  v := public.handle_command('CLAIM_COMPLETE', '{}'::jsonb, rev, '040-claim-block');
-  if not (v->>'ok')::boolean then raise exception 'ASSERT 040ck2: the claim must be recorded: %', v; end if;
-  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000013', true);
-  rev := (public.state_revision()->>'revision')::bigint;
-  v := public.handle_command('EARLY_EXIT', '{"reason":"khách xin ra"}'::jsonb, rev, '040-early-block');
-  if not (v->>'ok')::boolean then raise exception 'ASSERT 040cl: an early exit is a departure: %', v; end if;
-  if (select exit_confirmed_at from sc.rounds order by id desc limit 1) is null then
-    raise exception 'ASSERT 040cm: EARLY_EXIT must be the departure confirmation itself';
+  -- The emergency path: force closes the open round as a recorded safety
+  -- cancellation, frees every seat, and still never deletes a single fact.
+  v := public.reset_all_stations(true);
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040ck5: the forced release must succeed: %', v; end if;
+end $$;
+-- The release just revoked every binding, so the authenticated role can no longer
+-- see the rounds through RLS — exactly what a kicked phone experiences. The proof
+-- that history survived is therefore taken as the owner.
+reset role;
+do $$
+declare rid bigint; r jsonb; ev constant bigint := (select id from sc.events where name = 'Unified flow 040');
+begin
+  select id into rid from sc.rounds where event_id = ev and status <> 'CLOSED' order by id desc limit 1;
+  if rid is not null then raise exception 'ASSERT 040ck5a: force must leave no round of this event open (rid=%)', rid; end if;
+  select to_jsonb(x) into r from sc.rounds x where x.event_id = ev order by id desc limit 1;
+  if r->>'status' <> 'CLOSED' or r->>'abort_kind' <> 'safety' or (r->>'aborted_at') = 'null'
+     or r->>'result' <> 'ABORTED' or (r->>'official_duration_ms') <> 'null' then
+    raise exception 'ASSERT 040ck6: force must cancel and close the open round without inventing a score (row=%)', r;
   end if;
-  b := public.station_board();
-  if (b->>'reset_block_reason') <> 'PENDING_CLAIM' then
-    raise exception 'ASSERT 040cn: an open in-time claim blocks the release by name: %', b;
+  if not exists (select 1 from sc.action_log where action = 'ABORT_ROUND'
+                  and (metadata->>'forced')::boolean) then
+    raise exception 'ASSERT 040ck7: the forced cancellation must stand in the immutable log';
   end if;
-  -- NPC1 never has to confirm the same departure twice.
-  rev := (public.state_revision()->>'revision')::bigint;
-  v := public.handle_command('EARLY_EXIT', '{"reason":"nhầm"}'::jsonb, rev, '040-early-twice');
-  if v->>'code' <> 'INVALID_STATE' then raise exception 'ASSERT 040co: a cancelled round is not cancelled twice: %', v; end if;
+  if exists (select 1 from sc.operators where revoked_at is null) then
+    raise exception 'ASSERT 040ck8: force frees every device, admin included';
+  end if;
+  -- The allow-list survives its own emergency sweep: two organisers can always
+  -- get back in with their own devices.
+  if (select count(*) from sc.admin_devices) <> 2 then
+    raise exception 'ASSERT 040ck9: even a forced release never trims the allow-list';
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------------
 -- 8. No 90-minute business is left running underneath the screens
 -- ---------------------------------------------------------------------------
 reset role;
+-- Re-bind the crew for the sections that still walk a round through the flow.
+insert into sc.operators (user_id, role, display_name, seat_slot) values
+  ('22222222-0000-4000-8000-000000000011', 'LOBBY',      'T01', 1),
+  ('22222222-0000-4000-8000-000000000012', 'CORRIDOR',   'T02', 1),
+  ('22222222-0000-4000-8000-000000000013', 'GATE',       'TN1', 1),
+  ('22222222-0000-4000-8000-000000000014', 'ROOM305',    'TN2', 1),
+  ('22222222-0000-4000-8000-000000000015', 'SUPERVISOR', 'TSV', 1),
+  ('22222222-0000-4000-8000-000000000016', 'OBSERVER',   'VIEWER', 1)
+on conflict (user_id) do update set role = excluded.role, seat_slot = excluded.seat_slot,
+  revoked_at = null, bound_at = now();
 update sc.runtime_flags set allow_test_clock = true,
   test_now_ms = (extract(epoch from clock_timestamp()) * 1000)::bigint + 90 * 60_000 + 12 * 60_000;
 set local role authenticated;
@@ -675,13 +664,19 @@ begin
   v := public.handle_command('OVERRIDE_ADMIT', '{"reason":"th"}'::jsonb,
         (public.state_revision()->>'revision')::bigint, '040-admit');
   if v->>'code' <> 'PERMISSION_DENIED' then raise exception 'ASSERT 040cs: the cutoff override must be gone: %', v; end if;
-  -- Manual closure still refuses while a team is unaccounted for, then works.
+  -- Manual closure still refuses while a team is unaccounted for. The forced sweep
+  -- above left the floor perfectly idle, so receive a fresh team to test the rule.
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000011', true);
+  v := public.handle_command('CALL_TEAM', '{"team_name":"Do 90 phut"}'::jsonb,
+        (public.state_revision()->>'revision')::bigint, '040-call-90');
+  if not (v->>'ok')::boolean then raise exception 'ASSERT 040cs2: reception for the closure probe failed: %', v; end if;
+  perform set_config('request.jwt.claim.sub', '22222222-0000-4000-8000-000000000015', true);
   v := public.handle_command('END_EVENT', '{"reason":"hết ca"}'::jsonb,
         (public.state_revision()->>'revision')::bigint, '040-end-blocked');
   if v->>'code' <> 'BLOCKED' then raise exception 'ASSERT 040ct: closure must wait for the floor: %', v; end if;
   b := public.station_board();
   if (b->>'game_running')::text <> 'false' then
-    raise exception 'ASSERT 040cu: an early exit already accounts for the team: %', b;
+    raise exception 'ASSERT 040cu: a team received but not started must not count as inside: %', b;
   end if;
 end $$;
 
@@ -697,8 +692,10 @@ begin
   if jsonb_array_length(coalesce(s->'attempts', '[]'::jsonb)) <> 0 then
     raise exception 'ASSERT 040cw: a viewer must not read the claim list';
   end if;
-  if s::text like '%greenwich99%' or s::text like '$2b$%' or s::text like '%code_hash%' then
-    raise exception 'ASSERT 040cx: no secret or hash may reach a snapshot';
+  -- The allow-list, its uuids and any remnant of the old credential vocabulary
+  -- must never surface in a snapshot either.
+  if s::text like '%admin_devices%' or s::text like '%code_hash%' or s::text like '$2b$%' then
+    raise exception 'ASSERT 040cx: no secret, hash or allow-list data may reach a snapshot';
   end if;
   if exists (select 1 from jsonb_array_elements(coalesce(s->'rounds','[]'::jsonb)) r
               where r ? 'abort_reason' or r ? 'exit_by' or r ? 'review_reasons') then
@@ -713,11 +710,11 @@ end $$;
 reset role;
 update sc.runtime_flags set allow_test_clock = false, test_now_ms = null;
 update sc.operators set revoked_at = now() where revoked_at is null;
-delete from sc.station_codes;
-delete from sc.access_rate_limits;
+delete from sc.admin_devices;
 
-select '040 v3.1 hardening: crew codes, configurable duration snapshots, cancellation truth, '
-    || 'pending-claim rights, supervisor-only board release, retired 90-minute business, '
-    || 'Vietnamese refusals and viewer redaction: passed' as result;
+select '040 v3.2 hardening: credential-free seats, admin allow-list gating, '
+    || 'configurable duration snapshots, cancellation truth, pending-claim rights, '
+    || 'role-gated board release with a forced emergency sweep that preserves history, '
+    || 'retired 90-minute business, Vietnamese refusals and viewer redaction: passed' as result;
 
 rollback;

@@ -14,7 +14,7 @@ export default async function setup() {
     const files = ['supabase/tests/000_local_auth_stub.sql', ...readdirSync('supabase/migrations').sort().map(f=>'supabase/migrations/'+f)];
     for (const f of files) docker(['exec','-i',NAME,'psql','-U','postgres','-d','sc305_access','-v','ON_ERROR_STOP=1','-q'],readFileSync(f,'utf8'));
     docker(['exec','-i',NAME,'psql','-U','postgres','-d','sc305_access','-v','ON_ERROR_STOP=1','-q'],
-      "select sc.configure_station_access('9876543210',false); select sc._ensure_event();");
+      "select sc._ensure_event();");
   } catch (err) { docker(['rm','-f',NAME]); throw err; }
   return () => { docker(['rm','-f',NAME]); };
 }

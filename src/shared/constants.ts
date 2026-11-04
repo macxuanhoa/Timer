@@ -89,12 +89,11 @@ export const ABORT_KIND_LABEL: Record<AbortKind, string> = {
 };
 
 /**
- * Crew codes for the four operating positions (V3.1 §5). The code itself never
- * reaches the repository: only its bcrypt hash lives in PostgreSQL.
+ * V3.2: the four operating positions are password-free by design. Opening the
+ * link and tapping a free seat is the whole joining ritual; the only server-side
+ * gate left is the supervisor allow-list, which lives in PostgreSQL and never in
+ * this bundle. The old crew-code constants are gone.
  */
-export const STATION_CODE_MIN = 4;
-export const STATION_CODE_MAX = 12;
-export const STATION_CODE_PATTERN = /^[A-Z0-9]{4,12}$/;
 
 export type Role = (typeof ROLES)[number];
 export type StationRole = (typeof STATION_ROLES)[number];

@@ -233,6 +233,21 @@ The historical mint tool refuses operation on the new access model.
    trusted with the secret, an administrator may instead revoke one lost `user_id` in `sc.operators`
    from a trusted SQL session.
 
+14. **Next shift, same room (migration 0018)**: after the retained supervisor closes the event
+   with `ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT`, every phone reads `SỰ KIỆN ĐÃ KẾT THÚC` and no station can
+   receive a team. To hand the room to the next shift, the supervisor taps the **MỞ SỰ KIỆN MỚI**
+   button — either on the finished-event card on the dashboard or in `Xem thêm → Quản trị →
+   KIỂM SOÁT KHẨN CẤP`. An optional name may be typed there; leaving it blank reuses the closed
+   event's name. PostgreSQL creates a fresh `sc.events` row that inherits the operational
+   configuration (round duration, prep allowance, reset target, hidden-object owner, hiding layout,
+   review threshold, stall warning), moves `sc.state.event_id` to it, resets every clock to null
+   and restarts the team sequence at #001. Rounds, completion attempts, reset tasks and
+   `sc.action_log` rows of the closed event stay exactly where they were — nothing about the
+   previous shift is deleted, rewritten or reset. OPERATOR 01 can then receive the first team of
+   the new night on the same five phones, and every phone adopts the fresh event as soon as the
+   Realtime broadcast for `sc.state` lands (the frame carries the new `event_id`, so a lower
+   revision on the new pointer is treated as authoritative, not stale).
+
 ## Security and administration
 
 Migration **0016_unified_flow.sql** carries the V3 flow into the production authority: it adds the
@@ -244,6 +259,16 @@ that are still on the floor keep exactly the time they had left (a stored deadli
 from the retired banked-time fields, so nobody gains or loses a millisecond from the upgrade).
 Rounds that a newer round demonstrably superseded are marked `CLOSED`; their own stamps are kept and
 no clearance is claimed for them. Applied migration files 0001–0015 are unchanged.
+
+Migration **0018_open_new_event.sql** adds the counterweight to `END_EVENT`: a single new
+`OPEN_NEW_EVENT` action, registered in `sc.role_permissions` for `SUPERVISOR` only, intercepted
+inside the `sc.handle_command` wrapper before `_handle_command_internal` reads the current event.
+It inserts a fresh `sc.events` row that inherits the closed event's operational configuration,
+moves `sc.state.event_id` to it, and writes one `sc.action_log` entry (against the new event, so
+the closed event's audit stays intact). Every previous shift's rounds, claims, checklist rows and
+audit entries stay exactly where they were. Applied to a database already carrying a closed event
+it simply unlocks the next shift; applied to a fresh database it changes nothing until a supervisor
+presses the button. Migration files 0001–0017 are unchanged.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, the partial unique index on (role, seat_slot) and the slot CHECK constraints
@@ -340,7 +365,12 @@ confirmation, the bypass and its stale-press refusal, announcement/announcement 
 verified after the deadline, a late claim that cannot win, TIME UP, exit, closure, the next team
 inheriting nothing, and the observer seat (no PIN, redacted view, `READ_ONLY` on every command,
 ten seats then the eleventh refused, a seat surviving a refresh and an abandoned seat expiring).
-Never run the local auth stub against hosted Supabase.
+Scenario **041** then proves the OPEN_NEW_EVENT handoff on the production RPCs: a duty seat and a
+viewer are refused, a live event refuses with `INVALID_STATE`, an actual handoff creates a fresh
+`sc.events` row that inherits the round window and hidden-object configuration, moves the pointer,
+resets every clock and the team sequence to #001, and — checked with an owner-role fingerprint —
+leaves every closed-event row exactly where it was. An idempotent retry with the same key opens
+exactly one event. Never run the local auth stub against hosted Supabase.
 
 The workflow browser suite uses the local authoritative engine and covers the full round on four
 phones plus a viewer: locked countdown, claim and verification, exit, reset and closure, the bypass

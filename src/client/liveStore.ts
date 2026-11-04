@@ -112,7 +112,12 @@ export class LiveStore {
         // server timestamp carried by the frame to refine the clock estimate.
         if (hint.server_now_ms) this.clock.observe(hint.server_now_ms, this.now());
         this.patch({ lastVerifiedMono: this.now(), streamAlive: true, status: this.state.snapshot ? 'CONNECTED' : 'SYNCING' });
-        if (current && hint.revision <= current.revision) return;
+        // A revision drop is normally stale — unless the state pointer has just
+        // moved to a fresh event via OPEN_NEW_EVENT, which restarts the sequence
+        // at 1. Adopt that case; every other lower-revision hint stays ignored.
+        if (current && hint.revision <= current.revision) {
+          if (!hint.event_id || hint.event_id === current.event.id) return;
+        }
         void this.refresh(hint.revision);
       },
       onStatus: (status) => {

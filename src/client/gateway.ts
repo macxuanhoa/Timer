@@ -21,6 +21,15 @@ export interface SessionAccount {
 export interface RevisionHint {
   revision: number;
   server_now_ms: number;
+  /**
+   * Identifier of the event the state pointer refers to. Only a hint whose event
+   * differs from the phone's current view can legitimately carry a lower revision,
+   * because a new event restarts the sequence at 1. The client uses it to skip the
+   * "lower revision is stale / duplicate" bail when a supervisor has just pressed
+   * OPEN_NEW_EVENT, so every phone adopts the fresh event without waiting for the
+   * 10-second periodic verification.
+   */
+  event_id?: string;
 }
 
 /** Minimal transport contract shared by the local engine and Supabase. */
@@ -145,7 +154,11 @@ export class LocalGateway implements Gateway {
               const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
               if (!dataLine) continue;
               const payload = JSON.parse(dataLine.slice(5).trim()) as RevisionHint & { r?: number };
-              handlers.onRevision({ revision: payload.revision ?? payload.r ?? 0, server_now_ms: payload.server_now_ms });
+              handlers.onRevision({
+                revision: payload.revision ?? payload.r ?? 0,
+                server_now_ms: payload.server_now_ms,
+                event_id: payload.event_id,
+              });
             }
           }
         } catch {

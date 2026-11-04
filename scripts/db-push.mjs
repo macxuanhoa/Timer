@@ -106,6 +106,11 @@ async function main() {
       '0015_reset_guard.sql',
       '0016_unified_flow.sql',
       '0017_v31_hardening.sql',
+      // V3.2+ follow-up: adds the SUPERVISOR OPEN_NEW_EVENT action so a shift can
+      // hand the room to the next one without SQL surgery. Forward-only and
+      // history-preserving — every existing sc.events row and every audit entry
+      // stays exactly where it was.
+      '0018_open_new_event.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

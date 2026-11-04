@@ -465,13 +465,18 @@ describe('legacy rows — the upgrade keeps a running event readable', () => {
 /**
  * Reads a pre-upgrade state through the engine's own hydrate path, which is exactly
  * what happens to the live row when a deploy lands mid-event.
+ *
+ * The round arrives with the arbitrary event_id `evt_1` (the legacy status vocabulary
+ * is what is under test, not the event pointer). We re-home it on the seeded event
+ * before handing the state to the engine, because snapshot() filters every array on
+ * the current event id — the same contract sc.snapshot() enforces in production.
  */
 function legacySnapshot(round: Record<string, unknown>): Snapshot {
   const base = initialState(T0);
   const state = {
     ...base,
     event: { ...base.event, event_started_at: T0, revision: 1 },
-    rounds: [round],
+    rounds: [{ ...round, event_id: base.event.id }],
   };
   const engine = new ScreamEngine(state as never, new FakeClock(T0 + 120_000), {});
   return engine.snapshot();

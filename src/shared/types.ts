@@ -315,6 +315,9 @@ export type ActionType =
   | 'REOPEN_RESET'
   | 'REVIEW_RESOLVE'
   | 'END_EVENT'
+  /* Reopens the operating surface after END_EVENT by pointing sc.state at a fresh
+     sc.events row. SUPERVISOR only; history of the closed event is untouched. */
+  | 'OPEN_NEW_EVENT'
   | 'ABORT_ROUND'
   | 'CORRECT_ROUND'
   | 'OVERRIDE_ADMIT'

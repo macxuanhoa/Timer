@@ -280,6 +280,7 @@ export const ACTION_LABEL: Record<string, string> = {
   REOPEN_RESET: 'Mở lại một bước reset',
   REVIEW_RESOLVE: 'Xét lại kết quả tranh chấp',
   END_EVENT: 'Đóng sự kiện',
+  OPEN_NEW_EVENT: 'Mở sự kiện mới',
   ABORT_ROUND: 'Hủy lượt chơi',
   CORRECT_ROUND: 'Hiệu chỉnh mốc thời gian có nhật ký',
   /* retired — a crew code, an old deadline or a cancelled session still appears in history */

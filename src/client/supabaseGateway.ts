@@ -126,10 +126,14 @@ export class SupabaseGateway implements Gateway {
           'postgres_changes',
           { event: 'UPDATE', schema: 'sc', table: 'state' },
           (payload) => {
-            const next = payload.new as { revision: string | number; updated_at: string };
+            const next = payload.new as { revision: string | number; updated_at: string; event_id?: string | number };
             handlers.onRevision({
               revision: Number(next.revision),
               server_now_ms: next.updated_at ? new Date(next.updated_at).getTime() : Date.now(),
+              // A different event_id is the one legitimate reason a revision may
+              // go DOWN (a fresh event starts at 1); liveStore uses this to adopt
+              // the new event without waiting for the periodic verify tick.
+              event_id: next.event_id === undefined || next.event_id === null ? undefined : String(next.event_id),
             });
           },
         )

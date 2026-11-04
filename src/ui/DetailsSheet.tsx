@@ -540,12 +540,16 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   });
   const [review, setReview] = useState<{ round_id: string; reason: string }>({ round_id: '', reason: '' });
   const [closeReason, setCloseReason] = useState('');
+  // V3.2+: the fresh event name is optional; blank means "keep the closed event's
+  // name", so an identical night can be reopened without re-typing the title.
+  const [newEventName, setNewEventName] = useState('');
   const [correction, setCorrection] = useState<{ round_id: string; field: string; value: string }>({
     round_id: '',
     field: 'exit_confirmed_at',
     value: '',
   });
   const started = snap.event.event_started_at !== null;
+  const ended = snap.event.event_ended_at !== null;
   const round: Round | null = snap.active_round;
   const disputed = disputedRounds(snap.rounds);
   const durationMs = (Number(minutes) || 0) * 60_000 + (Number(seconds) || 0) * 1000;
@@ -724,7 +728,38 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
 
       <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
-        {!started ? (
+        {ended ? (
+          /* The event is closed. The only move that hands the room to the next shift
+             is OPEN_NEW_EVENT: it points sc.state at a fresh sc.events row that
+             inherits this event's configuration, and writes a new audit entry —
+             nothing on the closed event is deleted or rewritten. */
+          <div className="flex flex-col gap-2">
+            <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-open-hint">
+              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội. Lịch sử, lượt chơi,
+              lần báo hoàn thành, checklist reset và nhật ký của sự kiện vừa rồi giữ nguyên.
+            </p>
+            <input
+              value={newEventName}
+              onChange={(e) => setNewEventName(e.target.value)}
+              placeholder="Tên sự kiện mới (bỏ trống = giữ tên cũ)"
+              className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="new-event-name"
+            />
+            <button
+              type="button"
+              disabled={store.getSnapshot().pending === 'OPEN_NEW_EVENT'}
+              onClick={() => {
+                const name = newEventName.trim().replace(/\s+/g, ' ');
+                void store.act('OPEN_NEW_EVENT', name ? { event_name: name } : {});
+                setNewEventName('');
+              }}
+              className="rounded-panel border border-jade/60 bg-jade/10 px-3 py-4 text-[0.8rem] font-bold text-jade disabled:opacity-50"
+              data-testid="admin-open-new"
+            >
+              MỞ SỰ KIỆN MỚI
+            </button>
+          </div>
+        ) : !started ? (
           <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
             Nhân sự 01 nhận đội đầu tiên ở sảnh. NPC 1 bấm BẮT ĐẦU để mở đồng hồ lượt chơi.
           </p>

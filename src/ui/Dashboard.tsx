@@ -225,6 +225,8 @@ export function Dashboard({ store, account, onLogout }: Props) {
               successful={snap.rounds.filter((r) => r.result === 'WON').length}
               endedAt={snap.event.event_ended_at ?? snap.server_now_ms}
               onOpenReport={() => { setSheetTab('report'); setSheetOpen(true); }}
+              isSupervisor={account.role === 'SUPERVISOR'}
+              onOpenNewEvent={() => { setSheetTab('admin'); setSheetOpen(true); }}
             />
           ) : (
             <>
@@ -403,8 +405,13 @@ export function Dashboard({ store, account, onLogout }: Props) {
 /* --------------------------------------------------------------- flow screens */
 
 /** Whole-event summary shown in place of the idle clock once the event ended. */
-function EventEndedCard({ rounds, successful, endedAt, onOpenReport }: {
+function EventEndedCard({ rounds, successful, endedAt, onOpenReport, isSupervisor, onOpenNewEvent }: {
   rounds: number; successful: number; endedAt: number; onOpenReport(): void;
+  /** SUPERVISOR only: hands the room to the next shift by pointing sc.state at a
+      fresh sc.events row. Opens the sheet's Quản trị group where the confirm
+      input and the actual OPEN_NEW_EVENT press live. */
+  isSupervisor?: boolean;
+  onOpenNewEvent?(): void;
 }) {
   return (
     <section className="ended-card flex w-full flex-col items-center gap-3 px-4 py-8 text-center" data-testid="event-ended-card">
@@ -415,6 +422,16 @@ function EventEndedCard({ rounds, successful, endedAt, onOpenReport }: {
       <p className="text-[0.72rem] leading-snug text-mute" data-testid="event-ended-summary">
         {rounds} lượt · {successful} đội thành công · đóng lúc {formatWallTime(endedAt)}
       </p>
+      {isSupervisor && onOpenNewEvent ? (
+        <button
+          type="button"
+          onClick={onOpenNewEvent}
+          className="w-full rounded-panel border border-jade/60 bg-jade/10 px-4 py-3.5 text-[0.82rem] font-bold text-jade active:bg-jade/20"
+          data-testid="open-new-event"
+        >
+          MỞ SỰ KIỆN MỚI
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onOpenReport}
@@ -424,7 +441,9 @@ function EventEndedCard({ rounds, successful, endedAt, onOpenReport }: {
         XEM BÁO CÁO & LỊCH SỬ
       </button>
       <p className="text-[0.66rem] leading-snug text-mute" data-testid="ended-board-note">
-        Bảng vị trí vẫn mở cho ca tiếp theo — chọn lại vị trí ở màn hình đầu tiên.
+        {isSupervisor
+          ? 'Bấm MỞ SỰ KIỆN MỚI để bàn giao phòng cho ca tiếp theo. Lịch sử sự kiện vừa rồi được giữ nguyên.'
+          : 'Bảng vị trí vẫn mở. Chờ Quản trị viên mở sự kiện mới để ca tiếp theo bắt đầu.'}
       </p>
     </section>
   );

@@ -211,8 +211,13 @@ export class ScreamEngine {
   }
 
   private activeRound(): Round | null {
+    // Mirror the SQL's per-event scan ("where event_id = v_event.id and status <> 'CLOSED'").
+    // After OPEN_NEW_EVENT the closed event's terminal rounds stay in `state.rounds`
+    // as audit history, but they must never be read as a live round of the new event.
+    const eventId = this.state.event.id;
     for (let i = this.state.rounds.length - 1; i >= 0; i--) {
       const r = this.state.rounds[i];
+      if (r.event_id !== eventId) continue;
       if (!isTerminalRound(r)) return r;
     }
     return null;
@@ -220,15 +225,23 @@ export class ScreamEngine {
 
   /** Latest committed state plus the authoritative server instant. */
   snapshot(nowMs = this.clock.nowMs()): Snapshot {
+    // SQL's sc.snapshot() joins every array on `event_id = v_event.id`. The in-memory
+    // engine mirrors that exactly, so the test hub behaves identically to production
+    // across an OPEN_NEW_EVENT: the closed event's rounds, claims, checklist and
+    // action_log stay in `state` for fullLog() and CSV export of history, but the
+    // snapshot a phone reads only ever carries the current event.
+    const eventId = this.state.event.id;
+    const currentRounds = this.state.rounds.filter((r) => r.event_id === eventId);
+    const roundIds = new Set(currentRounds.map((r) => r.id));
     return finalizeSnapshot({
       revision: this.state.event.revision,
       server_now_ms: nowMs,
       event: structuredClone(this.state.event),
-      rounds: structuredClone(this.state.rounds),
-      reset_tasks: structuredClone(this.state.reset_tasks),
-      attempts: structuredClone(this.state.attempts),
+      rounds: structuredClone(currentRounds),
+      reset_tasks: structuredClone(this.state.reset_tasks.filter((t) => roundIds.has(t.round_id))),
+      attempts: structuredClone(this.state.attempts.filter((a) => roundIds.has(a.round_id))),
       operators: this.operatorStates(),
-      log: structuredClone(this.state.log.slice(-400)),
+      log: structuredClone(this.state.log.filter((l) => l.event_id === eventId).slice(-400)),
     });
   }
 
@@ -336,6 +349,7 @@ export class ScreamEngine {
       REOPEN_RESET: this.onReopenReset,
       REVIEW_RESOLVE: this.onReviewResolve,
       END_EVENT: this.onEndEvent,
+      OPEN_NEW_EVENT: this.onOpenNewEvent,
       ABORT_ROUND: this.onAbortRound,
       CORRECT_ROUND: this.onCorrectRound,
     };
@@ -1165,6 +1179,64 @@ export class ScreamEngine {
   }
 
   /**
+   * Counterweight to END_EVENT. Points the state pointer at a fresh event so the
+   * next shift can receive a team without touching the closed event's history.
+   *
+   * The precondition mirrors the SQL handle_command wrapper exactly:
+   *   - the current event is closed (event_ended_at is not null);
+   *   - every round of that closed event is CLOSED (activeRound already respects
+   *     the per-event filter, so a lingering open round on the current event is
+   *     what the second branch below actually detects).
+   * A fresh EventSession inherits the closed event's operational configuration —
+   * round duration, prep allowance, reset target, hidden-object owner, hiding
+   * layout, review threshold, stall warning — so the new night starts exactly
+   * where the last one left off. Every clock stays null and the team sequence
+   * restarts at #001. The name may be overridden via meta.event_name.
+   *
+   * Nothing about the closed event is deleted or rewritten: its rounds, claims,
+   * reset tasks and audit rows stay in the engine state, exactly as they stay in
+   * sc.events / sc.rounds / sc.action_log in production. Only `this.state.event`
+   * moves, and `commit()` then writes the OPEN_NEW_EVENT entry on the new event.
+   */
+  private onOpenNewEvent(req: CommandRequest, now: number): CommandResult {
+    const previous = this.state.event;
+    if (previous.event_ended_at === null) {
+      return this.result(false, 'INVALID_STATE',
+        'Phải đóng sự kiện hiện tại trước khi mở sự kiện mới', this.revision, now);
+    }
+    if (this.activeRound()) {
+      return this.result(false, 'INVALID_STATE',
+        'Vẫn còn lượt chơi chưa đóng trong sự kiện vừa kết thúc', this.revision, now);
+    }
+    const override = typeof req.meta?.event_name === 'string'
+      ? req.meta.event_name.trim().replace(/\s+/g, ' ')
+      : '';
+    const config: EventConfig = { ...previous.config };
+    if (override) config.event_name = override;
+    config.start_team_number = 1;
+    const fresh: EventSession = {
+      // Unique per-open even within the same millisecond: the closed event's id is
+      // a timestamp base, so a fresh id derived from the same instant would collide.
+      id: `evt_${now.toString(36)}_n${this.state.log.filter((l) => l.action === 'OPEN_NEW_EVENT').length + 1}`,
+      config,
+      event_started_at: null,
+      event_ended_at: null,
+      overtime_started_at: null,
+      closing_warned_at: null,
+      end_warned_at: null,
+      next_team_number: 1,
+      revision: 0,
+    };
+    this.state.event = fresh;
+    this.commit(req, now, null, 'ENDED', 'Đã mở sự kiện mới', {
+      previous_event_id: previous.id,
+      previous_event_name: previous.config.event_name,
+      previous_event_ended_at: previous.event_ended_at,
+    });
+    return this.result(true, 'OK', 'ĐÃ MỞ SỰ KIỆN MỚI', this.revision, now);
+  }
+
+  /**
    * Supervisor-side cancellation. It cancels the *round*; it never speaks for the
    * players' bodies (V3.1 §4.2): no exit stamp is written here, so NPC1 still has to
    * confirm the team is out of floor 3 before the area may be prepared again.
@@ -1325,8 +1397,13 @@ export class ScreamEngine {
 
   private operatorStates(): OperatorState[] {
     const roles: Role[] = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'SUPERVISOR'];
+    // Same event filter as sc.operator_states(p_event_id) in SQL: the station strip
+    // reports what the current night has done, not the last closed event's press.
+    const eventId = this.state.event.id;
     return roles.map((role) => {
-      const entry = [...this.state.log].reverse().find((l) => l.actor_role === role && l.actor_id !== 'system.clock');
+      const entry = [...this.state.log].reverse().find(
+        (l) => l.actor_role === role && l.actor_id !== 'system.clock' && l.event_id === eventId,
+      );
       const account = Object.values(this.accounts).find((a) => a.role === role);
       return {
         role,

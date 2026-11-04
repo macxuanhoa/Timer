@@ -61,7 +61,7 @@ export class TestHub {
     fake.advance(ms);
     const revision = this.engine.revision;
     this.engine.snapshot();
-    if (this.engine.revision !== revision) this.emit({ revision: this.engine.revision, server_now_ms: this.now() });
+    if (this.engine.revision !== revision) this.emit({ revision: this.engine.revision, server_now_ms: this.now(), event_id: this.engine.raw().event.id });
   }
 
   private emit(hint: RevisionHint): void {
@@ -88,7 +88,7 @@ export class TestHub {
       meta,
       press: press ?? { press_ms: this.clock.nowMs(), local_press_ms: Date.now(), rtt_ms: 0 },
     });
-    if (result.ok && this.engine.revision !== before) this.emit({ revision: this.engine.revision, server_now_ms: this.now() });
+    if (result.ok && this.engine.revision !== before) this.emit({ revision: this.engine.revision, server_now_ms: this.now(), event_id: this.engine.raw().event.id });
     return result;
   }
 

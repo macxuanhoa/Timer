@@ -50,6 +50,9 @@ export const ROLE_ACTIONS: Record<ActionType, string[]> = {
   REOPEN_RESET: ['SUPERVISOR'],
   REVIEW_RESOLVE: ['SUPERVISOR'],
   END_EVENT: ['SUPERVISOR'],
+  // The counterweight to END_EVENT: only the retained admin may hand the room to a
+  // new night, and only after the current event is closed and every round is CLOSED.
+  OPEN_NEW_EVENT: ['SUPERVISOR'],
   ABORT_ROUND: ['SUPERVISOR'],
   CORRECT_ROUND: ['SUPERVISOR'],
   /* ----------------------------------------------------------------- retired */
@@ -353,6 +356,10 @@ const PHASE_FREE: ActionType[] = [
   'REOPEN_RESET',
   'REVIEW_RESOLVE',
   'END_EVENT',
+  // OPEN_NEW_EVENT has no round to be gated on — its precondition is entirely on
+  // event_ended_at and on every prior round being CLOSED, both enforced inside the
+  // handle_command wrapper (and mirrored in engine.onOpenNewEvent).
+  'OPEN_NEW_EVENT',
   'CORRECT_ROUND',
 ];
 

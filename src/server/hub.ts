@@ -97,7 +97,15 @@ export function createHub(options: HubOptions = {}): Hub {
 
   const broadcast = (revision: number) => {
     stats.broadcasts += 1;
-    const payload = `event: revision\ndata: ${JSON.stringify({ revision, server_now_ms: clock.nowMs() })}\n\n`;
+    // Carrying event_id on every frame lets a phone tell "the pointer moved to a
+    // fresh event (revision restarts at 1)" apart from "this is a stale or
+    // duplicate hint", which is the exact distinction OPEN_NEW_EVENT needs so
+    // every station adopts the new night without waiting for the periodic verify.
+    const payload = `event: revision\ndata: ${JSON.stringify({
+      revision,
+      server_now_ms: clock.nowMs(),
+      event_id: engine.raw().event.id,
+    })}\n\n`;
     for (const res of clients) {
       try {
         res.write(payload);
@@ -447,7 +455,7 @@ export function createHub(options: HubOptions = {}): Hub {
         connection: 'keep-alive',
         'access-control-allow-origin': '*',
       });
-      res.write(`event: hello\ndata: ${JSON.stringify({ revision: engine.revision, server_now_ms: clock.nowMs() })}\n\n`);
+      res.write(`event: hello\ndata: ${JSON.stringify({ revision: engine.revision, server_now_ms: clock.nowMs(), event_id: engine.raw().event.id })}\n\n`);
       clients.add(res);
       stats.connectedClients = clients.size;
       const heartbeat = setInterval(() => {

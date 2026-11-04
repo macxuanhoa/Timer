@@ -84,6 +84,8 @@ try {
   run('039 unified flow scenario', ['supabase/tests/039_unified_flow.sql']);
   run('017 v3.1 hardening', ['supabase/migrations/0017_v31_hardening.sql']);
   run('040 v3.1 scenario', ['supabase/tests/040_v31_hardening.sql']);
+  run('018 open new event', ['supabase/migrations/0018_open_new_event.sql']);
+  run('041 open new event scenario', ['supabase/tests/041_open_new_event.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

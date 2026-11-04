@@ -1,6 +1,7 @@
 import type { ConnectionStatus, Gateway, RevisionHint } from './gateway';
 import { ServerClockEstimate } from './clockSync';
 import { DEGRADED_AFTER_MS, VERIFY_INTERVAL_MS } from '../shared/constants';
+import { CLIENT_BUILD, isClientStale } from '../shared/version';
 import type { ActionType, CommandRequest, CommandResult, Snapshot } from '../shared/types';
 import type { Role } from '../shared/constants';
 
@@ -24,6 +25,13 @@ export interface StoreState {
   lastVerifiedMono: number | null;
   streamAlive: boolean;
   rttMs: number | null;
+  /**
+   * V3.3 forced-update. True once the server has said "this bundle is stale" —
+   * either by refusing a command with VERSION_STALE, or by reporting a
+   * min_client_version above APP_VERSION on any periodic state_revision read.
+   * Every write blocks while this is set, and the UI shows the update gate.
+   */
+  staleClient: boolean;
 }
 
 export interface StoreAccount {
@@ -65,6 +73,7 @@ export class LiveStore {
     lastVerifiedMono: null,
     streamAlive: false,
     rttMs: null,
+    staleClient: false,
   };
   private listeners = new Set<() => void>();
   private unsubscribe: (() => void) | null = null;
@@ -118,6 +127,11 @@ export class LiveStore {
         if (current && hint.revision <= current.revision) {
           if (!hint.event_id || hint.event_id === current.event.id) return;
         }
+        // A broadcast means the state pointer moved; a phone that is stale in
+        // bundle terms picks that up on the verifyNow tick (which reads
+        // sc.state_revision and carries the min_client_version field). A
+        // realtime frame itself does not know the floor, so nothing to do here
+        // except refresh.
         void this.refresh(hint.revision);
       },
       onStatus: (status) => {
@@ -177,12 +191,17 @@ export class LiveStore {
       const rev = await this.opts.gateway.revision();
       this.clock.observe(rev.server_now_ms, started);
       const fresh = rev.event_id === (this.state.snapshot?.event.id ?? rev.event_id) && rev.revision === this.state.snapshot?.revision;
+      // V3.3 forced-update: the same probe that checks freshness also reports the
+      // minimum bundle the server will accept on the command surface. Read it
+      // here so a stale phone learns about the ceiling without pressing anything.
+      const stale = isClientStale(rev.min_client_version ?? '');
       this.patch({
         status: 'CONNECTED',
         lastVerifiedMono: this.now(),
         rttMs: this.clock.medianRtt,
         maxDisplayErrorMs: this.clock.maxErrorMs,
         clockReady: true,
+        staleClient: stale || this.state.staleClient,
       });
       if (!fresh) await this.refresh(rev.revision);
     } catch {
@@ -266,6 +285,13 @@ export class LiveStore {
       this.patch({ error: 'CHƯA ĐỒNG BỘ ĐƯỢC TRẠNG THÁI' });
       return null;
     }
+    // V3.3 forced-update: a stale bundle never reaches the wire. The server
+    // would refuse the command anyway, and the operator's screen already
+    // carries the update gate — the local refusal is the belt to that braces.
+    if (this.state.staleClient) {
+      this.patch({ error: 'PHIÊN BẢN ỨNG DỤNG ĐÃ CŨ — CẬP NHẬT TRƯỚC KHI TIẾP TỤC' });
+      return null;
+    }
     // Cannot act on state we could not verify recently.
     if (this.state.status === 'OFFLINE') {
       this.patch({ error: 'MẤT KẾT NỐI — chưa gửi thao tác' });
@@ -289,7 +315,10 @@ export class LiveStore {
       actor: { id: this.opts.account.id, role: this.opts.account.role, display_name: this.opts.account.display_name },
       expected_revision: snapshot.revision,
       idempotency_key: key,
-      meta,
+      // V3.3 forced-update: stamp the bundle the server should accept this
+      // command from. The reserved `_v` key is stripped inside sc.handle_command
+      // after the gate reads it, so no handler ever sees it in a business meta.
+      meta: { ...meta, _v: CLIENT_BUILD },
       press,
     };
 
@@ -311,6 +340,13 @@ export class LiveStore {
 
     if (!result) return null;
     if (!result.ok) {
+      if (result.code === 'VERSION_STALE') {
+        // The server rejected this phone's stamp — lock the surface on the
+        // update gate. The UI reads state.staleClient and shows the screen; no
+        // other action is offered until the fresh shell takes over.
+        this.patch({ staleClient: true, error: result.message });
+        return result;
+      }
       if (result.code === 'STALE_REVISION') {
         await this.refresh();
         this.patch({ notice: 'Trạng thái đã thay đổi từ thiết bị khác. Màn hình đã đồng bộ lại.' });

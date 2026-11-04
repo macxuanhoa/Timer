@@ -26,7 +26,7 @@ import type { ActionType, CommandMeta, Round } from '../shared/types';
 import { DetailsSheet } from './DetailsSheet';
 import { BigScreen } from './BigScreen';
 import { JourneyBoard, JourneyStepper } from './JourneyMap';
-import { ACCENT_HEX, ROLE_ACCENT, TEAM_TONE_HEX } from './accents';
+import { ACCENT_HEX, COUNTDOWN_TONE, ROLE_ACCENT, TEAM_TONE_HEX } from './accents';
 import {
   ArrowUpIcon,
   BarsIcon,
@@ -629,11 +629,31 @@ function CountdownScreen({ store, role, primary, countdown, attempts, alerts, pe
   // renders from, so it can never offer a control the server would refuse.
   const emergency = snap ? resolveEmergency(role, snap, store.serverNow()) : null;
   const busy = pending !== null || verifying !== null;
-  const tone = countdown.tone === 'danger' ? ACCENT_HEX.red : countdown.tone === 'warn' ? ACCENT_HEX.amber : ACCENT_HEX.green;
+  // V3.3 countdown tone. The digits now wear the poster's ember: hot orange on
+  // a running clock, brighter amber inside the last minute, deep blood once the
+  // round has expired or the exit is overdue. The frozen state (a validated win,
+  // the official time carried on screen) sits in bone-amber rather than the old
+  // corporate green so the whole surface stays in the horror palette.
+  const tone = countdown.tone === 'danger'
+    ? COUNTDOWN_TONE.danger
+    : countdown.tone === 'warn'
+      ? COUNTDOWN_TONE.warn
+      : countdown.running
+        ? COUNTDOWN_TONE.ok
+        : COUNTDOWN_TONE.frozen;
   const showAttempts = role === 'ROOM305' || attempts.some((a) => a.status !== 'PENDING');
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col items-center justify-between gap-2 overflow-y-auto px-3 pb-2" data-testid="countdown-screen" data-tone={countdown.tone}>
+    <main
+      className="relative flex min-h-0 flex-1 flex-col items-center justify-between gap-2 overflow-y-auto px-3 pb-2"
+      data-testid="countdown-screen"
+      data-tone={countdown.tone}
+      style={{ color: tone }}
+    >
+      {/* A soft radial behind the digits that reads as lantern light spilling
+          across the room. currentColor is inherited from the parent's inline
+          style, so the halo shifts with the tone. */}
+      <div className="countdown-screen-stage" aria-hidden />
       <div className="flex w-full items-center justify-between px-1 pt-1">
         <p className="text-[9px] font-semibold tracking-[0.16em] text-mute" data-testid="countdown-label">
           {countdown.heroLabel}

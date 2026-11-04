@@ -59,17 +59,23 @@
 .home-pin-blocked { font-size: 11px; line-height: 1.55; color: #f0a12a; margin: -4px 0 14px; }
 
 @theme {
-  --color-ink: #131316;
-  --color-panel: #1c1c20;
-  --color-panel2: #232329;
-  --color-hair: #2c2c33;
-  --color-mute: #8b8b94;
-  --color-snow: #f2f2f4;
-  --color-blood: #e1362c;
-  --color-ember: #f0a12a;
-  --color-jade: #1fb96e;
-  --color-azure: #3b82f6;
-  --color-violet: #a855f7;
+  /* V3.3 horror palette. Ink is a full blackout rather than a warm grey so the
+     ember and bone accents glow like the poster's single lantern; hair / panel
+     shift one notch darker so cards recede and the digits own the screen. */
+  --color-ink: #0a0a0c;
+  --color-panel: #17171b;
+  --color-panel2: #202028;
+  --color-hair: #2b2b33;
+  --color-mute: #8f8a92;
+  --color-snow: #f4efe6;
+  --color-blood: #d33a2f;
+  --color-ember: #f4893a;
+  /* "jade" keeps its name so nothing outside this file has to rename its
+     meaning; V3.3 re-tints it to bone-amber (the lantern glow) rather than a
+     corporate success green. */
+  --color-jade: #e6b877;
+  --color-azure: #5a9cab;
+  --color-violet: #a26cd9;
 
   --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-digital: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', monospace;
@@ -435,28 +441,51 @@
   }
 }
 
-/* ------------------------------------------------------------- countdown */
+/* ---------------------------------------------------------------- countdown */
 
 /* The locked screen puts minutes and seconds in the visual centre and keeps the
    hundredths an order of magnitude smaller, so the fraction can never compete with
-   the main clock. Tabular numerals stop the digits from shifting as they tick. */
+   the main clock. Tabular numerals stop the digits from shifting as they tick.
+
+   V3.3: the countdown now wears the poster's ember glow rather than the old
+   stopwatch jade. A subtle text-shadow halo sells the lantern light without
+   needing a heavy filter; when the round is on the last minute the tone shifts
+   to a hotter amber through the inline `color:` on the parent, and the halo
+   follows the currentColor. */
 .countdown-main {
   display: flex;
   align-items: baseline;
   gap: 0.18em;
-  font-size: clamp(3.4rem, 19vw, 5.6rem);
+  font-size: clamp(3.8rem, 22vw, 6rem);
   line-height: 0.95;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  text-shadow:
+    0 0 12px color-mix(in srgb, currentColor 45%, transparent),
+    0 0 32px color-mix(in srgb, currentColor 22%, transparent);
 }
 
 .countdown-fraction {
-  font-size: 0.26em;
+  font-size: 0.24em;
   font-weight: 600;
-  opacity: 0.55;
+  opacity: 0.6;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
+  text-shadow: none;
+}
+
+/* The countdown hero sits on a stage of its own: a soft radial behind the
+   digits that fades with the last 60 s, so the whole screen feels like a lit
+   set the operators stand inside. */
+.countdown-screen-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 55%, color-mix(in srgb, currentColor 12%, transparent), transparent 70%),
+    radial-gradient(ellipse 80% 40% at 50% 100%, rgba(0 0 0 / 0.6), transparent 60%);
+  z-index: -1;
 }
 
 .wall-main {

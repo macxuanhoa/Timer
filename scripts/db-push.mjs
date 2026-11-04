@@ -111,6 +111,11 @@ async function main() {
       // history-preserving — every existing sc.events row and every audit entry
       // stays exactly where it was.
       '0018_open_new_event.sql',
+      // V3.3 operations: per-seat supervisor release (fixes the stuck-NPC1 case)
+      // plus the forced-update version gate inside sc.handle_command. Two partial
+      // indexes back the live-round and outstanding-task probes. No rewrite of
+      // any historical row.
+      '0019_v33_operations.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

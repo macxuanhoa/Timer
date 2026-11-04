@@ -198,12 +198,31 @@ function legacyResult(outcome: Outcome | undefined): RoundResult {
 /* -------------------------------------------------------------------- engine */
 
 export class ScreamEngine {
+  /**
+   * V3.3 forced-update floor. Empty means "gate is off" — the default for a
+   * fresh database and every test that does not explicitly raise the ceiling.
+   * Any non-empty value is compared against a command's `meta._v` stamp before
+   * any other check, so a stale bundle never reaches a business rule. Kept on
+   * the engine instance (not in PersistedState) so `.scream-data/event.json`
+   * stays a state snapshot, and the ceiling survives a dev/test reset.
+   */
+  private minClientVersion = '';
+
   constructor(
     private state: PersistedState,
     private clock: Clock,
     private accounts: Record<string, Account>,
   ) {
     this.state = hydrateState(state);
+  }
+
+  /** Test + organiser hook: raise the floor, or drop it back to `''`. */
+  setMinClientVersion(v: string): void {
+    this.minClientVersion = (v ?? '').trim();
+  }
+
+  getRevisionFloor(): string {
+    return this.minClientVersion;
   }
 
   get revision(): number {
@@ -251,8 +270,15 @@ export class ScreamEngine {
   }
 
   /** Cheap freshness probe for the client's periodic authoritative check. */
-  revisionProbe(nowMs = this.clock.nowMs()): { revision: number; server_now_ms: number; event_id: string } {
-    return { revision: this.state.event.revision, server_now_ms: nowMs, event_id: this.state.event.id };
+  revisionProbe(nowMs = this.clock.nowMs()): {
+    revision: number; server_now_ms: number; event_id: string; min_client_version: string;
+  } {
+    return {
+      revision: this.state.event.revision,
+      server_now_ms: nowMs,
+      event_id: this.state.event.id,
+      min_client_version: this.minClientVersion,
+    };
   }
 
   /**
@@ -278,6 +304,19 @@ export class ScreamEngine {
     if (cached) {
       // A retry of an already-committed tap: never re-timestamp, never re-bump.
       return this.result(true, 'OK', cached.message, cached.revision, now);
+    }
+
+    // V3.3 forced-update gate. Mirrors sc.handle_command: the check runs before
+    // role, revision and phase so a stale bundle never reaches a business rule.
+    // `meta._v` is the reserved stamp key the client writes into every command;
+    // empty or missing is treated as "pre-V3.3 client" and refused when the
+    // floor is raised.
+    if (this.minClientVersion !== '') {
+      const stamp = typeof req.meta?._v === 'string' ? req.meta._v : '';
+      if (!stamp || semverLt(stamp, this.minClientVersion)) {
+        return this.result(false, 'VERSION_STALE',
+          'PHIÊN BẢN ỨNG DỤNG ĐÃ CŨ — CẬP NHẬT TRƯỚC KHI TIẾP TỤC', this.revision, now);
+      }
     }
 
     if (!this.accounts[req.actor.id] || this.accounts[req.actor.id].role !== req.actor.role) {
@@ -1432,9 +1471,31 @@ export function pad3(n: number): string {
   return String(n).padStart(3, '0');
 }
 
-/** “#004 · PHANTOM 05”, the identity every shared status sentence must carry. */
+/** "#004 · PHANTOM 05", the identity every shared status sentence must carry. */
 function labelOf(r: Round): string {
   return r.team_name ? `#${pad3(r.team_number)} · ${r.team_name}` : `#${pad3(r.team_number)}`;
+}
+
+/**
+ * Semver compare against the server's floor. Mirrors sc._semver_lt in
+ * migration 0019: build metadata after '+' is dropped, missing pieces count as
+ * zero, and any malformed piece falls back to zero so a stale client that
+ * cannot produce a stamp is refused rather than passed.
+ */
+function semverLt(left: string, right: string): boolean {
+  const parse = (v: string): number[] => (v.split('+')[0] ?? '').split('.').map((p) => {
+    const n = Number.parseInt(p, 10);
+    return Number.isFinite(n) ? n : 0;
+  });
+  const a = parse(left);
+  const b = parse(right);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x < y) return true;
+    if (x > y) return false;
+  }
+  return false;
 }
 
 /** The one sentence the whole room reads after a phase press. */

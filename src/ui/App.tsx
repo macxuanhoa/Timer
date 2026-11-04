@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dashboard } from './Dashboard';
 import { Home } from './Home';
 import { Observer } from './Observer';
+import { UpdateGate } from './UpdateGate';
 import { enterStation, gatewayFor, logout, refreshSession, saveSession, type StoredSession } from './session';
 import { USING_SUPABASE } from '../client/gateway';
 import { LiveStore } from '../client/liveStore';
 import { PwaUpdate } from './PwaUpdate';
+import { isClientStale } from '../shared/version';
 
 export default function App() {
   const [checking, setChecking] = useState(true);
@@ -13,6 +15,13 @@ export default function App() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveStore, setLiveStore] = useState<LiveStore | null>(null);
+  // V3.3 forced-update: the boot-time probe reads sc.state_revision() and
+  // detects "this bundle is stale" before the phone is even allowed to claim a
+  // seat. LiveStore.verifyNow also flips the store's own staleClient flag after
+  // login, and both paths feed the same UpdateGate screen. A phone that reads
+  // the floor as fresh never renders the gate; a phone that once read it as
+  // stale stays on the gate until the fresh shell takes over.
+  const [bootStale, setBootStale] = useState(false);
   const releasing = useRef(false);
   const generation = useRef(0);
   const sessionRef = useRef(session);
@@ -21,6 +30,33 @@ export default function App() {
   const acceptSession = useCallback((next: StoredSession) => {
     generation.current++;
     setError(null); setVerified(true); setSession(next);
+  }, []);
+
+  // Pre-login probe. Supabase anon can call public.state_revision() (granted
+  // in migration 0019); local dev uses /api/revision directly. Failing the
+  // probe never blocks the app: an offline phone falls back to the store's own
+  // verifyNow tick once a session exists.
+  useEffect(() => {
+    if (!USING_SUPABASE) {
+      // Local dev / transport test engine: read the ceiling from the in-process
+      // hub. If the fixture has raised it, lock the surface immediately.
+      void fetch('/api/revision').then((res) => res.ok ? res.json() : null)
+        .then((body) => {
+          const floor = (body as { min_client_version?: string } | null)?.min_client_version;
+          if (isClientStale(floor)) setBootStale(true);
+        })
+        .catch(() => undefined);
+      return;
+    }
+    void import('../client/supabaseAuth').then(({ supabase }) =>
+      supabase().rpc('state_revision').then(
+        ({ data }) => {
+          const row = data as { min_client_version?: string } | null;
+          if (isClientStale(row?.min_client_version)) setBootStale(true);
+        },
+        () => undefined,
+      ),
+    ).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -89,10 +125,9 @@ export default function App() {
   };
 
   if (checking) return <Splash text="ĐANG KIỂM TRA PHIÊN…" />;
+  if (bootStale) return <UpdateGate />;
   if (!session) return <><Home error={error} canSelect={verified} onEnter={acceptSession} /><PwaUpdate /></>;
   if (!liveStore) return <Splash text={error ?? 'ĐANG KẾT NỐI MÁY CHỦ…'} />;
-  // A viewer lands on the read-only board, never on an operator console. Which
-  // screen renders is decided from the server-resolved role, not from a route.
   return (
     <>
       {session.account.role === 'OBSERVER' ? (
@@ -101,8 +136,25 @@ export default function App() {
         <Dashboard store={liveStore} account={session.account} onLogout={release} />
       )}
       <PwaUpdate />
+      {/* Two sources agree on the gate: the pre-login probe (bootStale) and the
+          store's live read of sc.state_revision (liveStore.getSnapshot().staleClient).
+          Either one flips to true and the operator's screen is replaced by the
+          update gate until the fresh shell takes over. */}
+      <StaleGate store={liveStore} bootStale={bootStale} />
     </>
   );
+}
+
+/**
+ * Renders nothing while the phone is current, and the full-screen UpdateGate
+ * once either source (boot probe or live store) says the bundle is stale. Kept
+ * in its own component so useSyncExternalStore is only subscribed once a
+ * LiveStore exists.
+ */
+function StaleGate({ store, bootStale }: { store: LiveStore; bootStale: boolean }) {
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  if (!bootStale && !state.staleClient) return null;
+  return <UpdateGate />;
 }
 
 function Splash({ text }: { text: string }) {

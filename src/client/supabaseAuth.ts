@@ -175,6 +175,48 @@ export async function resetAllStations(force = false): Promise<ResetResult> {
   return data as ResetResult;
 }
 
+/**
+ * V3.3 per-seat release: free one named duty binding without touching the rest
+ * of the board. Migration 0019 attaches the RPC; the caller must hold a live
+ * SUPERVISOR binding inside PostgreSQL (the same authorisation model as
+ * resetAllStations). This is the escape hatch for the NPC1-stuck case —
+ * a duty phone walked off with the seat still bound, the whole-board sweep is
+ * refused because sc._floor_block_reason() still reads the machine as live,
+ * and there is no other path to give the seat back.
+ *
+ * The release never touches a clock, a round, a claim or a checklist; it is a
+ * pure access action. Every call lands a sc.access_audit row naming the freed
+ * identity and the caller. SUPERVISOR and OBSERVER targets are refused: a
+ * supervisor releases their own seat through the normal "Về Home" flow, and a
+ * stale viewer is swept by the heartbeat.
+ */
+export interface ReleaseStationResult {
+  ok: boolean;
+  code: string;
+  target?: string;
+  freed?: number;
+}
+
+export async function releaseStation(role: Role): Promise<ReleaseStationResult> {
+  await ensureAnonymousSession();
+  const { data, error } = await supabase().rpc('release_station', { p_role: role });
+  if (error) throw new Error(error.message);
+  return data as ReleaseStationResult;
+}
+
+/** The Vietnamese readout of a release_station refusal. */
+const RELEASE_ERROR: Record<string, string> = {
+  NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
+  RELEASE_NOT_AUTHORIZED: 'CHỈ MÁY ĐANG GIỮ GHẾ QUẢN TRỊ MỚI ĐƯỢC GIẢI CỨU MỘT VỊ TRÍ',
+  INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
+  RELEASE_SELF_TARGET: 'GHẾ QUẢN TRỊ KHÔNG GIẢI PHÓNG BẰNG CÁCH NÀY — DÙNG NÚT "VỀ HOME"',
+  RELEASE_NOT_BOUND: 'VỊ TRÍ ĐÓ ĐANG TRỐNG — KHÔNG CÓ GÌ ĐỂ GIẢI PHÓNG',
+};
+
+export function releaseErrorMessage(result: ReleaseStationResult | null): string {
+  return RELEASE_ERROR[result?.code ?? ''] ?? 'CHƯA GIẢI PHÓNG ĐƯỢC — KIỂM TRA KẾT NỐI';
+}
+
 /** Realtime carries no authority; its hints trigger a fresh occupancy RPC. */
 export function watchStationBoard(onChange: () => void): () => void {
   const sb = supabase();

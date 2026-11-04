@@ -270,6 +270,32 @@ audit entries stay exactly where they were. Applied to a database already carryi
 it simply unlocks the next shift; applied to a fresh database it changes nothing until a supervisor
 presses the button. Migration files 0001–0017 are unchanged.
 
+Migration **0019_v33_operations.sql** adds the V3.3 stabilisation surface:
+
+  * `sc.release_station(role)` frees one named duty binding. SUPERVISOR-only,
+    authorised by the caller's own live binding (the same model as
+    `sc.reset_all_stations`), it exists specifically for the stuck-seat case a
+    whole-board sweep cannot cover — the sweep is refused while the floor still
+    looks live, but a phone that walked off duty is precisely the situation the
+    operator needs to unstick. It never touches a round, a clock, a checklist or
+    an audit row of the game; it just leaves a `STATION_RELEASED` row in
+    `sc.access_audit` naming both the caller and the freed identity.
+  * `sc.runtime_flags.min_client_version` stores the bundle floor the command
+    surface accepts. `sc.handle_command` refuses anything stamped below it with
+    `VERSION_STALE` before any state check runs. A pre-V3.3 bundle sends no
+    stamp and is refused when the floor is raised; V3.3+ clients write
+    `p_meta._v = APP_VERSION+build` on every command, and `sc.state_revision()`
+    carries the floor to the phone on the probe it already polls. The
+    `configure_min_client_version` setter is owner-only and defaults to empty,
+    so a partially-deployed fleet is never stranded. The `release_station` and
+    `reset_all_stations` endpoints intentionally bypass the gate — a supervisor
+    phone that is itself stale must always be able to unstick the board.
+  * Two partial indexes (`rounds_live_idx`, `reset_tasks_open_idx`) back the
+    "one live round per event" and "any outstanding checklist task?" probes the
+    dashboard runs on every read.
+
+Migration files 0001–0018 are unchanged.
+
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, the partial unique index on (role, seat_slot) and the slot CHECK constraints
 provide additional enforcement: four single station slots plus two supervisor slots, never seven

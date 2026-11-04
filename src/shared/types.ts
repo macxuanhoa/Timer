@@ -480,6 +480,13 @@ export interface RevisionHintResponse {
   revision: number;
   server_now_ms: number;
   event_id: string;
+  /**
+   * The minimum client bundle version the authoritative layer will accept,
+   * as text (empty means "gate is off"). V3.3 forced-update: every phone reads
+   * it on the same probe it uses for the periodic freshness check, so a stale
+   * PWA is told to update without an extra round trip.
+   */
+  min_client_version?: string;
 }
 
 export interface CommandResult {
@@ -492,7 +499,14 @@ export interface CommandResult {
     | 'BLOCKED'
     | 'UNKNOWN_ACTION'
     /** A viewer has no operational authority at all. */
-    | 'READ_ONLY';
+    | 'READ_ONLY'
+    /**
+     * V3.3 forced-update: this bundle is stamped below the server's
+     * `min_client_version`. The authoritative layer refuses every state-changing
+     * command until the phone swaps to the fresh shell; the client surface
+     * locks onto the update gate so no other action is offered.
+     */
+    | 'VERSION_STALE';
   message: string;
   revision: number;
   snapshot?: Snapshot;

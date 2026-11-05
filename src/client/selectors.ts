@@ -1,5 +1,5 @@
 import type { HidingLayout, JourneyStopDef, ResetRowState, ResetTaskKey, Role, StationRole } from '../shared/constants';
-import { ACTION_LABEL, BIG_SCREEN_WARN_MS, DEGRADED_AFTER_MS, JOURNEY_STOPS, OBSERVER_CAPACITY, PHASE_LABEL, RESET_READOUT_ORDER, RESET_STATE_LABEL, RESET_TASK_LABEL, ROLE_AREA, ROLE_PERSON, ROLE_SHORT, STALL_WARN_MS, SYNC_STATE_LABEL, VERIFY_INTERVAL_MS, resetTasksSentence } from '../shared/constants';
+import { ACTION_LABEL, ATTEMPT_LABEL, BIG_SCREEN_WARN_MS, DEGRADED_AFTER_MS, JOURNEY_STOPS, OBSERVER_CAPACITY, PHASE_LABEL, RESET_READOUT_ORDER, RESET_STATE_LABEL, RESET_TASK_LABEL, ROLE_AREA, ROLE_PERSON, ROLE_SHORT, STALL_WARN_MS, SYNC_STATE_LABEL, VERIFY_INTERVAL_MS, resetTasksSentence } from '../shared/constants';
 import {
   attemptsOf,
   authorize,
@@ -512,6 +512,14 @@ export interface AttemptRow {
   inTime: boolean;
   /** The two decisions NPC2 may still make about this attempt. */
   open: boolean;
+  /**
+   * The one word for this row, from `ATTEMPT_LABEL` and whether the round can
+   * still be decided. Four surfaces print attempt status — NPC 2's history, the
+   * reset ledger, the flow screens' list and the audit's claim lines — and each
+   * used to spell it its own way, including a sealed PENDING that read as a
+   * rejection. They read this field now.
+   */
+  statusWord: string;
   verifiedAt: number | null;
   verifiedByRole: string | null;
   decisionNote: string | null;
@@ -530,6 +538,7 @@ export function resolveAttempts(snap: Snapshot, nowMs: number): AttemptRow[] {
   // A settled win closes the list; a cancellation only closes it when the round was
   // disqualified, so a claim recorded before the deadline stays judgable (§4.4).
   const judgable = attemptsJudgable(round, result);
+  const open = (a: CompletionAttempt) => judgable && (a.status === 'PENDING' || a.status === 'LATE');
   return attemptsOf(snap.attempts ?? [], round.id).map((a) => ({
     id: a.id,
     seq: a.seq,
@@ -538,12 +547,17 @@ export function resolveAttempts(snap: Snapshot, nowMs: number): AttemptRow[] {
     remainingMs: a.remaining_ms,
     status: a.status,
     inTime: a.in_time,
-    open: judgable && (a.status === 'PENDING' || a.status === 'LATE'),
+    open: open(a),
+    statusWord: a.status === 'PENDING' && !judgable
+      ? ATTEMPT_LABEL.PENDING_SEALED
+      : ATTEMPT_LABEL[a.status],
     verifiedAt: a.verified_at,
     verifiedByRole: a.verified_by_role,
     decisionNote: a.decision_note,
     label: `Lần ${a.seq} — ${formatClockCs(a.elapsed_ms)} — ${
-      a.status === 'PENDING' ? 'Chờ kiểm tra' : a.status === 'LATE' ? 'Đến muộn' : a.status === 'VALID' ? 'CHÍNH XÁC' : 'CHƯA ĐÚNG'
+      a.status === 'PENDING' && !judgable
+        ? ATTEMPT_LABEL.PENDING_SEALED
+        : ATTEMPT_LABEL[a.status]
     }`,
   }));
 }

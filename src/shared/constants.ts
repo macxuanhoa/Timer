@@ -334,6 +334,12 @@ export const OUTCOME_LABEL = {
 /** Per-attempt verification state, kept separate from the session lifecycle. */
 export const ATTEMPT_LABEL = {
   PENDING: 'Chờ kiểm tra',
+  /**
+   * The round was sealed before this report was ever decided. It is neither
+   * accepted nor rejected, and printing either of those words would invent a
+   * decision the database never recorded (V3.4 §5).
+   */
+  PENDING_SEALED: 'CHƯA QUYẾT ĐỊNH',
   VALID: 'CHÍNH XÁC',
   INVALID: 'CHƯA ĐÚNG',
   LATE: 'ĐẾN MUỘN',

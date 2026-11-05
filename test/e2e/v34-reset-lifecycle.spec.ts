@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
+import { assertReadable } from './lib/visual';
 
 /**
  * V3.4 §8 (UI-05) — the post-round physical reset, integrated into the operator
@@ -70,9 +71,22 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     const snapshot = async () => {
       const res = await sup.context.request.get('/api/snapshot', { headers: { authorization: `Bearer ${await tokenOf(sup.page)}` } });
       return (await res.json()) as {
+        revision: number;
         active_round?: { id?: string; status?: string; result?: string; official_duration_ms?: number | null; exit_confirmed_at?: number | null } | null;
         rounds?: { id: string; official_duration_ms?: number | null; exit_confirmed_at?: number | null }[];
+        attempts?: { id: string; seq: number; status: string; elapsed_ms: number; round_id: string }[];
+        reset_tasks?: { task_key: string; required_role: string; completed_at: number | null; confirmed_by_role: string | null; cycle: number }[];
+        log?: { action: string; actor_role: string; at_ms: number }[];
       };
+    };
+    /** A command straight to the authority, bypassing every UI guard. */
+    const raw = async (from: Page, action: string, meta: Record<string, unknown> = {}, revision?: number) => {
+      const snap = await snapshot();
+      const res = await from.context().request.post('/api/command', {
+        data: { action, meta, idempotency_key: `${action}-${Date.now()}-${Math.random()}`, expected_revision: revision ?? snap.revision },
+        headers: { authorization: `Bearer ${await tokenOf(from)}` },
+      });
+      return (await res.json()) as { ok: boolean; code?: string; message?: string };
     };
 
     // Reception → floor 2 → the clock, then NPC 2 verifies a claim (UI-04).
@@ -114,14 +128,29 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     }
 
     // §11: the reset screen is the widest new surface in the app (three checklist
-    // rows, a result card and a readiness sentence), so it is measured at the
-    // 320px floor before anything is pressed.
-    await gate.page.setViewportSize({ width: 320, height: 640 });
-    const overflow = await gate.page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
-    expect(overflow, `npc1 reset screen overflows 320px by ${overflow}px`).toBeLessThanOrEqual(0);
-    await shot(gate.page, 'npc1-reset-320');
+    // rows, a result card and a readiness sentence), so every width is measured
+    // for clipping on both axes before anything is pressed.
+    for (const width of [320, 360, 375, 390, 414, 430]) {
+      await gate.page.setViewportSize({ width, height: 640 });
+      await assertReadable(gate.page, `npc1 reset screen at ${width}px`);
+      if (width === 320) await shot(gate.page, 'npc1-reset-320');
+    }
+    // The press is NOT above the fold at 320×640, and claiming otherwise would be
+    // a lie about a screen that stacks eight required blocks: identity, the
+    // finished round, three checklist rows each naming their owner and their
+    // state, the press, the remaining blockers, the folded history, the route and
+    // the secondary navigation. None is redundant enough to delete. Measured, the
+    // press sits at y 691 of a 640px screen — one short scroll, and the click
+    // below really works because Playwright scrolls to it. What is pinned here is
+    // the bound, so a later change that pushes it further fails.
+    const fold = await gate.page.evaluate(() => {
+      const el = document.querySelector('[data-testid="primary-action"], [data-testid="waiting-state"]');
+      const r = el?.getBoundingClientRect();
+      return { top: r ? Math.round(r.top + window.scrollY) : -1, view: window.innerHeight };
+    });
+    expect(fold.top, 'the reset action disappeared from the screen').toBeGreaterThan(0);
+    expect(fold.top, `reset action at ${fold.top}px on a ${fold.view}px screen`)
+      .toBeLessThanOrEqual(Math.round(fold.view * 1.2));
     await gate.page.setViewportSize({ width: 390, height: 844 });
 
     /* ------------------------------------- the next team is still held back */
@@ -130,6 +159,24 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     // The lobby's own phone agrees: no reception press exists yet.
     await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
     await expect(lobby.page.getByTestId('waiting-state')).toBeVisible();
+
+    /* ------------------------------- offline: nothing reaches the wire */
+    // The store refuses to send a command it cannot currently verify, so a tap
+    // made in a dead spot on the venue Wi-Fi gets an honest local refusal and
+    // the checklist keeps the state the server actually holds.
+    const attemptsBefore = (await snapshot()).attempts?.length ?? 0;
+    await gate.page.context().setOffline(true);
+    for (let i = 0; i < 40; i++) {
+      const s = await gate.page.getByTestId('connection').getAttribute('data-status');
+      if (s !== 'CONNECTED') break;
+      await gate.page.waitForTimeout(1_000);
+    }
+    await expect(gate.page.getByTestId('connection')).not.toHaveAttribute('data-status', 'CONNECTED', { timeout: 5_000 });
+    await gate.page.getByTestId('primary-action').click();
+    await expect(gate.page.getByTestId('message')).toContainText('MẤT KẾT NỐI', { timeout: 10_000 });
+    await expect(gate.page.getByTestId('reset-row-hallway')).not.toHaveAttribute('data-state', 'done');
+    await gate.page.context().setOffline(false);
+    await expect(gate.page.getByTestId('connection')).toHaveAttribute('data-status', 'CONNECTED', { timeout: 40_000 });
 
     /* ------------------------------- one press, and it claims only its area */
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐÃ RESET HÀNH LANG');
@@ -142,6 +189,26 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     await expect(gate.page.getByTestId('waiting-state')).toContainText('HÀNH LANG ĐÃ RESET');
     // The other two areas stay untouched by this phone.
     await expect(gate.page.getByTestId('reset-row-hidden_objects')).not.toHaveAttribute('data-state', 'done');
+
+    // Ownership is the server's, not the screen's: no control for another
+    // station's area is even rendered here, and the stored rows say the same.
+    expect(await gate.page.getByTestId('reset-row-hidden_objects').locator('button').count()).toBe(0);
+    expect(await gate.page.getByTestId('reset-row-room').locator('button').count()).toBe(0);
+    const markedAfterGate = (await snapshot()).reset_tasks?.filter((t) => t.completed_at !== null).map((t) => t.task_key) ?? [];
+    expect(markedAfterGate.slice().sort()).toEqual(['hallway']);
+
+    // Unauthorised, duplicated and stale confirmations are all refused by the
+    // authority itself, not by the button being absent.
+    const wrongRole = await raw(lobby.page, 'RESET_DONE');
+    expect(wrongRole.ok).toBe(false);
+    expect(wrongRole.code).toBe('PERMISSION_DENIED');
+    const stale = await raw(gate.page, 'RESET_DONE', {}, 1);
+    expect(stale.ok).toBe(false);
+    expect(stale.code).toBe('STALE_REVISION');
+    // Repeating the confirmation cannot mark anything twice — the durable
+    // property is the stored row count, not the wording of the answer.
+    await raw(gate.page, 'RESET_DONE');
+    expect((await snapshot()).reset_tasks?.filter((t) => t.completed_at !== null).length).toBe(1);
 
     // The result is untouched by a reset confirmation (strict business rule).
     const afterGate = await snapshot();
@@ -160,6 +227,40 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     expect(closed.at(-1)?.official_duration_ms).toBe(officialMs);
     // Only now may the next team be received, and the lobby says so itself.
     await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 20_000 });
+
+    /* ------------------------------------ the strict distinctions, audited */
+    // A physical reset is not a seat release, not Reset All, not an event
+    // opening, and it does not start the next round. Every one of those is a
+    // separate action with its own permission, so none of them may appear in
+    // the audit trail from the moment the exit landed onward. (The round's own
+    // CALL_TEAM and START_GAME are earlier than that boundary, and correct.)
+    const audit = (await snapshot()).log?.filter((l) => (exitAt ?? 0) <= l.at_ms) ?? [];
+    for (const forbidden of ['STATION_RELEASED', 'RESET_ALL', 'OPEN_NEW_EVENT', 'END_EVENT', 'CALL_TEAM', 'START_GAME', 'ABORT_ROUND']) {
+      expect(audit.filter((l) => l.action === forbidden), `${forbidden} appeared during the physical reset`).toHaveLength(0);
+    }
+    expect(audit.filter((l) => l.action === 'RESET_DONE')).toHaveLength(2);
+    expect(audit.filter((l) => l.action === 'GATE_FINALIZE')).toHaveLength(1);
+    // History is never deleted: the round closed with its official instant and
+    // the attempt rows are exactly the ones that existed before the reset.
+    const afterReset = await snapshot();
+    expect(afterReset.attempts?.length).toBe(attemptsBefore);
+    expect((afterReset.rounds ?? []).length).toBe(1);
+    // And nothing started by itself: there is no active round until a human
+    // receives the next team.
+    expect(afterReset.active_round).toBeNull();
+
+    /* ------------------------------------- event ended: the reset UI steps aside */
+    await sup.page.getByTestId('open-details').click();
+    await sup.page.getByTestId('sheet-tab-admin').click();
+    await sup.page.getByTestId('close-reason').fill('Hết ca');
+    await sup.page.getByTestId('admin-end').click();
+    await expect(gate.page.getByTestId('event-ended-card')).toBeVisible({ timeout: 20_000 });
+    await expect(gate.page.getByTestId('reset-checklist')).toHaveCount(0);
+    await expect(gate.page.getByTestId('npc1-reset-identity')).toHaveCount(0);
+    // The sealed result is still the stored one, and the lobby has no press.
+    expect((await snapshot()).rounds?.at(-1)?.official_duration_ms).toBe(officialMs);
+    await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
+    await shot(gate.page, 'npc1-reset-event-ended');
 
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });

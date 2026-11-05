@@ -230,13 +230,7 @@ export function AttemptLedger({ attempts }: { attempts: AttemptRow[] }) {
               <span className="ledger-seq">Lần {a.seq}</span>
               <span className="ledger-time digital">{formatClockCs(a.elapsedMs)}</span>
               <span className="ledger-state" data-status={a.status}>
-                {a.status === 'VALID'
-                  ? 'chính xác'
-                  : a.status === 'INVALID'
-                    ? 'chưa đúng'
-                    : a.status === 'LATE'
-                      ? 'đến muộn'
-                      : 'chờ kiểm tra'}
+                {a.statusWord}
               </span>
               <span className="ledger-when">{formatWallTime(a.claimedAt)}</span>
             </li>

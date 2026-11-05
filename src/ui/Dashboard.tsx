@@ -1731,7 +1731,7 @@ function AttemptHistory({ attempts, compact = false }: { attempts: AttemptRow[];
             <span
               className={a.status === 'VALID' ? 'text-jade' : a.status === 'INVALID' ? 'text-mute' : 'text-ember'}
             >
-              {a.status === 'PENDING' ? 'chờ kiểm tra' : a.status === 'LATE' ? 'đến muộn' : a.status === 'VALID' ? 'chính xác' : 'chưa đúng'}
+              {a.statusWord}
             </span>
           </li>
         ))}

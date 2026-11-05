@@ -118,7 +118,7 @@ export function Npc1ResetStage({
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="npc1-role">{ROLE_PERSON.GATE}</p>
           <p className="role-band-area">{ROLE_AREA.GATE}</p>
-          <p className="mt-0.5 text-[9.5px] leading-snug text-mute">{ROLE_DUTY.GATE}</p>
+          <p className="role-band-duty">{ROLE_DUTY.GATE}</p>
         </div>
         <p className="role-band-state" data-testid="event-state" data-broken={syncBroken ? '1' : '0'}>
           {syncBroken ? 'KHÔNG ĐỌC ĐƯỢC MÁY CHỦ' : PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}
@@ -133,10 +133,10 @@ export function Npc1ResetStage({
       />
 
       {/* ------------------------------------ 3-4. the physical reset work */}
-      <p className="reset-stage-head" data-testid="reset-stage-head">
-        <span className="reset-stage-title">ĐANG RESET KHU VỰC</span>
-        <span className="reset-stage-sub">Đang chuẩn bị khu vực cho đội tiếp theo</span>
-      </p>
+      {/* The section title used to sit here. It restated what the checklist's own
+          eyebrow ("RESET VẬT LÝ · TẦNG 3") and the readiness card already say, and
+          on a 320px phone every line above the press costs the operator a scroll,
+          so it is gone. */}
       <ResetChecklist board={shownBoard} role={role} />
 
       {/* ------------------------------------------ 5. the one press here */}

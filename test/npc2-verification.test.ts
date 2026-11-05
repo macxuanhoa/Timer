@@ -135,6 +135,43 @@ describe('NPC2 claim eligibility mirrors the authoritative table', () => {
     expect(hub.snapshot().active_round?.result).toBe('WON');
   });
 
+  it('5b. one status word for every surface, and a sealed PENDING is not a rejection', () => {
+    const hub = new TestHub();
+    hub.command('lobby', 'CALL_TEAM');
+    hub.command('corridor', 'CONFIRM_FLOOR2');
+    hub.command('gate', 'START_GAME');
+    hub.advance(SEC);
+    hub.command('room305', 'CLAIM_COMPLETE');
+    const undecided = hub.attempts().at(-1)!;
+    hub.advance(SEC);
+    hub.command('room305', 'CLAIM_COMPLETE');
+    const judged = hub.attempts().at(-1)!;
+    hub.command('room305', 'VERIFY_ATTEMPT', { attempt_id: judged.id, decision: 'VALID' });
+
+    const rows = resolveAttempts(hub.snapshot(), hub.now());
+    const left = rows.find((r) => r.seq === undecided.seq)!;
+    const sealed = rows.find((r) => r.seq === judged.seq)!;
+    // The round closed over the first report without anybody deciding it. That is
+    // not a rejection, and no surface may print one: NPC 2's history, the reset
+    // ledger, the flow screens' list and the audit's claim line all read this
+    // single field now.
+    expect(left.status).toBe('PENDING');
+    expect(left.open).toBe(false);
+    expect(left.statusWord).toBe('CHƯA QUYẾT ĐỊNH');
+    expect(left.label).toContain('CHƯA QUYẾT ĐỊNH');
+    expect(sealed.statusWord).toBe('CHÍNH XÁC');
+    // A claim that is still decidable keeps the waiting word instead.
+    const hub2 = new TestHub();
+    hub2.command('lobby', 'CALL_TEAM');
+    hub2.command('corridor', 'CONFIRM_FLOOR2');
+    hub2.command('gate', 'START_GAME');
+    hub2.advance(SEC);
+    hub2.command('room305', 'CLAIM_COMPLETE');
+    const open = resolveAttempts(hub2.snapshot(), hub2.now()).at(-1)!;
+    expect(open.open).toBe(true);
+    expect(open.statusWord).toBe('Chờ kiểm tra');
+  });
+
   it('6. the invalid large CTA disappears once the result is finalised', () => {
     const hub = new TestHub();
     toFinalRound(hub);

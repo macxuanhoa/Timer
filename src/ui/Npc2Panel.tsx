@@ -41,11 +41,10 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
   const press = (action: 'CLAIM_COMPLETE' | 'VERIFY_ATTEMPT', meta: Record<string, unknown> = {}) =>
     void store.act(action, meta);
 
-  // A row's own words, from its own stored status. Once the round is sealed the
-  // list still shows every claim — including one NPC 2 never judged — and calling
-  // that "Đã từ chối" would invent a decision the database never recorded.
-  const stateWord = (s: AttemptRow['status']) =>
-    s === 'VALID' ? 'CHÍNH XÁC' : s === 'INVALID' ? 'CHƯA ĐÚNG' : s === 'LATE' ? 'ĐẾN MUỘN' : 'CHƯA QUYẾT ĐỊNH';
+  // A row's own words, from the shared status vocabulary: once the round is
+  // sealed the list still shows every claim — including one NPC 2 never judged —
+  // and calling that "Đã từ chối" would invent a decision the database never
+  // recorded.
   const noteFor = (a: AttemptRow) => {
     if (a.status === 'VALID') return `Đã chốt · ${a.inTime ? 'thời gian tính theo mốc báo' : 'ngoài giờ'}`;
     if (a.status === 'INVALID') return 'Đã từ chối · giữ nguyên mốc báo để đối chiếu';
@@ -162,7 +161,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
                 <span className="npc2-history-seq">Lần {a.seq}</span>
                 <span className="digital">{formatClockCs(a.elapsedMs)}</span>
                 <span className={`npc2-history-state npc2-history-state-${a.status}`}>
-                  {stateWord(a.status)}
+                  {a.statusWord}
                 </span>
               </p>
               <p className="npc2-history-note" data-testid="attempt-closed">

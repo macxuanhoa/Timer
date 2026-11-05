@@ -871,6 +871,15 @@
   color: color-mix(in srgb, var(--role-accent, var(--color-ember)) 78%, var(--color-snow));
 }
 
+/* What this position does, in its own sentence. Static help, so it is the first
+   thing to give way when a narrow phone is short of vertical budget. */
+.role-band-duty {
+  margin-top: 2px;
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: var(--color-mute);
+}
+
 /* The workflow word at the right-hand end of the band. It is the second thing a
    crew member checks after their own name, so it gets the eyebrow scale and the
    station's accent — and it changes silhouette as well as colour when the phone
@@ -3222,31 +3231,9 @@
   color: var(--color-mute);
 }
 
-/* The stage heading: what the floor is doing right now, in the words the crew
-   uses, with the next-team note under it in half the weight. */
-.reset-stage-head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0 var(--sc-space-1);
-}
-
-.reset-stage-title {
-  font-size: var(--sc-t-title);
-  font-weight: 900;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  line-height: 1.15;
-  color: var(--color-ember);
-  text-shadow: 0 0 22px rgb(244 137 58 / 0.22);
-}
-
-.reset-stage-sub {
-  font-size: var(--sc-t-label);
-  line-height: 1.4;
-  color: var(--color-mute);
-}
+/* The stage heading was removed from the checkpoint screen: it restated what the
+   checklist eyebrow and the readiness card already say, and on a short phone
+   every line above the press costs the operator a scroll. */
 
 /* Secondary destinations under the checkpoint: quiet, thumb-high, never a
    second set of buttons competing with the confirmation above. */
@@ -3272,15 +3259,40 @@
 /* On a short phone the checkpoint keeps its order and sheds its air instead. */
 @media (max-height: 700px) {
   .round-result {
-    padding: var(--sc-space-3);
+    gap: 3px;
+    padding: var(--sc-space-3) var(--sc-space-3) var(--sc-space-2);
+  }
+
+  .round-result-time {
+    font-size: clamp(1.7rem, 13vw, 2.2rem);
+  }
+
+  .round-result-meta,
+  .round-result-next {
+    font-size: var(--sc-t-eyebrow);
+  }
+
+  .reset-card,
+  .readiness {
+    padding: var(--sc-space-2);
   }
 
   .reset-row {
     padding: 6px 0;
   }
 
-  .reset-stage-title {
-    font-size: var(--sc-t-strong);
+  .reset-note {
+    font-size: var(--sc-t-eyebrow);
+  }
+
+  .role-band {
+    padding: var(--sc-space-2);
+  }
+
+  /* Static help, not state: the first thing to go when the press is the one
+     thing that has to stay reachable. */
+  .role-band-duty {
+    display: none;
   }
 }
 

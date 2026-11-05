@@ -182,11 +182,14 @@ test.describe.serial('V3.4 NPC1 — three screens, one countdown contract', () =
     // at the same threshold.
     await sup.context.request.post('/api/dev/clock', { data: { advance_ms: 4 * 60_000 + 10_000 }, headers: { authorization: `Bearer ${token}` } });
     await expect(gate.page.getByTestId('countdown-screen')).toHaveAttribute('data-tone', 'warn');
+    // …and the shared design decision behind the colour is the same stage.
+    await expect(gate.page.getByTestId('countdown-hero').locator('.countdown-main')).toHaveAttribute('data-stage', 'warn');
     // Past the deadline: frozen at 00:00 in blood, never negative, never green.
     await sup.context.request.post('/api/dev/clock', { data: { advance_ms: 70_000 }, headers: { authorization: `Bearer ${token}` } });
     await expect(gate.page.getByTestId('hero-clock')).toHaveText('00:00');
     await expect(gate.page.getByTestId('countdown-label')).toHaveText('HẾT GIỜ');
     await expect(gate.page.getByTestId('hero-clock')).toHaveCSS('color', BLOOD);
+    await expect(gate.page.getByTestId('countdown-hero').locator('.countdown-main')).toHaveAttribute('data-stage', 'danger');
     await gate.page.getByTestId('countdown-big').click();
     await expect(gate.page.getByTestId('big-screen')).toHaveClass(/alarm-glow/);
     await expect(gate.page.getByTestId('big-clock')).toHaveText('00:00');

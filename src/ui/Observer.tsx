@@ -7,6 +7,8 @@ import { formatClockSec, leaderboard } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
 import { watchPresence, observerLeave, type PresenceResult } from '../client/observerPresence';
 import { JourneyStepper } from './JourneyMap';
+import { countdownStageOf, countdownToneOf } from './countdown';
+import { TimeDigits } from './TimeView';
 import { DoorIcon, RunnerIcon, TrophyIcon, UsersIcon } from './icons';
 
 interface Props {
@@ -79,7 +81,11 @@ export function Observer({ store, token, onLogout }: Props) {
 
   const round = snap.active_round;
   const running = isLockedPhase(phase);
-  const tone = countdown.tone === 'danger' ? '#e1362c' : countdown.tone === 'warn' ? '#f0a12a' : '#1fb96e';
+  // V3.4 §4: the viewer reads the same stage decision as the phone and the wall.
+  // It used to keep a private colour table whose "running" entry was the V3.2
+  // jade — one instant, three surfaces, two answers. There is now one answer.
+  const stage = countdownStageOf(countdown);
+  const tone = countdownToneOf(countdown);
 
   return (
     <div className="flex h-[100dvh] flex-col bg-ink" data-testid="observer" data-phase={phase}>
@@ -93,7 +99,18 @@ export function Observer({ store, token, onLogout }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`h-1.5 w-1.5 rounded-full ${state.status === 'CONNECTED' ? 'bg-blood' : 'bg-ember breathe'}`} aria-hidden />
+          {/* The dot has to agree with the word beside it. It used to be blood-red
+              for "Đang theo dõi" AND for "Mất kết nối" — one colour meaning two
+              opposite things — and the operator screens already settled that
+              argument: jade live, ember syncing, blood failed. */}
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              state.status === 'CONNECTED' ? 'bg-jade' : state.status === 'SYNCING' ? 'bg-ember breathe' : 'bg-blood'
+            }`}
+            aria-hidden
+            data-testid="observer-dot"
+            data-status={state.status}
+          />
           <span data-testid="observer-connection" data-status={state.status} className="text-[9px] font-semibold tracking-[0.1em] text-mute">
             {state.status === 'CONNECTED' ? 'Đang theo dõi' : state.status === 'OFFLINE' ? 'Mất kết nối' : 'Đang đồng bộ'}
           </span>
@@ -116,12 +133,7 @@ export function Observer({ store, token, onLogout }: Props) {
           {running || wall ? (
             <>
               <p className="text-[9px] font-semibold tracking-[0.16em] text-mute">{countdown.heroLabel}</p>
-              <p className="digital countdown-main font-bold leading-none" style={{ color: tone }} data-testid="observer-clock">
-                {countdown.mm}:{countdown.ss}
-                <span className="countdown-fraction" aria-hidden>
-                  {countdown.cs}
-                </span>
-              </p>
+              <TimeDigits mm={countdown.mm} ss={countdown.ss} cs={countdown.cs} stage={stage} mode={countdown.mode} variant="observer" />
               <p className="mt-2 text-[10px] font-semibold tracking-[0.14em]" style={{ color: tone }} data-testid="observer-status">
                 {countdown.statusLine}
               </p>

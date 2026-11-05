@@ -55,6 +55,41 @@ export function countdownToneHex(stage: CountdownStage): string {
 }
 
 /**
+ * The one derivation from the authoritative view to the stage input.
+ *
+ * Every surface — NPC 1's phone, the wall display, the anonymous viewer — used to
+ * build this object by hand. Hand-building it is how two surfaces could agree on
+ * the instant and still disagree on what colour that instant is, so the mapping
+ * lives next to the decision it feeds. It reads the derived view only: the stored
+ * deadline, the snapshot duration and the timing contract stay untouched here.
+ */
+export function countdownStageOf(view: CountdownViewLike): CountdownStageInput {
+  return {
+    expired: view.expired,
+    warn: !view.settled && view.remainingMs <= view.warnMs,
+    running: view.running,
+    won: view.result === 'WON',
+    aborted: view.result === 'ABORTED',
+    pendingValidation: view.result === 'PENDING_VALIDATION',
+  };
+}
+
+/** The shape `countdownStageOf` needs: `resolveCountdown` and `resolveBigScreen` both satisfy it. */
+export interface CountdownViewLike {
+  expired: boolean;
+  settled: boolean;
+  running: boolean;
+  remainingMs: number;
+  warnMs: number;
+  result: string | null;
+}
+
+/** Stage and colour in one call, so a surface cannot pair an input with a hex. */
+export function countdownToneOf(view: CountdownViewLike): string {
+  return countdownToneHex(countdownStage(countdownStageOf(view)));
+}
+
+/**
  * The hundredths field, stated as what it actually is: a fraction of the
  * second. V3.3 printed bare `61` beside the clock, which read as a stray
  * number; V3.4 always renders `.61` with a subordinate weight, and the

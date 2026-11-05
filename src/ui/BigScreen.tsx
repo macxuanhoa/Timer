@@ -5,7 +5,7 @@ import { BIG_SCREEN_WARN_MS, type Role } from '../shared/constants';
 import { formatClockCs, formatClockSec } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
-import { countdownStage, countdownStateLabel, countdownToneHex, type CountdownStageInput } from './countdown';
+import { countdownStage, countdownStateLabel, countdownStageOf, countdownToneHex } from './countdown';
 import { TimeDigits } from './TimeView';
 
 interface Props {
@@ -125,15 +125,9 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   // makes for this exact instant — ember while it runs, hot amber inside the
   // configured warning window, blood once the deadline has passed, bone-amber
   // when the server has frozen the result. The green stopwatch is gone; the
-  // phone and the wall can no longer disagree about the same second.
-  const stageInput: CountdownStageInput = {
-    expired: clock.expired,
-    warn: !clock.pendingValidation && clock.result !== 'WON' && clock.remainingMs <= BIG_SCREEN_WARN_MS,
-    running: hero.running,
-    won: clock.result === 'WON',
-    aborted: clock.result === 'ABORTED',
-    pendingValidation: clock.pendingValidation,
-  };
+  // phone and the wall can no longer disagree about the same second, because
+  // both now derive the stage from the same view through the same helper.
+  const stageInput = countdownStageOf(hero);
   const tone = countdownToneHex(countdownStage(stageInput));
   const stateLabel = countdownStateLabel(stageInput);
   // In digits-only mode the whole surface is the gesture that brings the buttons back.
@@ -174,7 +168,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
           One shared component for the phone and the wall: the two surfaces can
           now only ever disagree about size, never about notation or colour. */}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-3">
-        <TimeDigits mm={hero.mm} ss={hero.ss} cs={hero.cs} stage={stageInput} variant="wall" />
+        <TimeDigits mm={hero.mm} ss={hero.ss} cs={hero.cs} stage={stageInput} mode={hero.mode} variant="wall" />
 
         {!digitsOnly && (
           <p className="mt-1 text-[clamp(0.9rem,3vw,1.6rem)] font-bold tracking-[0.1em] text-snow" data-testid="big-label">

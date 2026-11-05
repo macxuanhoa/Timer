@@ -48,7 +48,7 @@ import { DetailsSheet } from './DetailsSheet';
 import { BigScreen } from './BigScreen';
 import { JourneyBoard, JourneyStepper } from './JourneyMap';
 import { ACCENT_HEX, ROLE_ACCENT, TEAM_TONE_HEX } from './accents';
-import { countdownStage, countdownToneHex, type CountdownStageInput } from './countdown';
+import { countdownStage, countdownStageOf, countdownToneHex } from './countdown';
 import { TimeDigits } from './TimeView';
 import { Npc2Panel } from './Npc2Panel';
 import { Npc1ResetStage } from './Npc1ResetStage';
@@ -1543,14 +1543,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
   // V3.4: one tone decision shared with the wall — ember while it runs, hot
   // amber inside the configured warning window, blood once the deadline has
   // passed, bone-amber when the server has frozen the result. Never green.
-  const stageInput: CountdownStageInput = {
-    expired: countdown.expired,
-    warn: !countdown.settled && countdown.remainingMs <= countdown.warnMs,
-    running: countdown.running,
-    won: countdown.result === 'WON',
-    aborted: countdown.result === 'ABORTED',
-    pendingValidation: countdown.result === 'PENDING_VALIDATION',
-  };
+  const stageInput = countdownStageOf(countdown);
   const stage = countdownStage(stageInput);
   const tone = countdownToneHex(stage);
   // The meter is decoration derived from real data: the stored deadline's own
@@ -1595,7 +1588,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           smaller fraction — `.61`, decimal included — never as a stray
           number beside it. One component for phone, wall and result. */}
       <div className="countdown-hero flex flex-1 flex-col items-center justify-center gap-2 py-1" data-testid="countdown-hero">
-        <TimeDigits mm={countdown.mm} ss={countdown.ss} cs={countdown.cs} stage={stageInput} variant="phone" />
+        <TimeDigits mm={countdown.mm} ss={countdown.ss} cs={countdown.cs} stage={stageInput} mode={countdown.mode} variant="phone" />
         <div className="clock-meter" data-testid="countdown-meter" aria-hidden>
           <span style={{ width: `${(remainingShare * 100).toFixed(2)}%` }} />
         </div>

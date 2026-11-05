@@ -18,18 +18,31 @@ interface TimeDigitsProps {
   cs: string;
   /** The shared stage input; the tone is never picked per-screen. */
   stage: CountdownStageInput;
-  variant: 'phone' | 'wall';
+  /**
+   * Which number these digits carry: the live game clock, or the time the server
+   * stored when the round was decided. It comes from the authoritative view
+   * rather than being re-derived from `running`, because "not running" covers
+   * both the frozen official result and a round that never started — and a
+   * reader of the DOM (or a test) must be able to tell them apart.
+   */
+  mode: 'GAME' | 'RESULT';
+  /**
+   * `phone` and `wall` are the two sizes. `observer` is the anonymous viewer:
+   * the same digits at phone size, but its own test ids, because a viewer's
+   * surface is queried separately in the workflow suite.
+   */
+  variant: 'phone' | 'wall' | 'observer';
 }
 
-export function TimeDigits({ mm, ss, cs, stage, variant }: TimeDigitsProps) {
+export function TimeDigits({ mm, ss, cs, stage, mode, variant }: TimeDigitsProps) {
   const tone = countdownToneHex(countdownStage(stage));
   const main = variant === 'wall' ? 'wall-main' : 'countdown-main';
   const frac = variant === 'wall' ? 'wall-fraction' : 'countdown-fraction';
-  const clockTestid = variant === 'wall' ? 'big-clock' : 'hero-clock';
-  const fracTestid = variant === 'wall' ? 'big-fraction' : 'hero-fraction';
+  const clockTestid = variant === 'wall' ? 'big-clock' : variant === 'observer' ? 'observer-clock' : 'hero-clock';
+  const fracTestid = variant === 'wall' ? 'big-fraction' : variant === 'observer' ? 'observer-fraction' : 'hero-fraction';
   return (
-    <p className={`digital ${main} font-bold leading-none`} style={{ color: tone }}>
-      <span data-testid={clockTestid} data-mode={stage.running ? 'GAME' : 'FROZEN'}>
+    <p className={`digital ${main} font-bold leading-none`} style={{ color: tone }} data-stage={countdownStage(stage)}>
+      <span data-testid={clockTestid} data-mode={mode}>
         {mm}:{ss}
       </span>
       <span className={frac} data-testid={fracTestid} aria-hidden>

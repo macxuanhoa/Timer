@@ -21,10 +21,17 @@ create table if not exists auth.users (
   created_at timestamptz not null default now()
 );
 
--- Supabase exposes the JWT subject through this GUC.
+-- Mirrors Supabase's own auth.uid(): the authenticated subject, read from the
+-- legacy per-claim GUC when present and otherwise from the decoded claims JSON.
+-- PostgREST on Supabase publishes `request.jwt.claims`; a function that reads
+-- only the legacy GUC passes here but returns null in Production, which is the
+-- regression scenario 045 exists to catch.
 create or replace function auth.uid() returns uuid
 language sql stable as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  select coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid
 $$;
 
 -- ...and the decoded claims, where anonymous sessions carry is_anonymous = true.

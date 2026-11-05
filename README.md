@@ -361,6 +361,14 @@ it installs a **new** `create or replace function sc.release_station(text)` in i
 file, so the already-applied 0019 script is never rewritten while the live definition
 moves forward — the forward-only pattern this schema uses throughout.
 
+**0022_v33_station_admin_identity.sql** is the hotfix that production verification
+forced: 0021 read the caller from `request.jwt.claim.sub`, a legacy GUC the local
+harness sets and Supabase's PostgREST does not, so a real supervisor's roster answered
+`NOT_AUTHENTICATED` while `release_station` (which uses `auth.uid()`) worked. 0022
+redefines the same function to use `auth.uid()`, with identical payload, authorisation
+and grants; scenario **045** drives it with the claims-only token shape Production
+sends and fails against 0021 by design.
+
 Migration **0021_v33_seat_management.sql** answers the third field report — "NPC1
 đang ĐÃ ĐỦ NGƯỜI mà không tìm thấy chức năng giải phóng vị trí". Two causes,
 both fixed server-side rather than by moving a button around:
@@ -488,7 +496,9 @@ SQL validation uses a disposable local PostgreSQL 16 Docker container. Scenario
 device holding each seat and how long it has held it, a duty caller and an anonymous
 caller are both refused, a queued round stays releasable, a live round is refused with
 `FLOOR_BUSY` and audited, and closing the round unblocks the seat without moving a
-score or a revision. Historical access
+score or a revision. Scenario **045** sets only the decoded `request.jwt.claims`
+payload — the shape Supabase sends — and proves the supervisor is recognised, a duty
+caller still refused, and `release_station` frees exactly that seat. Historical access
 scenarios run before 0010; scenario 033 then checks the capacity, binding, preservation,
 PIN and RLS contract of that release. 0011 normalises press instants and scenario 034 checks that a
 fractional or malformed press still commits the command; scenarios 035–038 check the round-only

@@ -125,6 +125,10 @@ async function main() {
       // guard on sc.release_station(). Additive RPC surface plus one function
       // redefinition; no table, no data and no grant broadened.
       '0021_v33_seat_management.sql',
+      // V3.3 P0 hotfix: station_admin() resolves the caller through auth.uid()
+      // instead of the legacy request.jwt.claim.sub GUC, which PostgREST does
+      // not publish on Supabase. One function redefinition; no data touched.
+      '0022_v33_station_admin_identity.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

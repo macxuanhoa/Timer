@@ -99,9 +99,12 @@ describe('PASS 2 — synchronized clients on one authoritative state', () => {
     await stores.get('CORRIDOR')!.act('CONFIRM_FLOOR2');
     await settle();
     // Pre-start: the whole room reads the same alert, only NPC 1 can start.
+    // V3.4 Role 02: 02's caption acknowledges its own landed press instead of
+    // repeating the generic alert — the action stays null either way.
     expect(label('GATE').action).toBe('START_GAME');
     expect(label('LOBBY').label).toBe('ĐỘI CHƠI SẮP BẮT ĐẦU');
-    expect(label('CORRIDOR').label).toBe('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    expect(label('CORRIDOR').label).toBe('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
+    expect(label('CORRIDOR').action).toBe(null);
     expect(label('ROOM305').action).toBe(null);
 
     await stores.get('GATE')!.act('START_GAME');

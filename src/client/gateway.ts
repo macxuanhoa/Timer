@@ -74,6 +74,13 @@ export interface Gateway {
   subscribe(handlers: {
     onRevision(hint: RevisionHint): void;
     onStatus(status: ConnectionStatus): void;
+    /**
+     * A stream keep-alive that carries the server instant and nothing else. It
+     * proves the socket is alive, NOT that this phone can read the authoritative
+     * state, so it may refine the clock and must never mark the data as freshly
+     * read (V3.4 §11: the chip has to name the real transport state).
+     */
+    onHeartbeat?(serverNowMs: number): void;
   }): () => void;
 }
 
@@ -159,7 +166,11 @@ export class LocalGateway implements Gateway {
   }
 
   /** SSE over fetch so the bearer token stays in a header instead of a URL. */
-  subscribe(handlers: { onRevision(h: RevisionHint): void; onStatus(s: ConnectionStatus): void }): () => void {
+  subscribe(handlers: {
+    onRevision(h: RevisionHint): void;
+    onStatus(s: ConnectionStatus): void;
+    onHeartbeat?(serverNowMs: number): void;
+  }): () => void {
     let closed = false;
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
@@ -183,9 +194,20 @@ export class LocalGateway implements Gateway {
             while ((idx = buffer.indexOf('\n\n')) >= 0) {
               const frame = buffer.slice(0, idx);
               buffer = buffer.slice(idx + 2);
-              const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+              const lines = frame.split('\n');
+              const dataLine = lines.find((l) => l.startsWith('data:'));
               if (!dataLine) continue;
+              // The frame's own event name is what separates a state change from a
+              // keep-alive. `event: time` is emitted every few seconds by the hub to
+              // hold the socket open; reading it as a revision hint used to restamp
+              // "data verified now", so a phone whose authoritative reads were
+              // failing still wore ĐÃ KẾT NỐI.
+              const eventName = lines.find((l) => l.startsWith('event:'))?.slice(6).trim();
               const payload = JSON.parse(dataLine.slice(5).trim()) as RevisionHint & { r?: number };
+              if (eventName === 'time') {
+                if (payload.server_now_ms) handlers.onHeartbeat?.(payload.server_now_ms);
+                continue;
+              }
               handlers.onRevision({
                 revision: payload.revision ?? payload.r ?? 0,
                 server_now_ms: payload.server_now_ms,

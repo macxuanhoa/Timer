@@ -43,6 +43,12 @@ const formatCs = (ms: number) => {
   return `${String(Math.floor(total / 60_000)).padStart(2, '0')}:${String(Math.floor((total % 60_000) / 1000)).padStart(2, '0')}`;
 };
 
+/** MM:SS.hh as the official-result card and the shared fraction render it. */
+const formatClockCsLocal = (ms: number) => {
+  const total = Math.max(0, Math.floor(ms / 10) * 10);
+  return `${formatCs(total)}.${String(Math.floor((total % 1000) / 10)).padStart(2, '0')}`;
+};
+
 /** Resets every phone to a brand-new session through the dev-only endpoint. */
 async function freshSession(sup: { page: Page; context: BrowserContext }, pages: Page[]) {
   const token = await sup.page.evaluate(
@@ -60,11 +66,21 @@ async function freshSession(sup: { page: Page; context: BrowserContext }, pages:
 async function toCountdown(lobby: Page, corridor: Page, gate: Page) {
   await expect(primary(lobby)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
   await primary(lobby).click();
-  await expect(primary(corridor)).toHaveText('XÁC NHẬN ĐÃ ĐẾN TẦNG 2');
+  await expect(primary(corridor)).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
   await primary(corridor).click();
   await expect(primary(gate)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
   await primary(gate).click();
   await expect(gate.getByTestId('countdown-screen')).toBeVisible();
+}
+
+/**
+ * V3.4 §5/§7: the irreversible presses — finalising a result and confirming a
+ * physical exit — arm on the first tap and land on the second. E2E drives the
+ * real two-press gesture, never a bypass of it.
+ */
+async function twoPress(button: Page | ReturnType<Page['getByTestId']>) {
+  await (button as ReturnType<Page['getByTestId']>).click();
+  await (button as ReturnType<Page['getByTestId']>).click();
 }
 
 async function snapshotOf(sup: { page: Page; context: BrowserContext }) {
@@ -105,7 +121,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
 
     // §6 Only OPERATOR_02 confirms arrival, and no clock has started anywhere.
-    await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐÃ ĐẾN TẦNG 2');
+    await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
     // NPC1 holds the documented exception for this phase, and it asks why first.
     await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2');
     await corridor.page.getByTestId('primary-action').click();
@@ -115,7 +131,8 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(confirmed.active_round?.floor2_confirmed_by_role).toBe('CORRIDOR');
     // Confirmation of arrival is not the start: 02 has no clock authority at all.
     expect(confirmed.active_round?.game_started_at).toBeNull();
-    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    // V3.4 Role 02: the landed press is acknowledged; the caption names the hand.
+    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
 
     // §8 Pre-start: the same loud alert on every phone, one START permission.
     await expect(room.page.getByTestId('prestart-alert')).toBeVisible();
@@ -143,8 +160,11 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // §10 NPC2 records the announcement; the countdown deliberately keeps running.
     await expect(room.page.getByTestId('record-claim')).toHaveText('GHI NHẬN BÁO HOÀN THÀNH');
     await room.page.getByTestId('record-claim').click();
-    await expect(room.page.getByTestId('attempt-label')).toContainText('Lần 1');
-    await expect(room.page.getByTestId('attempt-label')).toContainText('Chờ kiểm tra');
+    // V3.4 §5: the pending attempt wears its own verification card — attempt
+    // number, recorded timestamp, and the two decisions with their meaning.
+    await expect(room.page.getByTestId('verify-head-1')).toContainText('LẦN 1');
+    await expect(room.page.getByTestId('verify-state-1')).toContainText('ĐANG CHỜ XÁC MINH');
+    await expect(room.page.getByTestId('attempt-hint')).toContainText('đồng hồ vẫn chạy');
     const claimed = await snapshotOf(sup);
     const claim = claimed.attempts[0];
     expect(claim.status).toBe('PENDING');
@@ -159,6 +179,9 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
 
     // Verify the second claim: the score is that claim's instant, not this press.
     const second = (await snapshotOf(sup)).attempts[1];
+    // V3.4 §5: the finalisation is armed by the first tap and lands on the second.
+    await room.page.getByTestId('attempt-valid-2').click();
+    await expect(room.page.getByTestId('attempt-valid-2')).toHaveText('XÁC NHẬN CHỐT KẾT QUẢ');
     await room.page.getByTestId('attempt-valid-2').click();
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
     const won = await snapshotOf(sup);
@@ -168,7 +191,19 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     const audit = won.log.filter((l) => l.action === 'VERIFY_ATTEMPT').at(-1)?.metadata;
     expect(audit?.claimed_at).toBe(second.claimed_at);
     expect((audit?.verification_delay_ms as number) ?? 0).toBeGreaterThanOrEqual(0);
-    await expect(room.page.getByTestId('countdown-official')).toContainText('KẾT QUẢ CHÍNH THỨC');
+    // V3.4 §6: the milestone presentation replaces the CTA entirely — NPC2's
+    // screen is read-only for completion reporting, exactly like the RPC.
+    await expect(room.page.getByTestId('official-result')).toBeVisible();
+    await expect(room.page.getByTestId('official-result-title')).toContainText('ĐÃ CHỐT KẾT QUẢ');
+    // The card carries the claim's own instant to hundredths — the same value
+    // the board ranks, never a rounded UI artefact.
+    await expect(room.page.getByTestId('official-result-time')).toHaveText(formatClockCsLocal(second.elapsed_ms));
+    await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ NPC 1 xác nhận đội rời tầng 3.');
+    await expect(room.page.getByTestId('record-claim')).toHaveCount(0);
+    // The rejected first attempt keeps its row and its own timestamp (§4).
+    await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');
+    // NPC1 still sees the official result line on its own screen.
+    await expect(gate.page.getByTestId('countdown-official')).toContainText('KẾT QUẢ CHÍNH THỨC');
     // §10 step B: the countdown display stops the moment the round is decided, and the
     // number it keeps is the official one rather than a timer running to nothing.
     await expect(room.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
@@ -180,6 +215,11 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
 
     // §12 The exit is a second, separate event that cannot move the score.
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    // V3.4 §7: the hand-off states what is already confirmed before the press.
+    await expect(gate.page.getByTestId('npc1-handoff')).toBeVisible();
+    await expect(gate.page.getByTestId('npc1-handoff-state')).toContainText('NPC 2 ĐÃ CHỐT KẾT QUẢ');
+    await gate.page.getByTestId('primary-action').click();
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN LẠI: ĐỘI ĐÃ RỜI TẦNG 3');
     await gate.page.getByTestId('primary-action').click();
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.status).toBe('EXIT_CONFIRMED');
     const exited = await snapshotOf(sup);
@@ -187,7 +227,11 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(exited.active_round?.exit_by_role).toBe('GATE');
 
     // §13 The physical checks are confirmed by the staff who own them, then closed.
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
+    // V3.4 §4: NPC 1's confirmation names the one area its own rows cover — the
+    // hallway — and must never read as a claim over the whole floor. NPC 2 keeps
+    // its approved wording and only its hint lists the areas it owes.
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐÃ RESET HÀNH LANG');
+    await expect(gate.page.getByTestId('primary-action')).not.toHaveText('ĐÃ RESET XONG');
     await expect(room.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
     await gate.page.getByTestId('primary-action').click();
     await room.page.getByTestId('primary-action').click();
@@ -251,7 +295,8 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(bypassed.active_round?.needs_review).toBe(true);
 
     // The late OPERATOR_02 press is refused safely and the workflow does not revert.
-    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    // V3.4 Role 02: a bypassed floor is its own caption — never a confirmation.
+    await expect(corridor.page.getByTestId('waiting-state')).toContainText('TẦNG 2 ĐÃ ĐƯỢC BỎ QUA');
     expect((await snapshotOf(sup)).active_round?.floor2_confirmed_at).toBeNull();
     // The game continues normally from the bypass.
     await primary(gate.page).click();
@@ -280,7 +325,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     });
     // The provisional state, on the phone that owns the decision.
     await expect(room.page.getByTestId('countdown-status')).toContainText('ĐANG CHỜ XÁC MINH');
-    await room.page.getByTestId(`attempt-valid-${claim.seq}`).click();
+    await twoPress(room.page.getByTestId(`attempt-valid-${claim.seq}`));
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
     const won = await snapshotOf(sup);
     // Success at the claim instant — the eight seconds of checking cost nothing.
@@ -329,7 +374,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(room.page.getByTestId(`attempt-valid-${late.seq}`)).toBeDisabled();
     // The guarded safety path stays available to NPC1, and it is secondary.
     await expect(gate.page.getByTestId('emergency-open')).toBeVisible();
-    await gate.page.getByTestId('primary-action').click();
+    await twoPress(gate.page.getByTestId('primary-action'));
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.status).toBe('EXIT_CONFIRMED');
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('TIME_UP');
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
@@ -356,8 +401,9 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(aborted.active_round?.official_duration_ms).toBeNull();
     expect(aborted.active_round?.exit_reason).toBe('Khách cần y tế');
     expect(aborted.active_round?.exit_confirmed_at).not.toBeNull();
-    // The area still has to be put back ready before the next team.
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐÃ RESET XONG');
+    // The area still has to be put back ready before the next team. NPC 1 presses
+    // only for its own hallway row (V3.4 §4).
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐÃ RESET HÀNH LANG');
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
@@ -390,7 +436,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // The claim and the official time reach the viewer; the claim list does not.
     await room.page.getByTestId('record-claim').click();
     const claim = (await snapshotOf(sup)).attempts[0];
-    await room.page.getByTestId(`attempt-valid-${claim.seq}`).click();
+    await twoPress(room.page.getByTestId(`attempt-valid-${claim.seq}`));
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.result).toBe('WON');
     await expect.poll(() => viewer.page.getByTestId('observer-status').textContent()).toContain('THÀNH CÔNG');
     await viewer.page.getByTestId('observer-leave').click();
@@ -444,7 +490,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     }
     // NPC 2 records an announcement so its two decision buttons are on screen.
     await room.page.getByTestId('record-claim').click();
-    await expect(room.page.getByTestId('attempt-list')).toBeVisible();
+    await expect(room.page.getByTestId('verify-card-1')).toBeVisible();
     const claimOverflow = await room.page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
@@ -544,24 +590,28 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(lobby.page.getByTestId('big-clock')).toHaveText('00:00');
     await expect(lobby.page.getByTestId('big-expired')).toContainText('HẾT GIỜ');
     await expect.poll(async () => (await snapshotOf(sup)).active_round?.exit_confirmed_at).toBeNull();
-    // Only NPC1 ends it, from its own phone.
-    await gate.page.getByTestId('primary-action').click();
+    // Only NPC1 ends it, from its own phone — with the two-press guard.
+    await twoPress(gate.page.getByTestId('primary-action'));
     await expect(big).toBeHidden();
 
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
-  test('19. root Home offers four stations plus an open viewer seat, and no admin entry', async ({ page }) => {
+  test('19. root Home offers four stations plus a separate viewer band, and no admin entry', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTestId('scream-home')).toBeVisible();
 
     // Nothing that looks like a login screen is offered for a station or a seat.
-    await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/);
-    await expect(page.getByTestId('observer-count')).toHaveText(/\/10/);
-    await expect(page.locator('.home-station')).toHaveCount(5);
-    for (const role of ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'OBSERVER']) {
+    // V3.4: the overview counts the four duty seats and the ten viewer seats
+    // separately — never the aggregate that also carries the hidden admin seats.
+    await expect(page.getByTestId('station-count')).toHaveText(/\d\/4/);
+    await expect(page.getByTestId('observer-count')).toHaveText(/\d\/10/);
+    await expect(page.locator('.home-station')).toHaveCount(4);
+    await expect(page.locator('.home-observer-card')).toHaveCount(1);
+    for (const role of ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305']) {
       await expect(page.getByTestId(`station-${role}`)).toHaveAttribute('data-state', /available|unknown|full/);
     }
+    await expect(page.getByTestId('station-OBSERVER')).toHaveAttribute('data-state', /available|unknown|full/);
     // V3.2: the retained admin is not a board tile and the public page never even
     // shows the admin line — there is no PIN sheet anywhere to reach.
     await expect(page.getByTestId('station-SUPERVISOR')).toHaveCount(0);

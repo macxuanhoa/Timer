@@ -164,6 +164,15 @@ export class LiveStore {
         const next = status === 'CONNECTED' && !this.state.snapshot ? 'OFFLINE' : status;
         this.patch({ status: next, streamAlive: status === 'CONNECTED' });
       },
+      onHeartbeat: (serverNowMs) => {
+        // V3.4 §11: a keep-alive frame refines the clock estimate and nothing
+        // else. It deliberately does not touch `status` or `lastVerifiedMono`:
+        // stamping those from the socket is what let a phone whose authoritative
+        // reads were all failing keep reading ĐÃ KẾT NỐI. The periodic verify
+        // (and a real revision hint, which is always followed by a re-read) is
+        // the only thing that may claim the data is current.
+        this.clock.observe(serverNowMs, this.now());
+      },
     });
     this.verifyTimer = setInterval(this.verifyTick, this.verifyMs) as unknown as number;
     if (typeof document !== 'undefined') {

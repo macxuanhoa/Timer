@@ -16,13 +16,15 @@
  */
 
 /**
- * 3.3.1 is the first bundle that carries QUẢN LÝ VỊ TRÍ: the seat roster naming
- * which device holds each position, and the per-seat `GIẢI PHÓNG <seat>` control.
- * A supervisor phone still on 3.3.0 has the RPCs but no way to reach them, which
- * is exactly the "không tìm thấy chức năng giải phóng vị trí" report — so raising
- * the floor to 3.3.1 is what makes that phone stop pretending it is usable.
+ * 3.4.0 is the NPC2 verification & round-completion release: the claim CTA is
+ * now derived from the authoritative permission table (a finalised round can no
+ * longer offer a press the server would refuse), the official result wears its
+ * own milestone presentation, and the synchronisation chip states five separate
+ * honest states instead of blurring "connected" and "syncing" into one label.
+ * 3.3.1 remains the floor that first carried QUẢN LÝ VỊ TRÍ; raising the
+ * server's minimum is an explicit organiser action, never a side effect here.
  */
-export const APP_VERSION = '3.3.1';
+export const APP_VERSION = '3.4.0';
 
 /**
  * The version that first carries the OPEN_NEW_EVENT and per-seat release flow.

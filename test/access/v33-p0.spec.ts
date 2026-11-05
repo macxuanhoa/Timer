@@ -91,7 +91,7 @@ async function phone(
   });
   const page = await context.newPage();
   await page.goto('http://127.0.0.1:5177' + path);
-  await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/, { timeout: 20_000 });
+  await expect(page.getByTestId('station-count')).toHaveText(/\d\/4/, { timeout: 20_000 });
   return { context, page, uid: () => uid, transport };
 }
 
@@ -169,6 +169,12 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     const p = await phone(browser);
     await expect(p.page.getByTestId('home-event-closed')).toContainText('SỰ KIỆN ĐÃ KẾT THÚC');
     await expect(p.page.getByTestId('home-event-closed')).toContainText('MỞ SỰ KIỆN MỚI');
+    // V3.4: the closed night is also a first-class picker state. The board names
+    // it (data-event='closed'), and the seats stay claimable because the backend
+    // still accepts a claim — the next crew takes its position before the reopen.
+    await expect(p.page.getByTestId('scream-home')).toHaveAttribute('data-event', 'closed');
+    await expect(p.page.getByTestId('station-LOBBY')).toBeEnabled({ timeout: 20_000 });
+    await expect(p.page.getByTestId('station-LOBBY')).toHaveAttribute('data-state', 'available');
   });
 
   test('SUPERVISOR opens the new night; every read after the handoff names the open event', async ({ browser }) => {

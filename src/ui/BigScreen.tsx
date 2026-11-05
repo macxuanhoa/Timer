@@ -5,6 +5,8 @@ import { BIG_SCREEN_WARN_MS, type Role } from '../shared/constants';
 import { formatClockCs, formatClockSec } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
+import { countdownStage, countdownStateLabel, countdownToneHex, type CountdownStageInput } from './countdown';
+import { TimeDigits } from './TimeView';
 
 interface Props {
   store: LiveStore;
@@ -15,11 +17,22 @@ interface Props {
 }
 
 /**
- * Wall display for the authoritative round countdown.
+ * Where the browser left the fullscreen request. `unsupported` and `denied`
+ * are recoverable states the operator can see and act on, never silent
+ * failures: the display keeps working in the window either way.
+ */
+type FullscreenMode = 'off' | 'on' | 'unsupported' | 'denied';
+
+/**
+ * V3.4 §4 — the SCREAM NIGHT wall countdown.
  *
- * It renders the same derived clock every phone renders, and it offers no control
- * over the clock at all: the wall is for watching, and only the authoritative
- * actions on the owning station can ever change what it shows.
+ * It renders the same derived clock every phone renders, through the same
+ * shared countdown design system (tone, typography, fraction notation), and
+ * it offers no control over the clock at all: the wall is for watching, and
+ * only the authoritative actions on the owning station can ever change what
+ * it shows. The layout is one flex column — information band, the giant
+ * clock on the remaining stage, utility band — so nothing can float across
+ * the digits.
  */
 export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -27,7 +40,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const now = useNow(store, 'raf');
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [digitsOnly, setDigitsOnly] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreen, setFullscreen] = useState<FullscreenMode>('off');
   const [muted, setMuted] = useState(false);
 
   const clock = useMemo(() => (snap ? resolveBigScreen(snap, now) : null), [snap, now]);
@@ -40,13 +53,34 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
    * Browsers only allow fullscreen from a user gesture, so this must never run in
    * an effect: an auto-opened display would log "requestFullscreen … only be
    * initiated by a user gesture" on every mount. The first real tap arms it once.
+   * A refusal is not swallowed: it lands in `denied`, which the utility band
+   * shows with a retry path instead of a dead button.
    */
   const setFullscreenMode = (on: boolean) => {
+    const el = rootRef.current;
+    if (on) {
+      if (!el || !document.fullscreenEnabled) {
+        setFullscreen('unsupported');
+        return;
+      }
+      try {
+        void el.requestFullscreen().then(
+          () => setFullscreen('on'),
+          () => setFullscreen('denied'),
+        );
+      } catch {
+        setFullscreen('denied');
+      }
+      return;
+    }
     try {
-      const pending = on ? rootRef.current?.requestFullscreen() : document.fullscreenElement ? document.exitFullscreen() : undefined;
-      void pending?.catch(() => undefined);
+      const pending = document.fullscreenElement ? document.exitFullscreen() : undefined;
+      void (pending ?? Promise.resolve()).then(
+        () => setFullscreen('off'),
+        () => setFullscreen('off'),
+      );
     } catch {
-      /* refused */
+      setFullscreen('off');
     }
   };
 
@@ -58,7 +92,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   };
 
   useEffect(() => {
-    const sync = () => setFullscreen(!!document.fullscreenElement);
+    const sync = () => setFullscreen((prev) => (document.fullscreenElement ? 'on' : prev === 'on' ? 'off' : prev));
     document.addEventListener('fullscreenchange', sync);
     return () => {
       document.removeEventListener('fullscreenchange', sync);
@@ -80,24 +114,42 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
       else onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
   }, [digitsOnly, onClose]);
 
   if (!clock || !hero) return null;
 
-  const tone = clock.expired ? '#e1362c' : clock.remainingMs <= BIG_SCREEN_WARN_MS ? '#f0a12a' : '#1fb96e';
+  // V3.4: the wall reads the one tone decision the shared countdown system
+  // makes for this exact instant — ember while it runs, hot amber inside the
+  // configured warning window, blood once the deadline has passed, bone-amber
+  // when the server has frozen the result. The green stopwatch is gone; the
+  // phone and the wall can no longer disagree about the same second.
+  const stageInput: CountdownStageInput = {
+    expired: clock.expired,
+    warn: !clock.pendingValidation && clock.result !== 'WON' && clock.remainingMs <= BIG_SCREEN_WARN_MS,
+    running: hero.running,
+    won: clock.result === 'WON',
+    aborted: clock.result === 'ABORTED',
+    pendingValidation: clock.pendingValidation,
+  };
+  const tone = countdownToneHex(countdownStage(stageInput));
+  const stateLabel = countdownStateLabel(stageInput);
   // In digits-only mode the whole surface is the gesture that brings the buttons back.
   const tap = digitsOnly ? () => setDigitsOnly(false) : undefined;
+  const fsLabel = fullscreen === 'on' ? 'BỎ TOÀN MÀN HÌNH' : 'TOÀN MÀN HÌNH';
 
   return (
     <div
       ref={rootRef}
-      className={`safe-top safe-bottom fixed inset-0 z-[60] flex select-none flex-col items-center justify-center overflow-hidden bg-ink px-3 text-center ${
+      className={`safe-top safe-bottom wall-shell fixed inset-0 z-[60] flex select-none flex-col overflow-hidden text-center ${
         clock.expired ? 'alarm-glow' : ''
       }`}
       data-testid="big-screen"
       data-expired={clock.expired}
       data-digits-only={digitsOnly}
+      data-tone={tone}
       onClick={tap}
       onPointerDown={() => {
         alarms.unlock();
@@ -105,92 +157,103 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
       }}
     >
       {!digitsOnly && (
-        <div className="notch-top absolute inset-x-0 flex items-start justify-between gap-3 px-4 pt-3 text-[0.7rem] tracking-[0.16em] text-mute">
+        <header className="wall-top">
           <span data-testid="big-team">
             ĐỘI #{pad(clock.teamNumber)} · {formatClockSec(clock.limitMs)}
           </span>
-        </div>
+          <span className="wall-state-chip" style={{ color: tone }} data-testid="big-state">
+            {stateLabel}
+          </span>
+        </header>
       )}
 
-      {/* Minutes and seconds carry the whole screen; the fraction is deliberately
-          an order of magnitude smaller so it never competes with the clock. */}
-      <p className="digital wall-main font-bold leading-none" style={{ color: tone }}>
-        <span data-testid="big-clock" data-mode={hero.running ? 'GAME' : 'FROZEN'}>
-          {hero.mm}:{hero.ss}
-        </span>
-        <span className="wall-fraction" data-testid="big-fraction" aria-hidden>
-          {hero.cs}
-        </span>
-      </p>
+      {/* Minutes and seconds carry the whole screen; the fraction stays on the
+          clock as its own smaller, dimmer part — `.cs`, decimal included — so
+          it reads as hundredths of a second and never as a stray number. The
+          authoritative precision behind it is the stored deadline, unchanged.
+          One shared component for the phone and the wall: the two surfaces can
+          now only ever disagree about size, never about notation or colour. */}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-3">
+        <TimeDigits mm={hero.mm} ss={hero.ss} cs={hero.cs} stage={stageInput} variant="wall" />
 
-      {!digitsOnly && <p className="mt-3 text-[clamp(0.9rem,3vw,1.6rem)] font-bold tracking-[0.1em] text-snow" data-testid="big-label">{hero.teamText.toUpperCase()}</p>}
-
-      {clock.pendingValidation && (
-        <p className="digital mt-2 text-[clamp(0.8rem,3vw,1.6rem)] font-bold tracking-[0.16em] text-ember" data-testid="big-pending">
-          HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ
-        </p>
-      )}
-
-      {clock.result === 'WON' && clock.officialMs !== null && (
-        <div className="mt-2 flex flex-col items-center gap-1" data-testid="big-result">
-          <p className="text-[clamp(0.75rem,2.6vw,1.3rem)] font-bold tracking-[0.18em] text-jade/80">KẾT QUẢ CHÍNH THỨC</p>
-          <p className="digital text-[clamp(0.9rem,3.4vw,1.8rem)] font-bold tracking-[0.08em] text-jade">
-            THỜI GIAN HOÀN THÀNH: {formatClockCs(clock.officialMs)}
+        {!digitsOnly && (
+          <p className="mt-1 text-[clamp(0.9rem,3vw,1.6rem)] font-bold tracking-[0.1em] text-snow" data-testid="big-label">
+            {hero.teamText.toUpperCase()}
           </p>
-        </div>
-      )}
+        )}
 
-      {clock.result === 'ABORTED' && (
-        <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.16em] text-blood" data-testid="big-aborted">
-          LƯỢT CHƠI ĐÃ HỦY
-        </p>
-      )}
+        {clock.pendingValidation && (
+          <p className="digital mt-2 text-[clamp(0.8rem,3vw,1.6rem)] font-bold tracking-[0.16em] text-ember" data-testid="big-pending">
+            HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ
+          </p>
+        )}
 
-      {!clock.pendingValidation && clock.expired && clock.result !== 'WON' && clock.result !== 'ABORTED' && (
-        <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.2em] text-blood" data-testid="big-expired">
-          HẾT GIỜ
-        </p>
-      )}
-
-      {!digitsOnly && (
-        <div className="notch-bottom absolute inset-x-0 flex flex-col gap-2 px-3 pb-4" data-testid="big-controls">
-          <div className="flex flex-wrap justify-center gap-2">
-            <GhostButton onClick={() => setDigitsOnly(true)} testid="big-focus">
-              CHỈ SỐ TO
-            </GhostButton>
-            <GhostButton onClick={() => setFullscreenMode(!fullscreen)} testid="big-full">
-              {fullscreen ? 'BỎ TO MÀN HÌNH' : 'TO MÀN HÌNH'}
-            </GhostButton>
-            <GhostButton onClick={() => setMuted((m) => !m)} testid="big-mute">
-              {muted ? 'BẬT TIẾNG' : 'TẮT TIẾNG'}
-            </GhostButton>
-            <GhostButton onClick={onClose} testid="big-close">
-              ĐÓNG
-            </GhostButton>
+        {clock.result === 'WON' && clock.officialMs !== null && (
+          <div className="mt-2 flex flex-col items-center gap-1" data-testid="big-result">
+            <p className="text-[clamp(0.75rem,2.6vw,1.3rem)] font-bold tracking-[0.18em] text-jade/80">ĐÃ CHỐT KẾT QUẢ</p>
+            <p className="digital text-[clamp(0.9rem,3.4vw,1.8rem)] font-bold tracking-[0.08em] text-jade">
+              THỜI GIAN CHÍNH THỨC: {formatClockCs(clock.officialMs)}
+            </p>
           </div>
-          <p className="text-[0.65rem] leading-snug text-mute" data-testid="big-note">
+        )}
+
+        {clock.result === 'ABORTED' && (
+          <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.16em] text-blood" data-testid="big-aborted">
+            LƯỢT CHƠI ĐÃ HỦY
+          </p>
+        )}
+
+        {!clock.pendingValidation && clock.expired && clock.result !== 'WON' && clock.result !== 'ABORTED' && (
+          <p className="mt-2 text-[clamp(1rem,4.5vw,2.6rem)] font-bold tracking-[0.2em] text-blood" data-testid="big-expired">
+            HẾT GIỜ
+          </p>
+        )}
+      </div>
+
+      {!digitsOnly ? (
+        <footer className="wall-utils" data-testid="big-controls">
+          <div className="wall-utils-row">
+            <button type="button" onClick={() => setDigitsOnly(true)} className="wall-util-btn" data-testid="big-focus">
+              CHỮ SỐ TO
+            </button>
+            <button
+              type="button"
+              onClick={() => setFullscreenMode(fullscreen !== 'on')}
+              className="wall-util-btn"
+              data-active={fullscreen === 'on' ? '1' : '0'}
+              disabled={fullscreen === 'unsupported'}
+              title={fullscreen === 'unsupported' ? 'Trình duyệt này không hỗ trợ toàn màn hình' : undefined}
+              data-testid="big-full"
+            >
+              {fsLabel}
+            </button>
+            <button type="button" onClick={() => setMuted((m) => !m)} className="wall-util-btn" data-active={muted ? '1' : '0'} data-testid="big-mute">
+              {muted ? 'BẬT TIẾNG' : 'TẮT TIẾNG'}
+            </button>
+            <button type="button" onClick={onClose} className="wall-util-btn" data-variant="close" data-testid="big-close">
+              ĐÓNG
+            </button>
+          </div>
+          {fullscreen === 'unsupported' && (
+            <p className="text-[0.66rem] leading-snug text-ember" data-testid="big-fs-note">
+              Trình duyệt không cho phép toàn màn hình — màn hình vẫn hiển thị đầy đủ ở đây.
+            </p>
+          )}
+          {fullscreen === 'denied' && (
+            <p className="text-[0.66rem] leading-snug text-ember" data-testid="big-fs-note">
+              Trình duyệt từ chối yêu cầu toàn màn hình — bấm TOÀN MÀN HÌNH để thử lại.
+            </p>
+          )}
+          <p className="max-w-[60ch] text-[0.65rem] leading-snug text-mute" data-testid="big-note">
             {role === 'GATE'
               ? 'Màn hình này không điều khiển được đồng hồ. NPC 1 bấm trên điện thoại của mình.'
               : 'Chỉ hiển thị. Đồng hồ lượt chơi chỉ do NPC 1 mở và chỉ kết thúc theo mốc do NPC 2 chốt.'}
             {autoOpened ? ' Tự đóng khi lượt chơi chốt.' : ''}
           </p>
-        </div>
+        </footer>
+      ) : (
+        <p className="pb-3 text-center text-[0.6rem] tracking-[0.2em] text-mute/50">CHẠM ĐỂ THẤY LẠI NÚT</p>
       )}
-
-      {digitsOnly && <p className="notch-bottom absolute mb-3 text-[0.6rem] tracking-[0.2em] text-mute/50">CHẠM ĐỂ THẤY LẠI NÚT</p>}
     </div>
-  );
-}
-
-function GhostButton({ onClick, testid, children }: { onClick(): void; testid: string; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="min-h-[3.2rem] rounded-panel border border-hair px-3 text-[0.72rem] font-semibold tracking-[0.06em] text-snow active:bg-panel"
-      data-testid={testid}
-    >
-      {children}
-    </button>
   );
 }

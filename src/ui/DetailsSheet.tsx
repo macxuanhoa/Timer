@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type { LiveStore } from '../client/liveStore';
 import type { StoredSession } from './session';
 import { analytics, formatClockCs, formatClockMs, formatClockSec, formatDuration, formatSeconds, formatWallTime, leaderboard, roundMetrics } from '../shared/metrics';
@@ -13,7 +13,9 @@ import {
   RESET_TASKS,
   RESET_TASK_LABEL,
   REVIEW_REASON_LABEL,
+  ROLE_AREA,
   ROLE_LABEL,
+  ROLE_PERSON,
   ROLE_SHORT,
   ROUND_DURATION_MAX_MS,
   ROUND_DURATION_MIN_MS,
@@ -26,11 +28,16 @@ import {
 import { flowStatus, liveStatus, roundLimitMs } from '../shared/machine';
 import { USING_SUPABASE } from '../client/gateway';
 import { disputedRounds } from '../shared/metrics';
-import { pad } from '../client/selectors';
+import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD, type OpsCommand, type OpsRoleStatus } from '../client/selectors';
 import { alarms } from './sound';
 import { StationStrip } from './StationStrip';
 import { SeatManagement } from './SeatManagement';
-import type { Round } from '../shared/types';
+import { ACCENT_HEX, ROLE_ACCENT } from './accents';
+import {
+  AlertIcon, CheckIcon, ChevronDownIcon, DoorIcon, GearIcon, LockIcon,
+  PinIcon, RoomIcon, SignalIcon, SignalOffIcon, StairsIcon, UsersIcon,
+} from './icons';
+import type { Round, Snapshot } from '../shared/types';
 
 interface Props {
   open: boolean;
@@ -48,10 +55,13 @@ interface Props {
 type SheetTab = 'ops' | 'admin' | 'report';
 
 /** Bottom sheet: never navigates away, so live timers keep rendering underneath.
- * V3.2 UX: the former stack of seven accordions is now three flat information
- * groups — Điều hành (live process), Quản trị (supervisor-only controls, the
- * board release is the first thing there), Báo cáo (history, stats, audit).
- * Nothing was removed and no business call changed. */
+ * V3.4 §1–§5: the Điều hành group is now the shift's command centre — event
+ * state, the team on the floor, the workflow stage, blocked roles and the next
+ * action in that order, then the four duty seats, the hidden-object layout and
+ * a human connection summary with the technical metrics behind
+ * “CHẨN ĐOÁN KỸ THUẬT”. Quản trị (supervisor-only controls, the board release is
+ * the first thing there) and Báo cáo (history, stats, audit) keep the V3.2 flat
+ * groups. Nothing was removed and no business call changed. */
 export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScreen, onLogout, initialTab = 'ops' }: Props) {
   const state = store.getSnapshot();
   const snap = state.snapshot;
@@ -78,10 +88,19 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
       <Dialog.Portal>
         <Dialog.Overlay className="sheet-overlay" />
         <Dialog.Content className="sheet-content flex flex-col" data-testid="details-sheet" aria-describedby={undefined}>
-          <header className="flex items-center justify-between gap-2 border-b border-hair px-4 pt-3">
-            <Dialog.Title className="text-[0.8rem] font-semibold tracking-[0.16em] text-snow">
-              {snap ? `${snap.rounds.length} LƯỢT CHƠI` : 'ĐANG ĐỒNG BỘ'}
-            </Dialog.Title>
+          <header className="sheet-head flex items-center justify-between gap-2 border-b border-hair px-4 pt-3">
+            <div className="min-w-0">
+              {/* V3.4 §3: the header names the current event state, never an
+                  ambiguous cumulative counter. Round totals live in the ops
+                  command card and the report tab, where their semantics
+                  (recorded / closed / open / cancelled) are spelled out. */}
+              <Dialog.Title className="sheet-title" data-testid="sheet-event-state">
+                {snap ? OPS_EVENT_STATE_WORD[statusOf(snap, now)] : 'ĐANG ĐỌC TRẠNG THÁI…'}
+              </Dialog.Title>
+              <p className="sheet-sub truncate" data-testid="sheet-event-name">
+                {snap ? snap.event.config.event_name : 'Sự kiện phòng 305'}
+              </p>
+            </div>
             <Dialog.Close className="rounded px-3 py-1 text-[0.85rem] text-mute" data-testid="close-details">
               Đóng
             </Dialog.Close>
@@ -108,38 +127,16 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
             {!snap ? (
               <p className="py-10 text-center text-[0.8rem] text-mute">Đang tải dữ liệu…</p>
             ) : activeTab === 'ops' ? (
-              <div className="flex flex-col gap-2">
-                {/* Wall display + station switch: the only two actions that are not
-                    a handoff, so they live here instead of the operator screen. */}
-                <div className="flex gap-2">
-                  {counting && onOpenBigScreen && (
-                    <button
-                      type="button"
-                      onClick={onOpenBigScreen}
-                      className="flex-1 rounded-[10px] border border-hair bg-panel px-3 py-2.5 text-[0.72rem] font-semibold text-snow active:bg-panel2"
-                      data-testid="sheet-big-screen"
-                    >
-                      MÀN HÌNH LỚN
-                    </button>
-                  )}
-                  {onLogout && (
-                    <button
-                      type="button"
-                      onClick={onLogout}
-                      className="flex-1 rounded-[10px] border border-hair bg-panel px-3 py-2.5 text-[0.72rem] text-mute active:bg-panel2"
-                      data-testid="logout"
-                    >
-                      ĐỔI MÁY
-                    </button>
-                  )}
-                </div>
-                <Section title="Trạng thái NPC" testid="section-npc">
-                  <NpcStatus snap={snap} account={account} store={store} now={now} />
-                </Section>
-                <Section title="Kết nối & cảnh báo" testid="section-connectivity">
-                  <Connectivity store={store} now={now} />
-                </Section>
-              </div>
+              <OpsTab
+                store={store}
+                snap={snap}
+                account={account}
+                now={now}
+                counting={counting}
+                onOpenBigScreen={onOpenBigScreen}
+                onLogout={onLogout}
+                onOpenReport={() => setTab('report')}
+              />
             ) : activeTab === 'admin' ? (
               <div className="flex flex-col gap-2">
                 <Section title="Quản lý" testid="section-admin">
@@ -190,6 +187,291 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/* ------------------------------------------------------------ ops command tab */
+
+/** One icon per station, so a supervisor scanning the four duty cards finds the
+ * right one by shape before reading the name (V3.4 §4). */
+const OPS_SEAT_ICON: Record<string, (props: { className?: string }) => React.ReactElement> = {
+  LOBBY: UsersIcon,
+  CORRIDOR: StairsIcon,
+  GATE: DoorIcon,
+  ROOM305: RoomIcon,
+};
+
+/** The seat line's icon agrees with the word it carries — never colour alone. */
+const OPS_SEAT_ICON_BY_STATE: Record<string, (props: { className?: string }) => React.ReactElement> = {
+  held: CheckIcon,
+  free: SignalOffIcon,
+  unknown: AlertIcon,
+};
+
+/**
+ * V3.4 §1–§5 — the Điều hành group, built as the shift's command centre. The order
+ * is the order a supervisor asks the questions: what state is the event in, which
+ * team is on the floor and where, which workflow stage, who is blocked, what to do
+ * next — then the four duty seats, the hidden-object layout and the connection
+ * summary, with the raw technical readout folded behind “CHẨN ĐOÁN KỸ THUẬT”.
+ *
+ * Every word on this screen comes from the authoritative selectors in
+ * `client/selectors.ts` (resolveOpsCommand / resolveOpsRoles / resolveOpsLayout /
+ * resolveSyncState), so nothing here invents a frontend condition: the seat card
+ * reads the stored binding, the layout card mirrors the server's SET_LAYOUT
+ * permission and legal window, and a blocked role is a state-machine fact rather
+ * than the most recent audit line. Controls shown are only controls the RPC would
+ * accept for this caller at this moment.
+ */
+function OpsTab({
+  store,
+  snap,
+  account,
+  now,
+  counting,
+  onOpenBigScreen,
+  onLogout,
+  onOpenReport,
+}: {
+  store: LiveStore;
+  snap: Snapshot;
+  account: StoredSession['account'];
+  now: number;
+  counting: boolean;
+  onOpenBigScreen?: () => void;
+  onLogout?: () => void;
+  onOpenReport(): void;
+}) {
+  const cmd = resolveOpsCommand(snap, now, { isSupervisor: account.role === 'SUPERVISOR' });
+  // The local demo backend keeps no multi-device seat board, so the cards must not
+  // claim a seat is empty: they read CHƯA XÁC MINH ĐƯỢC GHẾ instead.
+  const seats = resolveOpsRoles(snap, now, { seatKnown: USING_SUPABASE });
+  const layout = resolveOpsLayout(snap, account.role, now);
+  const state = store.getSnapshot();
+  const sync = resolveSyncState(state.status, { dataAgeMs: store.dataAgeMs() });
+  // The checklist is a live question only while the floor is being put back:
+  // resolveResetBoard answers empty outside that window, so this sheet can never
+  // read “chờ xác nhận” for a round that has not started its reset.
+  const resetBoard = resolveResetBoard(snap, account.role);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <section className="card p-3" data-testid="ops-command">
+        <p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-mute">Trạng thái sự kiện</p>
+        <p className="mt-1 text-[1rem] font-black leading-tight text-snow" data-testid="ops-command-state">
+          {cmd.stateWord}
+        </p>
+        <p className="mt-0.5 truncate text-[0.7rem] text-mute">{cmd.eventName}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="badge" data-tone={cmd.state === 'LIVE' ? 'live' : cmd.state === 'ENDED' ? 'idle' : 'queued'} data-testid="ops-stage">
+            {cmd.stageWord}
+          </span>
+          <span className="text-[0.74rem] font-semibold text-snow" data-testid="ops-team">{cmd.teamText}</span>
+        </div>
+        {cmd.whereText !== null && (
+          <p className="mt-1 text-[0.68rem] leading-snug text-mute" data-testid="ops-where">
+            Đội đang ở: <span className="text-snow">{cmd.whereText}</span>
+          </p>
+        )}
+        <p className="mt-2 border-t border-hair/60 pt-2 text-[0.64rem] leading-snug text-mute" data-testid="ops-round-counts">
+          {cmd.counts.sentence}
+        </p>
+        {cmd.next === null ? (
+          <p className="mt-2 text-[0.7rem] text-mute" data-testid="ops-next-action">
+            Chưa có vị trí nào cần bấm ngay.
+          </p>
+        ) : (
+          <div className="mt-2 rounded-panel border border-ember/50 bg-ember/10 px-3 py-2" data-testid="ops-next-action">
+            <p className="text-[0.58rem] font-bold uppercase tracking-[0.14em] text-ember">Việc cần làm ngay</p>
+            <p className="mt-0.5 text-[0.78rem] font-bold leading-snug text-snow">{cmd.next.who}</p>
+            <p className="text-[0.72rem] leading-snug text-ember">{cmd.next.what}</p>
+          </div>
+        )}
+        {cmd.attention.length > 0 && (
+          <ul className="mt-2 flex flex-col gap-1" data-testid="ops-attention">
+            {cmd.attention.map((line) => (
+              <li key={line} className="notice-band border-blood/50 text-[0.68rem] text-blood" data-testid="ops-attention-item">
+                <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* The two station-switch actions that are not a handoff, plus the report
+          shortcut — never a second copy of the operator's own primary CTA. */}
+      <div className="flex gap-2">
+        {counting && onOpenBigScreen && (
+          <button
+            type="button"
+            onClick={onOpenBigScreen}
+            className="btn-quiet flex-1 text-[0.72rem] font-semibold"
+            data-testid="sheet-big-screen"
+          >
+            MÀN HÌNH LỚN
+          </button>
+        )}
+        <button type="button" onClick={onOpenReport} className="btn-quiet flex-1 text-[0.72rem]" data-testid="ops-open-report">
+          XEM BÁO CÁO
+        </button>
+        {onLogout && (
+          <button type="button" onClick={onLogout} className="btn-quiet flex-1 text-[0.72rem]" data-testid="logout">
+            ĐỔI MÁY
+          </button>
+        )}
+      </div>
+
+      <Section title="Bốn vị trí trực" testid="section-ops-seats">
+        <StationStrip snap={snap} now={now} self={account.role} className="mb-2" />
+        <div className="flex flex-col gap-1.5">
+          {seats.map((r) => {
+            const Icon = OPS_SEAT_ICON[r.role] ?? PinIcon;
+            const SeatIcon = OPS_SEAT_ICON_BY_STATE[r.seat] ?? AlertIcon;
+            return (
+              <div
+                key={r.role}
+                className="rounded-panel border border-hair bg-ink/40 px-3 py-2"
+                style={{ borderLeft: `3px solid ${ACCENT_HEX[ROLE_ACCENT[r.role]]}` } as CSSProperties}
+                data-testid={`ops-seat-${r.role.toLowerCase()}`}
+                data-state={r.stateWord}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <Icon className="mt-0.5 h-4 w-4 shrink-0 text-mute" />
+                    <div className="min-w-0">
+                      <p className="text-[0.74rem] font-bold leading-tight text-snow">{r.person}</p>
+                      <p className="text-[0.58rem] font-semibold uppercase tracking-[0.1em] text-mute">{r.area}</p>
+                    </div>
+                  </div>
+                  <span className="badge shrink-0" data-tone={r.badgeTone} data-testid={`ops-seat-${r.role.toLowerCase()}-state`}>
+                    {r.stateWord}
+                  </span>
+                </div>
+                <p
+                  className={`mt-1.5 flex items-center gap-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.08em] ${
+                    r.seat === 'held' ? 'text-jade' : r.seat === 'free' ? 'text-mute' : 'text-ember'
+                  }`}
+                  data-testid={`ops-seat-${r.role.toLowerCase()}-seat`}
+                >
+                  <SeatIcon className="h-3.5 w-3.5 shrink-0" />
+                  {OPS_SEAT_WORD[r.seat]}
+                </p>
+                {r.issue !== null ? (
+                  <p className="mt-1 text-[0.68rem] leading-snug text-blood" data-testid={`ops-seat-${r.role.toLowerCase()}-issue`}>
+                    {r.issue}
+                  </p>
+                ) : r.duty !== null ? (
+                  <p className="mt-1 text-[0.68rem] leading-snug text-mute" data-testid={`ops-seat-${r.role.toLowerCase()}-duty`}>
+                    {r.duty}
+                  </p>
+                ) : null}
+                {r.lastText !== null && (
+                  <p className="mt-1 text-[0.6rem] leading-snug text-mute/80">
+                    {r.lastText}
+                    {r.lastAt !== null ? ` · ${formatWallTime(r.lastAt)}` : ''}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {resetBoard.rows.length > 0 && (
+          <div
+            className="mt-2 flex flex-col gap-1"
+            data-testid="ops-reset-tasks"
+            data-done={resetBoard.done}
+            data-total={resetBoard.total}
+          >
+            {resetBoard.rows.map((row) => (
+              <Row
+                key={row.key}
+                k={`${row.label} · ${row.owner}`}
+                v={
+                  row.state === 'done' && row.confirmedAt !== null
+                    ? `${ROLE_SHORT[row.confirmedByRole as Role] ?? ''} ${formatWallTime(row.confirmedAt)}${row.layout ? ` · kiểu ${row.layout}` : ''}`
+                    : row.status
+                }
+                tone={row.state === 'done' ? 'text-jade' : row.state === 'failed' ? 'text-blood' : 'text-ember'}
+              />
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Bố trí vật ẩn" testid="section-ops-layout">
+        <div data-testid="ops-layout">
+          <Row k="Kiểu hiện hành" v={`Kiểu ${layout.current}`} />
+          <Row k="Chịu trách nhiệm" v={`${layout.ownerPerson} · ${layout.ownerArea}`} />
+          {layout.liveRoundLayout !== null && (
+            <Row k="Lượt đang chơi dùng" v={`Kiểu ${layout.liveRoundLayout}`} tone="text-ember" />
+          )}
+          {layout.canAct && layout.phaseAllowsEdit ? (
+            <div className="mt-2 flex gap-2">
+              {LAYOUTS.map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  disabled={l === layout.current || store.getSnapshot().pending === 'SET_LAYOUT'}
+                  onClick={() => void store.act('SET_LAYOUT', { layout: l })}
+                  className={`flex-1 rounded border px-2 py-2.5 text-[0.72rem] disabled:opacity-50 ${
+                    l === layout.current ? 'border-jade text-jade' : 'border-hair text-snow'
+                  }`}
+                  data-testid={`layout-${l}`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 flex items-start gap-1.5 text-[0.66rem] leading-snug text-mute" data-testid="ops-layout-locked">
+              <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{layout.lockedReason ?? `Chỉ ${layout.ownerPerson} đổi được bố trí.`}</span>
+            </p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Kết nối" testid="section-ops-sync">
+        <div data-testid="ops-sync">
+          <div className="flex items-center justify-between gap-2">
+            <span className="conn-chip" data-status={state.status} data-testid="ops-sync-state">
+              {state.status === 'CONNECTED' ? <SignalIcon className="h-3.5 w-3.5" /> : <SignalOffIcon className="h-3.5 w-3.5" />}
+              {sync.label}
+            </span>
+            <span className="digital text-[0.62rem] text-mute">bản {state.revision}</span>
+          </div>
+          <p className="mt-1.5 text-[0.66rem] leading-snug text-mute" data-testid="ops-sync-note">
+            {sync.key === 'connected' || sync.key === 'current'
+              ? 'Các số đang hiển thị lấy từ máy chủ, đồng hồ làm theo máy chủ.'
+              : 'Số liệu có thể đang cũ. Kiểm tra mạng và đọc lại; điểm chính thức luôn lấy từ máy chủ.'}
+          </p>
+          {sync.showRetry && (
+            <button
+              type="button"
+              onClick={() => {
+                alarms.unlock();
+                void store.recover();
+              }}
+              className="btn-quiet mt-2 w-full text-[0.72rem]"
+              data-testid="ops-retry"
+            >
+              THỬ ĐỌC LẠI
+            </button>
+          )}
+          <details className="mt-2 rounded-panel border border-hair bg-ink/40" data-testid="ops-tech-details">
+            <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2.5 text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-mute marker:hidden">
+              <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" />
+              <GearIcon className="h-3.5 w-3.5 shrink-0" />
+              Chẩn đoán kỹ thuật
+            </summary>
+            <div className="px-3 pb-3">
+              <Connectivity store={store} now={now} />
+            </div>
+          </details>
+        </div>
+      </Section>
+    </div>
   );
 }
 
@@ -321,95 +603,6 @@ function exportCsv(snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snaps
   a.download = `scream-305-${new Date(snap.server_now_ms).toISOString().slice(0, 16).replace(/[:T]/g, '-')}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
-}
-
-function NpcStatus({
-  snap,
-  account,
-  store,
-  now,
-}: {
-  snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>;
-  account: StoredSession['account'];
-  store: LiveStore;
-  now: number;
-}) {
-  const round = snap.active_round;
-  const tasks = round ? snap.reset_tasks.filter((t) => t.round_id === round.id) : [];
-  const byRole = (role: Role) => tasks.filter((t) => t.required_role === role);
-  const owner = snap.event.config.hidden_object_owner;
-  const canSetLayout = account.role === 'SUPERVISOR' || account.role === owner;
-  return (
-    <div className="flex flex-col gap-1.5" data-testid="npc-status">
-      {/* The five-station relay lives here: on the main screen the journey strip
-          already names the next press, so the relay is detail, not a second voice. */}
-      <StationStrip snap={snap} now={now} self={account.role} className="mb-2" />
-      {snap.operators.map((op) => {
-        const own = byRole(op.role);
-        const state = own.length === 0 ? '—' : own.every((t) => t.completed_at !== null) ? 'XONG' : 'ĐANG LÀM';
-        return (
-          <div key={op.role} className="flex items-center justify-between gap-2 border-b border-hair/40 py-1.5 last:border-0">
-            <div className="min-w-0">
-              <p className="text-[0.72rem] font-semibold text-snow">{ROLE_LABEL[op.role]}</p>
-              <p className="truncate text-[0.66rem] text-mute">
-                {op.last_detail ?? (op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác')}
-                {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
-              </p>
-            </div>
-            <span
-              className={`shrink-0 rounded px-2 py-1 text-[0.62rem] font-semibold tracking-[0.08em] ${
-                state === 'XONG' ? 'bg-jade/15 text-jade' : state === 'ĐANG LÀM' ? 'bg-ember/15 text-ember' : 'bg-panel text-mute'
-              }`}
-              data-testid={`npc-${op.role}`}
-            >
-              {state}
-            </span>
-          </div>
-        );
-      })}
-      {round && tasks.length > 0 && (
-        <div className="mt-2 flex flex-col gap-1">
-          {tasks.map((t) => (
-            <Row
-              key={t.task_key}
-              k={RESET_TASK_LABEL[t.task_key]}
-              v={
-                t.completed_at && t.cycle === (round.reset_cycle ?? 1)
-                  ? `${ROLE_SHORT[t.confirmed_by_role as Role] ?? ''} ${formatWallTime(t.completed_at)}${t.layout ? ` · kiểu ${t.layout}` : ''}`
-                  : 'chờ'
-              }
-              tone={t.completed_at && t.cycle === (round.reset_cycle ?? 1) ? 'text-jade' : 'text-ember'}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Scenario C: one responsible operator prepares the layout, everyone can read it. */}
-      <div className="mt-3 rounded-panel border border-hair px-3 py-2" data-testid="layout-block">
-        <p className="text-[0.68rem] text-mute">
-          Bố trí vật ẩn · <span className="text-snow">kiểu {snap.event.config.hiding_layout}</span> · do {ROLE_SHORT[owner]} chuẩn bị
-        </p>
-        {canSetLayout && (
-          <div className="mt-2 flex gap-2">
-            {LAYOUTS.map((l) => (
-              <button
-                key={l}
-                type="button"
-                disabled={l === snap.event.config.hiding_layout}
-                onClick={() => void store.act('SET_LAYOUT', { layout: l })}
-                className={`flex-1 rounded border px-2 py-2 text-[0.72rem] ${
-                  l === snap.event.config.hiding_layout ? 'border-jade text-jade' : 'border-hair text-mute'
-                }`}
-                data-testid={`layout-${l}`}
-              >
-                {l}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function Connectivity({ store, now }: { store: LiveStore; now: number }) {

@@ -312,7 +312,7 @@ describe('journey — the route every phone shows', () => {
     expect(climbing.position).toBe(0);
     expect(climbing.focus).toBe(1); // walking into the second floor
     expect(climbing.where).toBe('ĐANG LÊN TẦNG 2');
-    expect(climbing.turn).toMatchObject({ roles: ['CORRIDOR'], label: 'XÁC NHẬN ĐÃ ĐẾN TẦNG 2', mine: true });
+    expect(climbing.turn).toMatchObject({ roles: ['CORRIDOR'], label: 'XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2', mine: true });
 
     const atFloor2 = runningSnap(T0 + 60_000, {
       status: 'READY_AT_FLOOR3',

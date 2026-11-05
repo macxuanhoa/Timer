@@ -76,7 +76,7 @@ async function phone(browser: Browser, path = '/') {
   });
   const page = await context.newPage();
   await page.goto(path);
-  await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/);
+  await expect(page.getByTestId('station-count')).toHaveText(/\d\/4/);
   return {context,page, uid:()=>uid, offline:(x:boolean)=>{offline=x;}, blockBoard:(x:boolean)=>{boardBlocked=x;}, dropRelease:()=>{releaseDropAfterCommit=true;}};
 }
 
@@ -146,6 +146,7 @@ for (const role of STATIONS) test(role+': root → claim → dashboard; occupied
   await claim(a,role);
   await expect(b.page.getByTestId('station-'+role)).toBeDisabled();
   await expect(b.page.getByTestId('station-'+role)).toHaveAttribute('data-state','full');
+  if (role === 'GATE') await b.page.screenshot({path:'shots/v34-picker-occupied.png',fullPage:true});
   const uid=await identity(); expect((await rpc(uid,'claim_station',{p_role:role})).code).toBe('ROLE_TAKEN');
   await a.page.getByTestId('return-home').click();
   await expect(a.page.getByTestId('scream-home')).toBeVisible();
@@ -153,12 +154,21 @@ for (const role of STATIONS) test(role+': root → claim → dashboard; occupied
   await claim(b,role);
 });
 
-test('the picker shows four stations plus the open viewer seat, never the admin',async({browser})=>{
+test('the picker shows four stations plus a separate viewer band, never the admin',async({browser})=>{
   const a=await phone(browser);
-  await expect(a.page.locator('.home-station')).toHaveCount(5);
+  // V3.4: four duty cards in their own grid; the viewer seat is a separate band,
+  // never a fifth duty tile, and the hidden admin seat never appears at all.
+  await expect(a.page.locator('.home-station')).toHaveCount(4);
+  await expect(a.page.locator('.home-observer-card')).toHaveCount(1);
   await expect(a.page.getByTestId('station-OBSERVER')).toHaveAttribute('data-kind','observer');
   await expect(a.page.getByTestId('station-SUPERVISOR')).toHaveCount(0);
-  await expect(a.page.getByTestId('observer-count')).toHaveText(/\/10/);
+  // The overview states both capacity classes in Vietnamese, counted from the
+  // server board: four duty seats (never the aggregate that also carries the
+  // hidden admin seats) and ten viewer seats.
+  await expect(a.page.getByTestId('station-count')).toHaveText(/\d\/4/);
+  await expect(a.page.getByTestId('observer-count')).toHaveText(/\d\/10/);
+  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực đã chiếm');
+  await expect(a.page.getByTestId('home-overview')).toContainText('Người đang quan sát');
   // The viewer seat opens with no password and no challenge of any kind.
   await claim(a,'OBSERVER');
   await expect(a.page.getByTestId('observer')).toBeVisible();
@@ -232,6 +242,12 @@ test('ten viewers fit, the eleventh is refused, and a seat survives a refresh',a
   const board = await rpc(null,'station_board');
   expect(Number(board.observer_devices)).toBe(10);
   expect(Number(board.observer_capacity)).toBe(10);
+  // V3.4: the picker's separate viewer band states the real occupancy and
+  // refuses the tap while all ten seats are held — never a phantom "còn trống".
+  const packed = await phone(browser);
+  await expect(packed.page.getByTestId('observer-count')).toHaveText('10/10');
+  await expect(packed.page.getByTestId('station-OBSERVER')).toHaveAttribute('data-state','full');
+  await expect(packed.page.getByTestId('station-OBSERVER')).toBeDisabled();
   // The eleventh is a refusal, not an error, and it states the capacity.
   const late = await rpc(await identity(),'observer_join',{p_viewer_id:'v-late'});
   expect(late.code).toBe('OBSERVER_FULL');
@@ -272,6 +288,11 @@ test('offline release keeps dashboard and occupancy; a lost committed reply is s
 });
 
 test('supervisor releases the board; a stranger or a live floor keeps every seat', async ({browser}) => {
+  // Same budget decision as the seat cases in v33-p0.spec.ts, with the same
+  // evidence: this case opens six intercepted browser contexts and a real
+  // database pool, so it runs in ~41 s alone but overruns the 90 s default in the
+  // serial 26-case chain. No assertion is relaxed — only the ceiling is honest.
+  test.setTimeout(180_000);
   const lobby=await phone(browser); await claim(lobby,'LOBBY');
   const corridor=await phone(browser); await claim(corridor,'CORRIDOR');
   const gate=await phone(browser); await claim(gate,'GATE');
@@ -280,7 +301,9 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
   const spare=await identity(); await allowAdmin(spare);
   expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
   const picker=await phone(browser);
-  await expect(picker.page.getByTestId('station-count')).toHaveText('6/6');
+  // V3.4: the public overview counts the four duty seats only — the two hidden
+  // admin seats never enter the crew's capacity arithmetic.
+  await expect(picker.page.getByTestId('station-count')).toHaveText('4/4');
 
   // A team on the clock: a duty phone is refused outright, and the supervisor is
   // refused because the floor is not idle (§6.1-6.2). No secret enters either call.
@@ -314,7 +337,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
   await sup.page.getByTestId('release-confirm').click();
   await expect(sup.page.getByTestId('release-armed')).toBeVisible();
   // Arming alone must not release anything: the board is untouched until the tap.
-  await expect(picker.page.getByTestId('station-count')).toHaveText('6/6');
+  await expect(picker.page.getByTestId('station-count')).toHaveText('4/4');
 
   const fingerprint = async () => (await pool.query(
     "select md5(coalesce(string_agg(to_jsonb(r)::text,'|' order by r.id),'')) || md5(coalesce(string_agg(to_jsonb(a)::text,'|' order by a.id),'')) as h " +
@@ -325,7 +348,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
 
   await sup.page.getByTestId('release-confirm').click();
   await sup.page.screenshot({path:'shots/admin-release-secret.png'});
-  await expect(picker.page.getByTestId('station-count')).toHaveText('0/6');
+  await expect(picker.page.getByTestId('station-count')).toHaveText('0/4');
   await picker.page.screenshot({path:'shots/admin-release-free-board.png'});
   await expect(picker.page.getByTestId('station-GATE')).toBeEnabled();
   // Every duty phone loses authority on its own recheck and lands back on the picker.
@@ -421,6 +444,7 @@ test('stale occupancy becomes neutral and disabled, reconnect refetches; old lin
   const a=await phone(browser); a.blockBoard(true);
   await expect(a.page.getByTestId('station-GATE')).toHaveAttribute('data-state','unknown');
   await expect(a.page.getByTestId('station-GATE')).toBeDisabled();
+  await a.page.screenshot({path:'shots/v34-picker-unknown.png',fullPage:true});
   a.blockBoard(false); await expect(a.page.getByTestId('station-GATE')).toBeEnabled();
   await a.page.goto('/i/'+ 'x'.repeat(43));
   await expect(a.page.getByTestId('scream-home')).toBeVisible(); await expect(a.page).toHaveURL('http://127.0.0.1:5177/');

@@ -219,3 +219,92 @@ export function EyeOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
     </svg>
   );
 }
+
+/**
+ * V3.4 state glyphs. The stepper and the connection chip must read their state
+ * from the SHAPE as well as the colour, so each of these is a distinct silhouette
+ * rather than a variation on the same outline.
+ */
+
+/** A stage this phone is not allowed to reach yet. */
+export function LockIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2" />
+      <path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5" />
+    </svg>
+  );
+}
+
+/** Something here needs a decision — a logged exception, a stall, a lost link. */
+export function AlertIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M12 4.2 21 19.4H3z" />
+      <path d="M12 9.6v4.2" />
+      <path d="M12 16.6h.01" />
+    </svg>
+  );
+}
+
+/** The live link. Bars, so a weak signal can be shown as fewer of them. */
+export function SignalIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...filled({ className, ...rest })}>
+      <rect x="3" y="14" width="3.2" height="6" rx="1" />
+      <rect x="8.4" y="10" width="3.2" height="10" rx="1" />
+      <rect x="13.8" y="6" width="3.2" height="14" rx="1" />
+      <rect x="19.2" y="3" width="1.8" height="17" rx="0.9" opacity="0.45" />
+    </svg>
+  );
+}
+
+/** The link is gone: the same silhouette, struck through. */
+export function SignalOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, strokeWidth: 2.4, ...rest })}>
+      <path d="M4 20V15M9 20v-6M14 20V9" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+
+/** The lantern. Marks the spotlight side of a card, and the running clock. */
+export function FlameIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M12 3.2c3.4 3.6 5.6 6 5.6 9.1A5.6 5.6 0 0 1 12 20.8a5.6 5.6 0 0 1-5.6-8.5c1-1.6 2.2-2.3 2.6-4 1.4 1.3 2 2.4 2.2 3.7.6-2.4 1.4-5.4.6-8.8z" />
+    </svg>
+  );
+}
+
+/** V3.4 picker: the floor-2 stairwell — the climb between the two handovers. */
+export function StairsIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M4 20h4v-4h4v-4h4V8h4" />
+      <path d="M4 20v-1" />
+    </svg>
+  );
+}
+
+/** V3.4 picker: the place marker on a card's location line. */
+export function PinIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M12 21s-6.5-5.6-6.5-10.2A6.5 6.5 0 0 1 12 4.3a6.5 6.5 0 0 1 6.5 6.5C18.5 15.4 12 21 12 21z" />
+      <circle cx="12" cy="10.6" r="2.2" />
+    </svg>
+  );
+}
+
+/** Records, rounds and rankings: the reporting destination. */
+export function ReportIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <rect x="4" y="3.5" width="16" height="17" rx="2" />
+      <path d="M8 16.5v-3M12 16.5v-6M16 16.5v-4" />
+    </svg>
+  );
+}
+

@@ -135,12 +135,13 @@ describe('LiveStore boot never hangs', () => {
 
 describe('server floor blocks an outdated bundle safely', () => {
   it('the running bundle is never stale against the shipped V3.3 floor', () => {
-    // 3.3.1 is the first bundle carrying QUẢN LÝ VỊ TRÍ. Raising the server floor
-    // to this value is what keeps a supervisor phone on an older shell from
-    // showing a board it cannot operate.
-    expect(APP_VERSION).toBe('3.3.1');
+    // 3.4.0 is the NPC2 verification release; the shipped server floor stays at
+    // 3.3.1 (QUẢN LÝ VỊ TRÍ), so the running bundle must clear it and any
+    // organiser-raised floor up to its own version without being locked out.
+    expect(APP_VERSION).toBe('3.4.0');
     expect(isClientStale(APP_VERSION)).toBe(false);
-    expect(isClientStale('3.4.0')).toBe(true);
+    expect(isClientStale('3.3.1')).toBe(false);
+    expect(isClientStale('99.0.0')).toBe(true);
   });
 
   it('VERSION_STALE from the wire locks the store', async () => {

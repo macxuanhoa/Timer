@@ -1,13 +1,16 @@
-import type { JourneyStopDef, ResetTaskKey, Role, StationRole } from '../shared/constants';
-import { JOURNEY_STOPS, OBSERVER_CAPACITY, RESET_TASK_LABEL, STALL_WARN_MS } from '../shared/constants';
+import type { HidingLayout, JourneyStopDef, ResetRowState, ResetTaskKey, Role, StationRole } from '../shared/constants';
+import { ACTION_LABEL, BIG_SCREEN_WARN_MS, DEGRADED_AFTER_MS, JOURNEY_STOPS, OBSERVER_CAPACITY, PHASE_LABEL, RESET_READOUT_ORDER, RESET_STATE_LABEL, RESET_TASK_LABEL, ROLE_AREA, ROLE_PERSON, ROLE_SHORT, STALL_WARN_MS, SYNC_STATE_LABEL, VERIFY_INTERVAL_MS, resetTasksSentence } from '../shared/constants';
 import {
   attemptsOf,
+  authorize,
   deriveEventStatus,
+  flowStatus,
   gameRemainingMs,
   isResetWindow,
   isTerminalRound,
   liveStatus,
   pendingEligibleClaims,
+  phaseAllows,
   resultOf,
   roundDeadlineMs,
   roundLimitMs,
@@ -158,8 +161,11 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
 
     case 'WAITING_FLOOR2_CONFIRMATION': {
       if (role === 'CORRIDOR') {
-        return live('CONFIRM_FLOOR2', 'XÁC NHẬN ĐÃ ĐẾN TẦNG 2', {
-          hint: 'Bấm khi đội đã có mặt ở tầng 2',
+        // V3.4 Role 02: the copy names the whole fact being confirmed, and the
+        // hint states the physical precondition — the server, not this phone,
+        // records the arrival.
+        return live('CONFIRM_FLOOR2', 'XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2', {
+          hint: 'Chỉ xác nhận khi đội đã có mặt tại tầng 2.',
         });
       }
       if (role === 'GATE') {
@@ -183,6 +189,15 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
           hint: 'Phổ biến luật và đưa gợi ý trước khi bấm. Chỉ NPC 1 mở đồng hồ.',
         });
       }
+      // V3.4 Role 02: after the handoff is server-confirmed the confirmation
+      // control is gone for good — the locked caption acknowledges the press
+      // that landed and names who owns the next one. The bypass keeps its own
+      // wording so a skipped floor is never displayed as a confirmation.
+      if (role === 'CORRIDOR') {
+        return round?.floor2_confirmed_at !== null
+          ? locked('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2', 'Đội đang được hướng dẫn lên tầng 3 — NPC 1 mở đồng hồ')
+          : locked('TẦNG 2 ĐÃ ĐƯỢC BỎ QUA', 'NPC 1 đã bỏ qua xác nhận tầng 2 — không còn thao tác ở đây');
+      }
       return locked('ĐỘI CHƠI SẮP BẮT ĐẦU', 'Chỉ NPC 1 được bấm BẮT ĐẦU');
 
       case 'RUNNING': {
@@ -200,6 +215,9 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
         return live('CONFIRM_EXIT', 'XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3', {
           tone: 'warn',
           hint: 'Đội không bị giữ lại vì phần mềm đang chờ xác minh',
+          // V3.4 §7: the exit closes the floor for this team — the same two-press
+          // guard every physical-fact confirmation uses, never a single stray tap.
+          confirmLabel: 'XÁC NHẬN LẠI: ĐỘI ĐÃ RỜI TẦNG 3',
         });
       }
       if (role === 'ROOM305') {
@@ -215,6 +233,7 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
           hint: round?.aborted_at !== null
             ? 'Lượt chơi đã bị hủy — vẫn phải xác nhận đội đã ra khỏi khu vực'
             : 'Thời gian hoàn thành không đổi khi xác nhận rời khu vực',
+          confirmLabel: 'XÁC NHẬN LẠI: ĐỘI ĐÃ RỜI TẦNG 3',
         });
       }
       return locked(round && round.aborted_at !== null
@@ -228,9 +247,15 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
       if (role === 'GATE' || role === 'ROOM305') {
         const own = pendingTasks(snap, role);
         if (own.length > 0) {
-          return live('RESET_DONE', 'ĐÃ RESET XONG', {
+          // V3.4 §4: NPC 1's button names the area it physically resets, because a
+          // generic "done" reads as a claim over the whole floor — which this phone
+          // has no authority to make. The words come from the caller's own rows, so
+          // the CTA always describes exactly what `RESET_DONE` will mark for it.
+          // NPC 2 keeps its approved wording; only its hint names its areas.
+          const isNpc1 = role === 'GATE';
+          return live('RESET_DONE', isNpc1 ? resetConfirmLabel(own) : 'ĐÃ RESET XONG', {
             tone: 'warn',
-            hint: own.map((t) => RESET_TASK_LABEL[t.task_key]).join(' · '),
+            hint: isNpc1 ? resetConfirmHint(own) : own.map((t) => RESET_TASK_LABEL[t.task_key]).join(' · '),
           });
         }
         if (role === 'GATE') {
@@ -238,14 +263,30 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
           const pendingResult = resultOfRound(snap, nowMs) === 'PENDING_VALIDATION';
           if (missing.length === 0 && !pendingResult) {
             return live('GATE_FINALIZE', 'XÁC NHẬN SẴN SÀNG', {
-              hint: 'NPC 1 chốt lượt chơi sau khi khu vực đã reset',
+              hint: 'Khu vực đã reset xong — chốt để Nhân sự 01 nhận đội tiếp theo.',
             });
           }
-          return locked('CHỜ RESET HOÀN TẤT', pendingResult ? 'Kết quả đang chờ NPC 2 xác minh' : `Còn: ${missing.map((m) => RESET_TASK_LABEL[m.task_key]).join(' · ')}`);
+          // The confirmation is replaced by a read-only status naming only the areas
+          // this station owns and the server has already recorded (V3.4 §4). No second
+          // press exists here, and nothing else is claimed as done.
+          const mine = doneTasks(snap, 'GATE');
+          const outstanding = `Còn: ${resetTasksSentence(missing.map((m) => m.task_key))} · chờ ${Array.from(new Set(missing.map((m) => ROLE_SHORT[m.required_role]))).join(' · ')}`;
+          return locked(
+            mine.length > 0 ? resetConfirmedLabel(mine) : 'CHỜ RESET HOÀN TẤT',
+            pendingResult ? 'Kết quả đang chờ NPC 2 xác minh' : outstanding,
+          );
         }
         return locked('ĐÃ XONG PHẦN CỦA BẠN', 'Chờ NPC 1 chốt lượt chơi');
       }
-      return locked('ĐANG RESET KHU VỰC', 'Chờ khu vực tầng 3 sẵn sàng cho đội tiếp theo');
+      // A station that owns no part of the floor-3 checklist reads the same truth:
+      // what is outstanding, and who owes it.
+      const rest = pendingTasks(snap);
+      return locked(
+        'ĐANG RESET KHU VỰC',
+        rest.length === 0
+          ? 'Khu vực đã reset xong — chờ NPC 1 chốt cho đội tiếp theo'
+          : `Còn ${resetTasksSentence(rest.map((t) => t.task_key))} · chờ ${Array.from(new Set(rest.map((t) => ROLE_SHORT[t.required_role]))).join(' · ')}`,
+      );
     }
 
     case 'CLOSED':
@@ -452,8 +493,10 @@ export function resolveCountdown(snap: Snapshot, nowMs: number): CountdownView {
         ? 'warn'
         : result === 'WON'
           ? 'primary'
-          : signed <= 0 ? 'danger' : signed <= 60_000 ? 'warn' : 'primary',
-    warnMs: 60_000,
+          : signed <= 0 ? 'danger' : signed <= BIG_SCREEN_WARN_MS ? 'warn' : 'primary',
+    // V3.4: the warning window is the one configured threshold the wall display
+    // already reads, so the phone and the wall cross into "warn" at the same ms.
+    warnMs: BIG_SCREEN_WARN_MS,
   };
 }
 
@@ -525,6 +568,556 @@ export function attemptsJudgable(round: Round, result: RoundResult | null): bool
   return true;
 }
 
+/* ------------------------------------------------- V3.4 post-round reset */
+
+/**
+ * One physical-reset area, as the floor reads it while the team is out (V3.4 §3).
+ *
+ * `done` is only ever the server's own confirmation inside the round's current
+ * reset cycle — the same predicate the checklist rows and `GATE_FINALIZE` use.
+ * `submitting` and `failed` describe this phone's unacknowledged write, never a
+ * stored state, so a screen can never mark an area ready ahead of the authority.
+ */
+export interface ResetRow {
+  key: ResetTaskKey;
+  /** The area in the operator's words, never the database key. */
+  label: string;
+  ownerRole: Role;
+  /** Who owns it, in the short station name the floor recognises. */
+  owner: string;
+  mine: boolean;
+  state: ResetRowState;
+  /** Server instant and server role of the confirmation that counts. */
+  confirmedAt: number | null;
+  confirmedByRole: Role | null;
+  /** A mark from an earlier cycle: real reopen data, and it is outstanding again. */
+  reopened: boolean;
+  reopenCount: number;
+  /** The layout recorded with the hidden-object check, when there is one. */
+  layout: string | null;
+  /** The badge word. */
+  status: string;
+  /** One line saying what the state means for the person reading it. */
+  note: string;
+}
+
+export interface ResetBoard {
+  rows: ResetRow[];
+  total: number;
+  done: number;
+  /** True only when every stored row of this round is confirmed in this cycle. */
+  allDone: boolean;
+  /** Tasks the round assigned to this station. */
+  mineTotal: number;
+  mineOutstanding: number;
+  /** The station's own part is server-confirmed and there is nothing left to press. */
+  mineDone: boolean;
+  outstanding: ResetTaskKey[];
+  outstandingSentence: string;
+  /** Who else still owes a confirmation, in short station names. */
+  waitingOn: string[];
+}
+
+/** Where this phone is in the reset write: on the wire, or refused. */
+export interface ResetSubmit {
+  submitting?: boolean;
+  failed?: boolean;
+  message?: string | null;
+}
+
+const NO_RESET: ResetBoard = {
+  rows: [],
+  total: 0,
+  done: 0,
+  allDone: false,
+  mineTotal: 0,
+  mineOutstanding: 0,
+  mineDone: false,
+  outstanding: [],
+  outstandingSentence: '',
+  waitingOn: [],
+};
+
+/** The reset read-out order: the way the floor-3 crew physically walks it. */
+function resetOrderOf(key: ResetTaskKey): number {
+  const at = (RESET_READOUT_ORDER as readonly string[]).indexOf(key);
+  return at === -1 ? RESET_READOUT_ORDER.length : at;
+}
+
+export function resolveResetBoard(
+  snap: Snapshot,
+  role: Role,
+  submit: ResetSubmit = {},
+): ResetBoard {
+  const round = snap.active_round;
+  // The checklist is only a live question while the area is being put back. A round
+  // still on the clock has not started its reset, and a closed one has finished it.
+  if (!round || !isResetWindow(round)) return NO_RESET;
+  // Only the rows the round actually owns are shown: the screen never invents a
+  // task the server did not create for this round.
+  const tasks = snap.reset_tasks
+    .filter((t) => t.round_id === round.id)
+    .sort((a, b) => resetOrderOf(a.task_key) - resetOrderOf(b.task_key));
+  if (tasks.length === 0) return NO_RESET;
+
+  const rows: ResetRow[] = tasks.map((t) => {
+    const confirmedCurrent = t.completed_at !== null && t.cycle === round.reset_cycle;
+    const reopened = t.completed_at === null && t.reopen_count > 0;
+    const mine = t.required_role === role;
+    const state: ResetRowState = confirmedCurrent
+      ? 'done'
+      : mine && submit.submitting
+        ? 'submitting'
+        : mine && submit.failed
+          ? 'failed'
+          // A mark that belongs to an earlier cycle is outstanding again, and says
+          // so — it is reopen data from the server, not a new completion state.
+          : t.completed_at !== null
+            ? 'reopened'
+            : reopened
+              ? 'reopened'
+              : 'open';
+    const owner = ROLE_SHORT[t.required_role];
+    // Widened on purpose: the waiting row interpolates a station name, so the
+    // badge word is a sentence, not one of the five fixed state labels.
+    let status: string = RESET_STATE_LABEL[state];
+    let note: string;
+    if (state === 'done') {
+      note = `Máy chủ ghi nhận lúc ${formatWallTime(t.completed_at ?? 0)} · ${ROLE_SHORT[(t.confirmed_by_role ?? t.required_role) as Role]}`;
+      if (t.layout) note += ` · bố trí ${t.layout}`;
+    } else if (state === 'submitting') {
+      note = 'Đã gửi máy chủ — chờ xác nhận ghi nhận.';
+    } else if (state === 'failed') {
+      note = submit.message ? String(submit.message) : 'Máy chủ chưa ghi nhận — bấm lại để xác nhận.';
+    } else if (state === 'reopened') {
+      status = RESET_STATE_LABEL.reopened;
+      note = t.reopen_count > 0
+        ? `Đã mở lại ${t.reopen_count} lần · mốc cũ không còn hiệu lực`
+        : 'Mốc này thuộc lần reset trước · cần xác nhận lại.';
+    } else if (mine) {
+      note = 'Kiểm tra thật tại khu vực này trước khi xác nhận.';
+    } else {
+      status = `CHỜ ${owner}`;
+      note = `Phần việc của ${owner} · máy này không xác nhận thay được.`;
+    }
+    return {
+      key: t.task_key,
+      label: RESET_TASK_LABEL[t.task_key] ?? t.task_key,
+      ownerRole: t.required_role,
+      owner,
+      mine,
+      state,
+      confirmedAt: confirmedCurrent ? t.completed_at : null,
+      confirmedByRole: confirmedCurrent ? ((t.confirmed_by_role ?? null) as Role | null) : null,
+      reopened: t.completed_at !== null && t.cycle !== round.reset_cycle,
+      reopenCount: t.reopen_count,
+      layout: confirmedCurrent ? t.layout : null,
+      status,
+      note,
+    };
+  });
+
+  const outstandingKeys = tasks
+    .filter((t) => t.completed_at === null || t.cycle !== round.reset_cycle)
+    .map((t) => t.task_key);
+  const mineTasks = rows.filter((r) => r.mine);
+  const mineOutstanding = rows.filter((r) => r.mine && r.state !== 'done').length;
+  return {
+    rows,
+    total: rows.length,
+    done: rows.length - outstandingKeys.length,
+    allDone: outstandingKeys.length === 0,
+    mineTotal: mineTasks.length,
+    mineOutstanding,
+    mineDone: mineTasks.length > 0 && mineOutstanding === 0,
+    outstanding: outstandingKeys,
+    outstandingSentence: resetTasksSentence(outstandingKeys),
+    waitingOn: Array.from(new Set(
+      rows.filter((r) => r.state !== 'done').map((r) => r.owner),
+    )),
+  };
+}
+
+/* ---------------------------------------------------- reset action wording */
+
+/**
+ * The CTA words for the areas this station itself owns (V3.4 §4).
+ *
+ * The button has to name the physical thing being confirmed, because "ĐÃ RESET
+ * XONG" could be read as the whole floor — and the whole floor is exactly what
+ * this phone is not entitled to confirm. `RESET_DONE` marks every outstanding row
+ * whose owner is the caller, so the wording follows the caller's real rows and
+ * never promises a confirmation the server would not make.
+ */
+export function resetConfirmLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
+  const keys = new Set(tasks.map((t) => t.task_key));
+  if (keys.size === 1) {
+    const key = [...keys][0];
+    if (key === 'hallway') return 'XÁC NHẬN ĐÃ RESET HÀNH LANG';
+    if (key === 'hidden_objects') return 'XÁC NHẬN ĐÃ RESET VẬT PHẨM ẨN';
+    if (key === 'room') return 'XÁC NHẬN ĐÃ RESET PHÒNG 305';
+  }
+  if (keys.has('hallway') && keys.has('hidden_objects')) return 'XÁC NHẬN RESET HÀNH LANG + VẬT ẨN';
+  return `XÁC NHẬN ĐÃ RESET ${resetTasksSentence([...keys]).toUpperCase()}`;
+}
+
+/** The instruction that sits under the CTA: what must be true before pressing. */
+export function resetConfirmHint(tasks: readonly { task_key: ResetTaskKey }[]): string {
+  const keys = new Set(tasks.map((t) => t.task_key));
+  if (keys.size === 1) {
+    const key = [...keys][0];
+    if (key === 'hallway') return 'Kiểm tra và hoàn tất reset hành lang tầng 3 trước khi xác nhận.';
+    if (key === 'hidden_objects') return 'Đặt lại toàn bộ vật phẩm ẩn theo bố trí hiện hành trước khi xác nhận.';
+    if (key === 'room') return 'Về đủ đạo cụ và an toàn trong phòng 305 trước khi xác nhận.';
+  }
+  return `Hoàn tất ${resetTasksSentence([...keys])} ngay tại khu vực trước khi xác nhận.`;
+}
+
+/**
+ * The read-only status that replaces the CTA once the server has the confirmation
+ * (V3.4 §4). Named from the rows this station owns and has confirmed, so it can
+ * only ever claim the areas this phone was responsible for.
+ */
+export function resetConfirmedLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
+  const keys = new Set(tasks.map((t) => t.task_key));
+  if (keys.size === 1) {
+    const key = [...keys][0];
+    if (key === 'hallway') return 'HÀNH LANG ĐÃ RESET';
+    if (key === 'hidden_objects') return 'VẬT PHẨM ẨN ĐÃ RESET';
+    if (key === 'room') return 'PHÒNG 305 ĐÃ RESET';
+  }
+  if (keys.has('hallway') && keys.has('hidden_objects')) return 'HÀNH LANG + VẬT ẨN ĐÃ RESET';
+  return `${resetTasksSentence([...keys]).toUpperCase()} ĐÃ RESET`;
+}
+
+/* -------------------------------------------------- completed-round summary */
+
+/**
+ * The official result of the round that just ended, exactly as the authority
+ * recorded it (V3.4 §2 and §7). Nothing here recalculates, rounds or reuses a
+ * countdown: the number is the stored `official_duration_ms` of the validated
+ * claim, and a round that earned no time is said to have earned no time.
+ */
+export interface ResultSummary {
+  teamText: string;
+  /** The sentence over the result: the round is over, whatever it achieved. */
+  headline: string;
+  /** The short word the hero carries when there is no official time. */
+  stateWord: string;
+  result: RoundResult | null;
+  resultLabel: string;
+  /** The server's official elapsed time, or null when the round has none. */
+  officialMs: number | null;
+  /** MM:SS.hh of `officialMs`, ready to print as the authoritative result. */
+  officialText: string | null;
+  exitAt: number | null;
+  exitText: string | null;
+  attempts: number;
+  rejected: number;
+  late: number;
+  tone: TeamTone;
+}
+
+export function resolveResultSummary(snap: Snapshot, nowMs: number): ResultSummary | null {
+  const round = snap.active_round;
+  if (!round) return null;
+  const result = resultOfRound(snap, nowMs);
+  const claims = attemptsOf(snap.attempts ?? [], round.id);
+  const officialMs = result === 'WON' ? round.official_duration_ms : null;
+  const base = {
+    teamText: teamLabel(round, snap.event.next_team_number),
+    result,
+    officialMs,
+    officialText: officialMs !== null ? formatClockCs(officialMs) : null,
+    exitAt: round.exit_confirmed_at,
+    exitText: round.exit_confirmed_at !== null ? formatWallTime(round.exit_confirmed_at) : null,
+    attempts: claims.length,
+    rejected: claims.filter((a) => a.status === 'INVALID').length,
+    late: claims.filter((a) => a.status === 'LATE').length,
+  };
+  switch (result) {
+    case 'WON':
+      return {
+        ...base,
+        headline: 'LƯỢT CHƠI ĐÃ HOÀN THÀNH',
+        stateWord: 'THÀNH CÔNG',
+        resultLabel: 'KẾT QUẢ CHÍNH THỨC',
+        tone: 'green',
+      };
+    case 'PENDING_VALIDATION':
+      return {
+        ...base,
+        headline: 'LƯỢT CHƠI ĐÃ KẾT THÚC',
+        stateWord: 'CHỜ XÁC MINH',
+        resultLabel: 'Kết quả chờ NPC 2 xác minh lần báo',
+        tone: 'amber',
+      };
+    case 'ABORTED':
+      return {
+        ...base,
+        headline: 'LƯỢT CHƠI ĐÃ HỦY',
+        stateWord: 'ĐÃ HỦY',
+        resultLabel: round.abort_reason ?? 'Không có kết quả thắng',
+        tone: 'blue',
+      };
+    case 'TIME_UP':
+      return {
+        ...base,
+        headline: 'LƯỢT CHƠI ĐÃ KẾT THÚC',
+        stateWord: 'HẾT GIỜ',
+        resultLabel: 'Hết giờ — không có thời gian thắng',
+        tone: 'mute',
+      };
+    default:
+      // Unstarted or historic rows: the round is out, and no time has been decided.
+      return {
+        ...base,
+        headline: 'LƯỢT CHƠI ĐÃ KẾT THÚC',
+        stateWord: 'CHƯA CHỐT',
+        resultLabel: 'Chưa có kết quả được ghi',
+        tone: 'mute',
+      };
+  }
+}
+
+/* ----------------------------------------------------- next-team readiness */
+
+/**
+ * Whether the next team may be received yet, answered from the same predicate the
+ * lobby's own press is checked against (V3.4 §9). The screen cannot invite a team
+ * into a floor the authority has not cleared, and it never declares readiness on
+ * the strength of the hallway tick alone.
+ */
+export type ReadinessKey = 'ready' | 'verify' | 'reset' | 'finalize' | 'playing' | 'ended';
+
+export interface ReadinessView {
+  key: ReadinessKey;
+  title: string;
+  detail: string;
+  /** Short station names still holding the floor back; empty when nothing is. */
+  waitingOn: string[];
+  /** True only when the lobby's reception press would be authorised now. */
+  canCallTeam: boolean;
+}
+
+export function resolveNextTeamReadiness(
+  snap: Snapshot,
+  nowMs: number,
+  board: ResetBoard,
+): ReadinessView {
+  const round = snap.active_round;
+  const phase = phaseOf(snap, nowMs);
+  if (phase === 'ENDED') {
+    return {
+      key: 'ended',
+      title: 'SỰ KIỆN ĐÃ KẾT THÚC',
+      detail: 'Không nhận thêm đội. Chỉ Quản trị viên mở sự kiện mới.',
+      waitingOn: [],
+      canCallTeam: false,
+    };
+  }
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const live = round ? liveStatus(round, snap.attempts ?? [], limit, nowMs) : null;
+  const result = round ? resultOf(round, snap.attempts ?? [], limit, nowMs) : null;
+  // The real permission answer, from the shared table the server enforces.
+  const canCallTeam = authorize('LOBBY', 'CALL_TEAM', live, result, round).allowed;
+  if (!round) {
+    return {
+      key: 'ready',
+      title: 'SẴN SÀNG NHẬN ĐỘI TIẾP THEO',
+      detail: `Khu vực đã chốt · ${teamLabel(null, snap.event.next_team_number)} sẽ vào lượt tiếp theo.`,
+      waitingOn: [],
+      canCallTeam,
+    };
+  }
+  if (phase !== 'EXIT_CONFIRMED') {
+    return {
+      key: 'playing',
+      title: 'ĐANG CÓ LƯỢT CHƠI TRÊN SÀN',
+      detail: 'Chưa hoàn tất lượt hiện tại — đội mới chỉ vào được sau khi lượt này chốt xong.',
+      waitingOn: [],
+      canCallTeam,
+    };
+  }
+  if (result === 'PENDING_VALIDATION') {
+    return {
+      key: 'verify',
+      title: 'CHƯA THỂ NHẬN ĐỘI MỚI',
+      detail: 'Kết quả đang chờ NPC 2 xác minh — khu vực chưa được chốt.',
+      waitingOn: ['NPC 2'],
+      canCallTeam,
+    };
+  }
+  if (!board.allDone) {
+    return {
+      key: 'reset',
+      title: 'CHƯA THỂ NHẬN ĐỘI MỚI',
+      detail: `Còn ${board.outstandingSentence} chưa được xác nhận.` +
+        (board.waitingOn.length > 0 ? ` Chờ ${board.waitingOn.join(' · ')}.` : ''),
+      waitingOn: board.waitingOn,
+      canCallTeam,
+    };
+  }
+  return {
+    key: 'finalize',
+    title: 'KHU VỰC ĐÃ RESET XONG',
+    detail: 'Còn một bước: NPC 1 chốt khu vực thì Nhân sự 01 mới nhận được đội mới.',
+    waitingOn: ['NPC 1'],
+    canCallTeam,
+  };
+}
+
+/* ---------------------------------------------------------- idle hero read */
+
+/**
+ * What the non-locked screen's central read-out carries (V3.4 §2).
+ *
+ * While a finished round is being reset there is no countdown to show: the
+ * next round's 05:00 belongs to a team that has not been received yet, so it
+ * must never sit in the hero as though it described the round that just ended.
+ * The hero wears the completed round's truth instead, and the next window is
+ * offered only as explicitly labelled secondary information.
+ */
+export interface HeroView {
+  mode: 'IDLE' | 'RESET';
+  eyebrow: string;
+  digits: string;
+  /** What the number is: an idle window, an official time, or a state word. */
+  digitsMode: 'IDLE' | 'RESULT' | 'STATE';
+  note: string;
+  /** The next round's configured window — always named as the next one's. */
+  nextLimitLabel: string;
+}
+
+export function resolveHero(snap: Snapshot, nowMs: number): HeroView {
+  const nextLimitLabel = formatClockSec(snap.event.config.game_limit_ms);
+  const phase = phaseOf(snap, nowMs);
+  if (snap.active_round && phase === 'EXIT_CONFIRMED') {
+    const summary = resolveResultSummary(snap, nowMs);
+    return {
+      mode: 'RESET',
+      eyebrow: summary?.headline ?? 'LƯỢT CHƠI ĐÃ KẾT THÚC',
+      digits: summary?.officialText ?? summary?.stateWord ?? '—',
+      digitsMode: summary?.officialText ? 'RESULT' : 'STATE',
+      note: 'Đang chuẩn bị khu vực cho đội tiếp theo.',
+      nextLimitLabel,
+    };
+  }
+  return {
+    mode: 'IDLE',
+    eyebrow: phase === 'WAITING_FLOOR2_CONFIRMATION' ? 'CHƯA TÍNH GIỜ — ĐỘI ĐANG LÊN TẦNG 2' : 'CHƯA TÍNH GIỜ',
+    digits: nextLimitLabel,
+    digitsMode: 'IDLE',
+    note: `Đồng hồ ${nextLimitLabel} của lượt chơi chỉ chạy khi NPC 1 bấm BẮT ĐẦU`,
+    nextLimitLabel,
+  };
+}
+
+
+/* ---------------------------------------------------------------- NPC2 stage */
+
+/**
+ * V3.4 §2 — what NPC2 may actually do right now, answered by the SAME table the
+ * server enforces (`authorize`), never by a locally remembered phase. The claim
+ * CTA is only ever rendered while `canClaim` is true; once a correct attempt is
+ * finalised the round answers `finalized` and the screen becomes read-only for
+ * completion reporting, exactly like the RPC behind it.
+ */
+export interface Npc2Stage {
+  /** A newly recorded claim can still become a result (in-time window open). */
+  canClaim: boolean;
+  /** The claim window passed while the phase still accepts a record: the row
+   *  is kept as an informational LATE attempt and can never win (§11 C). */
+  lateOnly: boolean;
+  /** Why the CTA is gone, in the operator's own words; null while it may show. */
+  claimRefusal: string | null;
+  /** A validated in-time claim sealed the official result — immutable now. */
+  finalized: boolean;
+  /** The official elapsed time once finalised, null before that. */
+  officialMs: number | null;
+  /** In-time claims still awaiting NPC2's decision. */
+  pendingCount: number;
+}
+
+export function resolveNpc2Stage(snap: Snapshot, nowMs: number): Npc2Stage {
+  const round = snap.active_round;
+  const attempts = snap.attempts ?? [];
+  if (!round) {
+    return { canClaim: false, lateOnly: false, claimRefusal: 'Chưa có lượt chơi nào được ghi nhận.', finalized: false, officialMs: null, pendingCount: 0 };
+  }
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const live = liveStatus(round, attempts, limit, nowMs);
+  const result = resultOf(round, attempts, limit, nowMs);
+  const verdict = authorize('ROOM305', 'CLAIM_COMPLETE', live, result, round);
+  const expired = gameRemainingMs(round, limit, nowMs) <= 0;
+  const finalized = result === 'WON';
+  let claimRefusal: string | null = null;
+  if (!verdict.allowed) {
+    claimRefusal = finalized
+      ? 'Lượt chơi đã chốt kết quả — không ghi nhận thêm báo hoàn thành.'
+      : round.aborted_at !== null
+        ? 'Lượt chơi đã bị hủy — không ghi nhận thêm báo hoàn thành.'
+        : 'Giai đoạn hiện tại không ghi nhận báo hoàn thành.';
+  }
+  return {
+    canClaim: verdict.allowed,
+    lateOnly: verdict.allowed && expired,
+    claimRefusal,
+    finalized,
+    officialMs: finalized ? round.official_duration_ms : null,
+    pendingCount: pendingEligibleClaims(round, attempts, limit, nowMs).length,
+  };
+}
+
+/* ---------------------------------------------------------------- sync state */
+
+/**
+ * V3.4 §8 — five honest claims, kept apart because they are genuinely different
+ * facts: the transport is up and the data is fresh (`connected`), a refresh is
+ * running but the last authoritative read is still current (`current`), the
+ * phone is waiting for its first read (`syncing`), the link is recovering
+ * (`reconnecting`), or the server cannot be reached at all (`failed`).
+ * Nothing here is driven by a frontend timer that could fake a healthy state:
+ * `current` requires a real verified read inside the verify window, and only
+ * the store's own failures can ever move the chip to `failed`.
+ */
+export type SyncKey = 'connected' | 'current' | 'syncing' | 'reconnecting' | 'failed';
+
+export interface SyncState {
+  key: SyncKey;
+  label: string;
+  /** True when the surface must offer a manual retry next to the chip. */
+  showRetry: boolean;
+}
+
+export function resolveSyncState(
+  status: string,
+  facts: { dataAgeMs?: number | null; verifyMs?: number; degradedMs?: number } = {},
+): SyncState {
+  const verifyMs = facts.verifyMs ?? VERIFY_INTERVAL_MS;
+  const degradedMs = facts.degradedMs ?? DEGRADED_AFTER_MS;
+  const age = facts.dataAgeMs ?? null;
+  const neverRead = age === null;
+  const fresh = age !== null && age <= verifyMs * 1.5;
+  const stale = age !== null && age > degradedMs;
+  const label = (key: SyncKey): SyncState => ({ key, label: SYNC_STATE_LABEL[key], showRetry: key === 'failed' || key === 'reconnecting' });
+  if (status === 'OFFLINE') return label('failed');
+  if (status === 'DEGRADED') return neverRead || stale ? label('failed') : label('reconnecting');
+  if (status === 'SYNCING') {
+    // No verified read has ever landed: the honest word is "syncing", not a
+    // recovery of something that never connected.
+    if (neverRead) return label('syncing');
+    // A transient refresh with still-current data must not read as syncing
+    // forever — this is the exact case that left a finalised round wearing
+    // ĐANG ĐỒNG BỘ on every phone.
+    if (fresh) return label('current');
+    return stale ? label('reconnecting') : label('syncing');
+  }
+  // CONNECTED: the store only claims it after a successful authoritative read,
+  // but time may have passed since — a long-quiet read is reconnecting, not live.
+  return neverRead || stale ? label('reconnecting') : label('connected');
+}
+
 /* --------------------------------------------------------------- big screen */
 
 export interface BigScreenClock {
@@ -585,6 +1178,13 @@ export interface JourneyStop {
   /** Server time of the press that reached this stop, when one recorded it. */
   at_ms: number | null;
   note: string | null;
+  /**
+   * V3.4: a logged exception fell on this stop, so the route here is not the
+   * normal one — today that is only the floor-2 bypass NPC 1 may record. The
+   * stepper shows it as an attention state instead of a clean tick, because a
+   * skipped stage that reads as a completed one is a lie about the floor.
+   */
+  attention: boolean;
 }
 
 export interface JourneyTask {
@@ -655,7 +1255,7 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
         turn =
           round.floor2_bypassed_at !== null
             ? { roles: ['GATE'], label: `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}` }
-            : { roles: ['CORRIDOR'], label: 'XÁC NHẬN ĐÃ ĐẾN TẦNG 2' };
+            : { roles: ['CORRIDOR'], label: 'XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2' };
         break;
       case 'READY_AT_FLOOR3':
         position = 2;
@@ -704,8 +1304,13 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
         if (round.puzzle_completed_at !== null) notes[3] = `Trận đồ · ${formatWallTime(round.puzzle_completed_at)}`;
         const open = pendingTasks(snap);
         if (open.length > 0) {
-          caption = 'Đang setup khu vực';
-          turn = { roles: Array.from(new Set(open.map((t) => t.required_role))), label: 'ĐÃ RESET XONG' };
+          caption = 'Đang reset khu vực';
+          // The rail says what each station's own button says; with two owners still
+          // outstanding it names the areas instead of one station's wording.
+          turn = {
+            roles: Array.from(new Set(open.map((t) => t.required_role))),
+            label: `XÁC NHẬN ĐÃ RESET ${resetTasksSentence(open.map((t) => t.task_key)).toUpperCase()}`,
+          };
         } else {
           caption = 'Đã setup xong · chờ NPC 1 chốt lượt chơi';
           turn = { roles: ['GATE'], label: 'XÁC NHẬN SẴN SÀNG' };
@@ -772,6 +1377,9 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
       state: stateOf(i),
       at_ms: at[i],
       note: notes[i],
+      // The one exception the route itself can carry: floor 2 was skipped, and the
+      // bypass is on the record rather than in the timestamps.
+      attention: def.key === 'floor2' && round?.floor2_bypassed_at != null,
     })),
     position,
     focus,
@@ -783,7 +1391,76 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
   };
 }
 
-/* ----------------------------------------------------------------- team line */
+/* ------------------------------------------------------------------ handoff */
+
+/**
+ * The five honest states of the floor-2 handoff, derived only from the
+ * server-recorded timestamps. The badge never claims an arrival the database
+ * has not confirmed, and it never claims a confirmation a bypass has replaced.
+ */
+export type HandoffKey = 'none' | 'incoming' | 'confirmed' | 'bypassed' | 'waiting-next';
+
+export interface HandoffInfo {
+  key: HandoffKey;
+  /** Short chip text: what the handoff is right now. */
+  badge: string;
+  tone: TeamTone;
+  /** The next required action, in one sentence, from the same server facts. */
+  requirement: string;
+}
+
+export function resolveHandoff(snap: Snapshot, nowMs: number): HandoffInfo {
+  const round = snap.active_round;
+  const phase = phaseOf(snap, nowMs);
+  if (!round) {
+    return {
+      key: 'none',
+      badge: 'CHƯA CÓ ĐỘI ĐƯỢC BÀN GIAO',
+      tone: 'mute',
+      requirement: phase === 'ENDED'
+        ? 'Sự kiện đã kết thúc — chờ Quản trị viên mở sự kiện mới'
+        : 'Chờ Nhân sự 01 nhận đội ở sảnh tầng 1',
+    };
+  }
+  // The bypass is its own audited fact: it is never rendered as a floor-2
+  // confirmation, and it closes this station's task for the round.
+  if (round.floor2_bypassed_at !== null) {
+    return {
+      key: 'bypassed',
+      badge: 'TẦNG 2 ĐÃ BỎ QUA (NPC 1)',
+      tone: 'amber',
+      requirement: 'Không cần thao tác ở tầng 2 — lượt bỏ qua có ghi nhật ký',
+    };
+  }
+  if (round.floor2_confirmed_at !== null) {
+    return {
+      key: 'confirmed',
+      badge: `ĐÃ XÁC NHẬN · ${formatWallTime(round.floor2_confirmed_at)}`,
+      tone: 'green',
+      requirement: phase === 'READY_AT_FLOOR3'
+        ? 'Đang chờ bước tiếp theo — NPC 1 bấm BẮT ĐẦU ở cửa tầng 3'
+        : 'Đội đã được Nhân sự 02 xác nhận tại tầng 2',
+    };
+  }
+  if (phase === 'WAITING_FLOOR2_CONFIRMATION') {
+    return {
+      key: 'incoming',
+      badge: 'ĐỘI ĐANG LÊN TẦNG 2',
+      tone: 'amber',
+      requirement: 'Xác nhận khi đội đã có mặt tại tầng 2',
+    };
+  }
+  // Past the handover window without either stamp (historic rows only): say
+  // what is verifiable — the flow is waiting for its next server-recorded step.
+  return {
+    key: 'waiting-next',
+    badge: 'ĐANG CHỜ BƯỚC TIẾP THEO',
+    tone: 'blue',
+    requirement: 'Đồng hồ và các bước sau đều do NPC 1 kiểm soát',
+  };
+}
+
+/* ------------------------------------------------------------------ team line */
 
 export type TeamTone = 'red' | 'green' | 'amber' | 'blue' | 'violet' | 'mute';
 
@@ -901,6 +1578,23 @@ export function pendingTasks(snap: Snapshot, role?: Role) {
   );
 }
 
+/**
+ * The areas this role owns that the server has confirmed in the round's current
+ * reset cycle. Only these may be claimed as done on a phone: a mark from an
+ * earlier cycle stays outstanding, exactly as `pendingTasks` treats it.
+ */
+export function doneTasks(snap: Snapshot, role?: Role) {
+  const round = snap.active_round;
+  if (!round) return [];
+  return snap.reset_tasks.filter(
+    (t) =>
+      t.round_id === round.id &&
+      t.completed_at !== null &&
+      t.cycle === round.reset_cycle &&
+      (!role || t.required_role === role),
+  );
+}
+
 /* -------------------------------------------------------------- station strip */
 
 export type StationState = 'active' | 'idle';
@@ -986,6 +1680,291 @@ export function observerBoard(devices?: number, capacity?: number): ObserverBoar
   const seats = devices ?? 0;
   const cap = capacity ?? OBSERVER_CAPACITY;
   return { seats, capacity: cap, full: seats >= cap };
+}
+
+/* --------------------------------------------------- V3.4 operations command */
+
+/**
+ * V3.4 §1 — the Điều hành tab is the shift's command centre. It answers five
+ * questions in one reading order — what is the event state, which team is
+ * active (or which round closed last), which stage the workflow is in, which
+ * role is blocked, and what to do next — and every answer comes from the
+ * authoritative state, never from the most recent audit action. An ended event
+ * gets a completed-event answer, not a fake active-round dashboard.
+ */
+export type OpsEventState = 'NOT_STARTED' | 'LIVE' | 'ENDED';
+
+export const OPS_EVENT_STATE_WORD: Record<OpsEventState, string> = {
+  NOT_STARTED: 'CHƯA MỞ SỰ KIỆN',
+  LIVE: 'SỰ KIỆN ĐANG DIỄN RA',
+  ENDED: 'SỰ KIỆN ĐÃ KẾT THÚC',
+};
+
+/**
+ * The one honest decomposition of `snap.rounds` for the header question
+ * “what does this number mean?” (V3.4 §3). The array is every round the current
+ * event has *recorded* — including the single open round, and including cancelled
+ * ones, which are still recorded history. “Đã đóng” counts rounds whose flow
+ * reached CLOSED; “đang diễn ra” is what is left open (at most one); “bị hủy” is a
+ * property of a recorded round, stated as such, never a fourth bucket of the sum.
+ */
+export interface RoundCounts {
+  recorded: number;
+  closed: number;
+  active: number;
+  aborted: number;
+  sentence: string;
+}
+
+export function roundCounts(snap: Snapshot): RoundCounts {
+  const recorded = snap.rounds.length;
+  const closed = snap.rounds.filter((r) => flowStatus(r) === 'CLOSED').length;
+  const aborted = snap.rounds.filter((r) => r.aborted_at !== null).length;
+  const active = recorded - closed;
+  let sentence = `${recorded} lượt đã ghi nhận · ${closed} đã đóng · ${active} đang diễn ra`;
+  if (aborted > 0) sentence += ` · ${aborted} lượt bị hủy có kiểm toán`;
+  return { recorded, closed, active, aborted, sentence };
+}
+
+/**
+ * Seat presence for the operations board. It is deliberately NOT inferred from
+ * the last-action timestamp: `sc.operator_states` marks an unheld seat with a
+ * null display_name (0004), and that binding fact — not activity — is the only
+ * thing allowed to claim a seat is held. The local demo backend has no
+ * multi-device seat board at all, so the caller says `seatKnown: false` and the
+ * card reads CHƯA XÁC MINH ĐƯỢC instead of guessing.
+ */
+export type OpsSeatState = 'held' | 'free' | 'unknown';
+
+export const OPS_SEAT_WORD: Record<OpsSeatState, string> = {
+  held: 'GHẾ ĐANG CÓ MÁY TRỰC',
+  free: 'GHẾ CÒN TRỐNG',
+  unknown: 'CHƯA XÁC MINH ĐƯỢC GHẾ',
+};
+
+export type OpsBadgeTone = 'confirmed' | 'live' | 'queued' | 'danger' | 'idle';
+
+export interface OpsRoleStatus {
+  role: StationRole;
+  person: string;
+  area: string;
+  seat: OpsSeatState;
+  /** The team is physically with this position right now. */
+  ownsRound: boolean;
+  /** This position's own press is what moves the flow forward. */
+  mustPress: boolean;
+  /** Short workflow-state word for the card badge. */
+  stateWord: string;
+  badgeTone: OpsBadgeTone;
+  /** What this position owes the current round, one sentence; null when silent. */
+  duty: string | null;
+  /** An operating problem this role is holding the floor on, in act-ready words. */
+  issue: string | null;
+  /** Secondary information only — never the card's headline. */
+  lastText: string | null;
+  lastAt: number | null;
+}
+
+export function resolveOpsRoles(
+  snap: Snapshot,
+  nowMs: number,
+  opts: { seatKnown: boolean },
+): OpsRoleStatus[] {
+  const stations = resolveStations(snap, nowMs);
+  const phase = phaseOf(snap, nowMs);
+  const round = snap.active_round;
+  const limit = roundLimitMs(round, snap.event.config.game_limit_ms);
+  const stallMs = snap.event.config.stall_warn_ms ?? STALL_WARN_MS;
+  return STATION_ORDER.map((role) => {
+    const info = stations.find((s) => s.role === role);
+    const op = snap.operators.find((o) => o.role === role);
+    const seat: OpsSeatState = !opts.seatKnown || !op ? 'unknown' : op.display_name ? 'held' : 'free';
+    const primary = resolvePrimary(role, snap, nowMs);
+    const mustPress = primary.action !== null;
+    const ownsRound = info?.state === 'active';
+
+    let issue: string | null = null;
+    if (phase !== 'ENDED' && round) {
+      if (role === 'ROOM305') {
+        const open = pendingEligibleClaims(round, snap.attempts ?? [], limit, nowMs).length;
+        if (open > 0) issue = `Còn ${open} lần báo hoàn thành chờ xác minh`;
+      }
+      if (!issue && role === 'GATE') {
+        const since = stallSince(round, nowMs, limit);
+        if (since !== null && since > stallMs) {
+          issue = `Đội vẫn ở trong khu vực ${Math.floor(since / 1000)}s — cần xác nhận đã rời tầng 3`;
+        }
+      }
+      if (!issue && phase === 'EXIT_CONFIRMED') {
+        const own = pendingTasks(snap, role);
+        if (own.length > 0) {
+          issue = `Còn phần reset chưa xác nhận: ${resetTasksSentence(own.map((t) => t.task_key))}`;
+        }
+      }
+      if (!issue && role === 'CORRIDOR' && phase === 'WAITING_FLOOR2_CONFIRMATION' && round.floor2_bypassed_at === null) {
+        const waitingMs = nowMs - round.called_at;
+        if (waitingMs > stallMs) {
+          issue = `Đội được nhận ${Math.floor(waitingMs / 1000)}s trước vẫn chưa được xác nhận ở tầng 2`;
+        }
+      }
+    }
+
+    const stateWord = phase === 'ENDED'
+      ? 'SỰ KIỆN ĐÃ ĐÓNG'
+      : mustPress
+        ? 'ĐẾN LƯỢT BẤM'
+        : ownsRound
+          ? 'ĐANG GIỮ LƯỢT'
+          : 'CHỜ ĐẾN LƯỢT';
+    const badgeTone: OpsBadgeTone = phase === 'ENDED'
+      ? 'idle'
+      : mustPress
+        ? 'live'
+        : ownsRound
+          ? 'confirmed'
+          : 'queued';
+    // The duty sentence only adds information when it is the position's own
+    // live work or a concrete blockage. A shared event-level caption (every
+    // phone reading “SỰ KIỆN ĐÃ KẾT THÚC” four times) is duplicate noise (§6).
+    const duty = phase === 'ENDED' ? null : mustPress || issue ? primary.label : primary.hint ?? null;
+    const lastText = op?.last_action
+      ? (op.last_detail?.trim() || ACTION_LABEL[op.last_action] || 'Thao tác không rõ')
+      : null;
+    return {
+      role,
+      person: ROLE_PERSON[role],
+      area: ROLE_AREA[role],
+      seat,
+      ownsRound,
+      mustPress,
+      stateWord,
+      badgeTone,
+      duty,
+      issue,
+      lastText,
+      lastAt: op?.last_action_at ?? null,
+    };
+  });
+}
+
+export interface OpsNextAction {
+  /** Short Vietnamese person words, never a raw role key. */
+  who: string;
+  what: string;
+}
+
+export interface OpsCommand {
+  state: OpsEventState;
+  stateWord: string;
+  eventName: string;
+  /** The workflow stage in the operator's vocabulary. */
+  stageWord: string;
+  /** Who the floor is busy with, or who is next in the queue. */
+  teamText: string;
+  /** Where that team physically is; null while the event is closed. */
+  whereText: string | null;
+  counts: RoundCounts;
+  next: OpsNextAction | null;
+  /** Roles holding the floor on an actionable problem, prefixed by their person. */
+  attention: string[];
+}
+
+export function resolveOpsCommand(
+  snap: Snapshot,
+  nowMs: number,
+  opts: { isSupervisor: boolean },
+): OpsCommand {
+  const state = statusOf(snap, nowMs) as OpsEventState;
+  const phase = phaseOf(snap, nowMs);
+  const round = snap.active_round;
+  const counts = roundCounts(snap);
+  const stageWord = PHASE_LABEL[phase] ?? PHASE_LABEL.WAITING_FOR_TEAM;
+  const attention: string[] = [];
+  let teamText: string;
+  let whereText: string | null = null;
+  let next: OpsNextAction | null = null;
+
+  if (state === 'ENDED') {
+    teamText = 'Không còn đội nào trong khu vực';
+    // The honest completed-event answer: no fake active round, no fake next press.
+    next = opts.isSupervisor
+      ? { who: ROLE_PERSON.SUPERVISOR, what: 'Mở sự kiện mới ở nhóm QUẢN TRỊ khi ca sau sẵn sàng' }
+      : null;
+  } else if (round) {
+    const journey = resolveJourney(snap, nowMs, 'SUPERVISOR');
+    teamText = teamLabel(round, snap.event.next_team_number);
+    whereText = journey.where;
+    if (journey.turn) {
+      next = { who: journey.turn.roles.map((r) => ROLE_PERSON[r]).join(' · '), what: journey.turn.label };
+    }
+    if (round.needs_review && round.review_reasons.length > 0) {
+      attention.push(`${teamText}: kết quả chờ xét lại — chỉ ${ROLE_PERSON.SUPERVISOR} xử lý được`);
+    }
+  } else {
+    const lobbyPrimary = resolvePrimary('LOBBY', snap, nowMs);
+    teamText = `Đội tiếp theo #${pad(snap.event.next_team_number)} — chưa vào khu vực`;
+    next = { who: ROLE_PERSON.LOBBY, what: lobbyPrimary.label };
+  }
+  if (state !== 'ENDED') {
+    for (const r of resolveOpsRoles(snap, nowMs, { seatKnown: false })) {
+      if (r.issue) attention.push(`${r.person}: ${r.issue}`);
+    }
+  }
+  return {
+    state,
+    stateWord: OPS_EVENT_STATE_WORD[state],
+    eventName: snap.event.config.event_name,
+    stageWord,
+    teamText,
+    whereText,
+    counts,
+    next,
+    attention,
+  };
+}
+
+/**
+ * V3.4 §4 — the hidden-object layout card. It mirrors the ONE server-side
+ * permission (SET_LAYOUT: the owning floor-3 position or the supervisor) and
+ * the ONE state-machine window the action is legal in (between teams, at the
+ * gate, or while the area is being reset — never mid-round), so the card can
+ * neither offer a press the RPC would refuse nor claim ownership it does not
+ * have. A phone without the right reads a summary, not misleading controls.
+ */
+export interface OpsLayoutView {
+  current: HidingLayout;
+  ownerPerson: string;
+  ownerArea: string;
+  /** The caller's role may press SET_LAYOUT at all (server table mirrored). */
+  canAct: boolean;
+  /** The workflow currently accepts a change; false mid-round and after ENDED. */
+  phaseAllowsEdit: boolean;
+  /** Why the control reads locked, in the operator's words; null while open. */
+  lockedReason: string | null;
+  /** The layout the round in play was dispatched with, when there is one. */
+  liveRoundLayout: HidingLayout | null;
+}
+
+export function resolveOpsLayout(snap: Snapshot, role: Role, nowMs: number): OpsLayoutView {
+  const owner = snap.event.config.hidden_object_owner;
+  const canAct = role === 'SUPERVISOR' || role === owner;
+  const phase = phaseOf(snap, nowMs);
+  const inWindow = phaseAllows('SET_LAYOUT', flowOf(snap, nowMs));
+  const phaseAllowsEdit = phase !== 'ENDED' && inWindow;
+  const lockedReason = phase === 'ENDED'
+    ? 'Sự kiện đã kết thúc — bố trí mới chỉ áp dụng sau khi mở sự kiện mới'
+    : !inWindow
+      ? 'Đang có lượt trên đồng hồ — chỉ đổi giữa hai lượt hoặc trong lúc reset khu vực'
+      : null;
+  return {
+    current: snap.event.config.hiding_layout,
+    ownerPerson: ROLE_PERSON[owner],
+    ownerArea: ROLE_AREA[owner],
+    canAct,
+    phaseAllowsEdit,
+    lockedReason,
+    liveRoundLayout: snap.active_round ? snap.active_round.hiding_layout : null,
+  };
 }
 
 export type { ResetTaskKey };

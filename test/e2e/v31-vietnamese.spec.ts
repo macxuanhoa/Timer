@@ -166,8 +166,9 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
 
     // NPC2 records a claim; the label layer keeps the row in Vietnamese.
     await room.page.getByTestId('record-claim').click();
-    await expect(room.page.getByTestId('attempt-label').first()).toContainText('Lần 1');
-    await expectVietnamese(room.page, 'RUNNING: room (with pending claim)');
+    // V3.4: the pending attempt now lives in its own verification card.
+    await expect(room.page.getByTestId('verify-head-1')).toContainText('LẦN 1');
+    await expectVietnamese(room.page, 'RUNNING: room (pending claim)');
 
     // Verify with the wrong decision: label reads `CHƯA ĐÚNG`, never `INVALID`.
     // After the reject the attempt closes, so its decision buttons disappear and the
@@ -182,11 +183,18 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
     // NPC2 records and validates a second claim, then NPC1 closes out.
     await room.page.getByTestId('record-claim').click();
     await expect(room.page.getByTestId('attempt-valid-2')).toBeEnabled();
+    // V3.4 §5: the finalisation is a deliberate two-press gesture.
+    await room.page.getByTestId('attempt-valid-2').click();
     await room.page.getByTestId('attempt-valid-2').click();
     await expect(room.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
+    // V3.4 §6: the milestone card replaces the claim CTA on NPC2's phone.
+    await expect(room.page.getByTestId('official-result')).toBeVisible();
+    await expect(room.page.getByTestId('record-claim')).toHaveCount(0);
     await expectVietnamese(room.page, 'WAITING_FOR_EXIT: room (validated)');
     await expectVietnamese(gate.page, 'WAITING_FOR_EXIT: gate');
 
+    // V3.4 §7: the exit confirmation is armed, then lands.
+    await gate.page.getByTestId('primary-action').click();
     await gate.page.getByTestId('primary-action').click();
     await expect(gate.page.getByTestId('hero')).toBeVisible();
     await expectVietnamese(gate.page, 'EXIT_CONFIRMED: gate');
@@ -194,9 +202,12 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
     await gate.page.getByTestId('primary-action').click();
     await expectVietnamese(gate.page, 'RESET (hallway confirmed): gate');
     // Right after NPC 1 has confirmed the hallway, ROOM305 still owes the hidden
-    // props and the room. The gate phone's locked caption must spell those areas in
-    // Vietnamese (`Vật phẩm ẩn`, `Phòng 305`) and never leak the reset task keys.
-    await expect(gate.page.getByTestId('waiting-state')).toContainText('CHỜ RESET HOÀN TẤT');
+    // props and the room. V3.4 §4: the gate's read-only status now names only the
+    // area it actually confirmed, so it can never claim the whole floor, while the
+    // areas still outstanding stay in the caption's hint. Both must be Vietnamese
+    // (`Vật phẩm ẩn`, `Phòng 305`) and never leak the reset task keys.
+    await expect(gate.page.getByTestId('waiting-state')).toContainText('HÀNH LANG ĐÃ RESET');
+    await expect(gate.page.getByTestId('waiting-state')).not.toHaveText('ĐÃ RESET XONG');
     // The outstanding areas live in the hint tooltip (title attribute) and in the
     // sibling <p> the PrimaryZone renders underneath the locked button. Assert the
     // tooltip on the button itself; the sibling <p> is covered by the sweep below.

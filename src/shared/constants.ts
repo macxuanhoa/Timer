@@ -136,6 +136,46 @@ export const ROLE_DUTY: Record<Role, string> = {
 };
 
 /**
+ * V3.4 — the two halves of a station's identity, for the role band on the
+ * operator screen. `ROLE_LABEL` stays the single canonical sentence (audit,
+ * seat list, handoff notes all print it); the band needs the person and the
+ * place on separate lines, at different sizes, so it reads as
+ * "NHÂN SỰ 01 — SẢNH TẦNG 1" at a glance instead of as one long caption.
+ */
+export const ROLE_PERSON: Record<Role, string> = {
+  LOBBY: 'NHÂN SỰ 01',
+  CORRIDOR: 'NHÂN SỰ 02',
+  GATE: 'NPC 1',
+  ROOM305: 'NPC 2',
+  SUPERVISOR: 'QUẢN TRỊ VIÊN',
+  OBSERVER: 'NGƯỜI THEO DÕI',
+};
+
+/** Where that person physically stands. Matches the journey stops, not the enum. */
+export const ROLE_AREA: Record<Role, string> = {
+  LOBBY: 'SẢNH TẦNG 1',
+  CORRIDOR: 'TẦNG 2',
+  GATE: 'CỬA VÀO · TẦNG 3',
+  ROOM305: 'PHÒNG 305',
+  SUPERVISOR: 'TOÀN BỘ KHU VỰC',
+  OBSERVER: 'KHÔNG GIỮ VỊ TRÍ',
+};
+
+/**
+ * The word under each stepper node's shape. The node already carries the state as
+ * a silhouette; this is the sentence that makes it unambiguous for anyone reading
+ * the route for the first time.
+ */
+export const STOP_STATE_LABEL: Record<string, string> = {
+  done: 'ĐÃ QUA',
+  here: 'ĐANG Ở ĐÂY',
+  lead: 'ĐANG TỚI',
+  todo: 'CHƯA TỚI',
+  locked: 'CHƯA MỞ',
+  attention: 'CÓ NGOẠI LỆ',
+} as const;
+
+/**
  * The physical route of one team, in walking order: the ground-floor lobby, the
  * second-floor handover, then the two positions on the third floor. The journey
  * strip and the floor map both render this list, so the UI can never invent a
@@ -166,6 +206,34 @@ export const RESET_TASK_LABEL: Record<ResetTaskKey, string> = {
 };
 
 /**
+ * V3.4 §3 — the states one physical-reset area may honestly be shown in.
+ *
+ * `open`, `done` and `reopened` come straight from the stored checklist row
+ * (`completed_at` plus the round's `reset_cycle`): untouched, server-confirmed,
+ * and a mark that belongs to an earlier cycle and therefore has to be done
+ * again. `submitting` and `failed` are the phone's own write only: a
+ * confirmation that is on the wire but not yet acknowledged, and one the server
+ * refused. Nothing here invents a backend completion state — the workflow only
+ * ever has “outstanding” and “confirmed in this current cycle”.
+ */
+export const RESET_STATE_LABEL = {
+  open: 'Chưa thực hiện',
+  submitting: 'Đang chờ xác nhận',
+  done: 'Đã hoàn thành',
+  reopened: 'Đã mở lại · cần xác nhận lại',
+  failed: 'Lỗi xác nhận',
+} as const;
+
+export type ResetRowState = keyof typeof RESET_STATE_LABEL;
+
+/**
+ * V3.4 §5 — the three floor-3 areas in the order the crew physically walks them
+ * when putting the floor back: the hallway, the hidden props, then the room.
+ * `RESET_TASKS` stays the storage order; only the read-out is re-sequenced.
+ */
+export const RESET_READOUT_ORDER = ['hallway', 'hidden_objects', 'room'] as const;
+
+/**
  * The same three areas as a sentence, because an operator must be told which part of
  * the floor is still outstanding, not shown a database key (V3.1 §10.2).
  */
@@ -182,6 +250,21 @@ export const TRANSPORT_LABEL: Record<string, string> = {
   SYNCING: 'ĐANG ĐỒNG BỘ',
   DEGRADED: 'KẾT NỐI KHÔNG ỔN ĐỊNH',
   OFFLINE: 'MẤT KẾT NỐI',
+};
+
+/**
+ * V3.4 §8 — the five honest synchronisation claims the header chip may make.
+ * They are deliberately finer than TRANSPORT_LABEL: "network up", "a refresh is
+ * running", "the data on screen is current", "recovering" and "failed" are
+ * different facts, and the chip must never blur them into one permanent
+ * "ĐANG ĐỒNG BỘ" after the server has already answered.
+ */
+export const SYNC_STATE_LABEL: Record<'connected' | 'current' | 'syncing' | 'reconnecting' | 'failed', string> = {
+  connected: 'ĐÃ KẾT NỐI',
+  current: 'DỮ LIỆU HIỆN TẠI',
+  syncing: 'ĐANG ĐỒNG BỘ…',
+  reconnecting: 'ĐANG KẾT NỐI LẠI…',
+  failed: 'MẤT KẾT NỐI',
 };
 
 /** Why the board cannot be released right now, in words an operator can act on. */

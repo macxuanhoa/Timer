@@ -1,14 +1,15 @@
 import { useEffect } from 'react';
-import type { CSSProperties, ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import type { JourneyInfo, JourneyStop } from '../client/selectors';
 import { pad } from '../client/selectors';
-import { ROLE_SHORT } from '../shared/constants';
+import { ROLE_SHORT, STOP_STATE_LABEL } from '../shared/constants';
 import { formatWallTime } from '../shared/metrics';
-import { ACCENT_HEX, STOP_ACCENT } from './accents';
 import {
+  AlertIcon,
   CheckIcon,
   DoorIcon,
   FlagIcon,
+  LockIcon,
   RoomIcon,
   RunnerIcon,
   UsersIcon,
@@ -28,102 +29,111 @@ const STOP_ICON: Record<JourneyStop['key'], (props: { className?: string }) => R
   end: FlagIcon,
 };
 
-/** Inline colours, because each node carries the colour of its own area. */
-function nodeStyle(stop: JourneyStop): CSSProperties {
-  const accent = ACCENT_HEX[STOP_ACCENT[stop.key]];
-  switch (stop.state) {
-    case 'lead':
-      return {
-        color: accent,
-        backgroundColor: '#131316',
-        boxShadow: `0 0 0 2.5px ${accent}, 0 0 16px -2px ${accent}`,
-      };
-    case 'done':
-      return { color: '#fff', backgroundColor: ACCENT_HEX.red };
-    case 'here':
-      return { color: '#fff', backgroundColor: accent };
-    default:
-      return { color: '#6d6d77', backgroundColor: '#26262b' };
-  }
+/**
+ * The four states the machine reports, widened to the six an operator has to tell
+ * apart — all of them still derived from `resolveJourney`, never from a second
+ * workflow kept in the view:
+ *
+ *   done      the team has been here and the press is on the record
+ *   lead      the area the team is walking into right now
+ *   here      the area the team is standing in
+ *   waiting   a later stage, reachable once the stage before it is pressed
+ *   locked    a later stage with nothing in play to reach it — no team received
+ *   attention a stage the route passed through by logged exception, not by press
+ *
+ * Each one is a different silhouette as well as a different colour, so the state
+ * survives a screen that is read in poor light or in forced-colours mode.
+ */
+function viewState(stop: JourneyStop, hasRound: boolean): string {
+  if (stop.attention) return 'attention';
+  if (stop.state === 'todo') return hasRound ? 'todo' : 'locked';
+  return stop.state;
+}
+
+function StateIcon({ state, Icon }: { state: string; Icon: (props: { className?: string }) => ReactElement }) {
+  if (state === 'done') return <CheckIcon />;
+  if (state === 'locked') return <LockIcon />;
+  if (state === 'attention') return <AlertIcon />;
+  return <Icon />;
 }
 
 /**
  * The five-stop route every phone shows: sảnh tầng 1 → tầng 2 → cửa vào tầng 3 →
- * phòng 305 → kết thúc. Checked stops are red, the area the team is in or walking
- * into wears its own colour as a ring, and stops still ahead stay grey. Passing
- * `onOpen` makes the rail a button that reveals the floor map; without it the rail
- * is pure status, which is all an observer may have.
+ * phòng 305 → kết thúc. Passing `onOpen` makes the rail a button that reveals the
+ * floor map; without it the rail is pure status, which is all an observer may have.
+ *
+ * V3.4 rebuilt it as a readable route rather than five small circles: the rail
+ * fills to the stage the team has actually reached, the active stage carries its
+ * state as a word, and the caption underneath is the machine's own one-line
+ * summary — the same sentence on every device.
  */
 export function JourneyStepper({ journey, onOpen }: StripProps) {
   const { stops, focus } = journey;
+  const hasRound = journey.team_number !== null;
+  const reached = Math.max(0, Math.min(stops.length - 1, focus));
+  const railPct = (reached / Math.max(1, stops.length - 1)) * 100;
   return (
-    <div
-      className="flex items-start"
-      data-testid="journey-strip"
-      data-position={journey.position}
-      data-focus={focus}
-      data-movement={journey.movement}
-      role={onOpen ? 'button' : undefined}
-      tabIndex={onOpen ? 0 : undefined}
-      aria-label={onOpen ? `Hành trình: ${journey.caption}. Mở sơ đồ từng tầng` : undefined}
-      onClick={onOpen}
-      onKeyDown={
-        onOpen
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onOpen();
+    <div className="stepper-wrap">
+      <div
+        className="stepper"
+        data-testid="journey-strip"
+        data-position={journey.position}
+        data-focus={focus}
+        data-movement={journey.movement}
+        role={onOpen ? 'button' : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        aria-label={onOpen ? `Hành trình: ${journey.caption}. Mở sơ đồ từng tầng` : undefined}
+        onClick={onOpen}
+        onKeyDown={
+          onOpen
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onOpen();
+                }
               }
-            }
-          : undefined
-      }
-    >
-      {stops.map((stop, i) => {
-        const prev = i > 0 ? stops[i - 1] : null;
-        const next = i < stops.length - 1 ? stops[i + 1] : null;
-        const Icon = stop.state === 'done' ? CheckIcon : STOP_ICON[stop.key];
-        return (
-          <div key={stop.key} className="flex min-w-0 flex-1 flex-col items-center">
-            <div className="relative flex h-[30px] w-full items-center justify-center">
-              {prev ? (
-                <span
-                  className="absolute left-0 right-1/2 top-1/2 h-[2px] -translate-y-1/2"
-                  style={{ backgroundColor: prev.state === 'done' ? ACCENT_HEX.red : '#33333a' }}
-                  aria-hidden
-                />
-              ) : null}
-              {next ? (
-                <span
-                  className="absolute left-1/2 right-0 top-1/2 h-[2px] -translate-y-1/2"
-                  style={{ backgroundColor: stop.state === 'done' ? ACCENT_HEX.red : '#33333a' }}
-                  aria-hidden
-                />
-              ) : null}
+            : undefined
+        }
+      >
+        <span className="stepper-rail" aria-hidden>
+          <span style={{ width: `${railPct}%` }} />
+        </span>
+        {stops.map((stop, i) => {
+          const state = viewState(stop, hasRound);
+          const Icon = STOP_ICON[stop.key];
+          return (
+            <div key={stop.key} className="stepper-item" data-testid={`journey-step-${stop.key}`}>
               <span
-                className={`step-node relative ${stop.state === 'lead' ? 'step-lead' : ''}`}
-                style={nodeStyle(stop)}
+                className={`step-node${state === 'lead' ? ' step-lead' : ''}`}
+                data-state={state}
                 data-testid={`journey-node-${stop.key}`}
-                data-state={stop.state}
                 data-lead={stop.state === 'lead' ? '1' : '0'}
                 aria-hidden
               >
-                <Icon />
+                <StateIcon state={state} Icon={Icon} />
               </span>
-            </div>
-            <p
-              className={`step-label mt-1.5 text-center font-semibold uppercase tracking-[0.08em] ${
-                stop.state === 'todo' ? 'text-[#6f6f78]' : 'text-snow'
-              }`}
-            >
-              {stop.label.map((line) => (
-                <span key={line} className="block">
-                  {line}
+              <p className="step-label" data-state={state}>
+                {stop.label.map((line) => (
+                  <span key={line} className="block">
+                    {line}
+                  </span>
+                ))}
+              </p>
+              {i === focus || state === 'attention' ? (
+                <span className="step-state" data-state={state} data-testid={`journey-state-${stop.key}`}>
+                  {STOP_STATE_LABEL[state]}
                 </span>
-              ))}
-            </p>
-          </div>
-        );
-      })}
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      {/* The machine's own one-line summary of the route — the same sentence on
+          every device, so nobody has to infer it from five small circles. */}
+      <p className="stepper-caption" data-testid="journey-caption">
+        {journey.caption}
+        {onOpen ? <span className="stepper-more">Sơ đồ từng tầng</span> : null}
+      </p>
     </div>
   );
 }
@@ -186,16 +196,16 @@ export function JourneyBoard({ journey, onClose }: BoardProps) {
         <ol className="relative">
           <span className="absolute bottom-4 left-[14px] top-4 w-px bg-hair" aria-hidden />
           {rows.map((stop) => {
-            const Icon = stop.state === 'done' ? CheckIcon : STOP_ICON[stop.key];
+            const state = viewState(stop, journey.team_number !== null);
             return (
               <li
                 key={stop.key}
                 className="relative flex items-start gap-3 pb-3"
                 data-testid={`journey-stop-${stop.key}`}
-                data-state={stop.state}
+                data-state={state}
               >
-                <span className="step-node relative z-10 mt-0.5 shrink-0" style={nodeStyle(stop)} aria-hidden>
-                  <Icon />
+                <span className="step-node relative z-10 mt-0.5 shrink-0" data-state={state} aria-hidden>
+                  <StateIcon state={state} Icon={STOP_ICON[stop.key]} />
                 </span>
                 <div className="min-w-0 flex-1 border-b border-hair/60 pb-2">
                   <div className="flex items-baseline justify-between gap-2">
@@ -205,7 +215,7 @@ export function JourneyBoard({ journey, onClose }: BoardProps) {
                       {stop.station ? ` · ${ROLE_SHORT[stop.station]}` : ''}
                     </span>
                   </div>
-                  <p className="text-[0.66rem] leading-relaxed text-mute">{describeStop(stop)}</p>
+                  <p className="text-[0.66rem] leading-relaxed text-mute">{describeStop(stop, state)}</p>
                   {stop.note ? <p className="text-[0.64rem] leading-relaxed text-snow/70">{stop.note}</p> : null}
                 </div>
               </li>
@@ -240,9 +250,10 @@ export function JourneyBoard({ journey, onClose }: BoardProps) {
   );
 }
 
-function describeStop(stop: JourneyStop): string {
+function describeStop(stop: JourneyStop, state: string): string {
+  if (state === 'attention') return 'Bỏ qua có ghi nhật ký — không phải xác nhận tại tầng 2';
   if (stop.state === 'lead') return 'Khu vực đội đang tới';
   if (stop.state === 'here') return 'Đội đang ở đây';
-  if (stop.state === 'done') return stop.at_ms !== null ? `✓ ${formatWallTime(stop.at_ms)}` : '✓ đã qua';
-  return 'Chưa tới';
+  if (stop.state === 'done') return stop.at_ms !== null ? `Đã qua lúc ${formatWallTime(stop.at_ms)}` : 'Đã qua';
+  return state === 'locked' ? 'Chưa mở — chưa có đội nào trên sàn' : 'Chưa tới';
 }

@@ -3,7 +3,7 @@ import { withTimeout, GATEWAY_TIMEOUT_MS, type Gateway } from '../src/client/gat
 import { LiveStore } from '../src/client/liveStore';
 import type { CommandRequest, CommandResult, RevisionHintResponse, Snapshot } from '../src/shared/types';
 import { TestHub } from './helpers/harness';
-import { APP_VERSION } from '../src/shared/version';
+import { APP_VERSION, isClientStale } from '../src/shared/version';
 
 /**
  * V3.3 P0 — "ĐANG ĐỒNG BỘ" must never be forever.
@@ -135,7 +135,12 @@ describe('LiveStore boot never hangs', () => {
 
 describe('server floor blocks an outdated bundle safely', () => {
   it('the running bundle is never stale against the shipped V3.3 floor', () => {
-    expect(APP_VERSION).toBe('3.3.0');
+    // 3.3.1 is the first bundle carrying QUẢN LÝ VỊ TRÍ. Raising the server floor
+    // to this value is what keeps a supervisor phone on an older shell from
+    // showing a board it cannot operate.
+    expect(APP_VERSION).toBe('3.3.1');
+    expect(isClientStale(APP_VERSION)).toBe(false);
+    expect(isClientStale('3.4.0')).toBe(true);
   });
 
   it('VERSION_STALE from the wire locks the store', async () => {

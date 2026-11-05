@@ -121,6 +121,10 @@ async function main() {
       // distinguishable without a session), plus public.min_client_version().
       // Additive to the board payload; board_version stays 3.
       '0020_v33_board_diagnostics.sql',
+      // V3.3 P0: sc.station_admin() (who holds which seat) and the live-round
+      // guard on sc.release_station(). Additive RPC surface plus one function
+      // redefinition; no table, no data and no grant broadened.
+      '0021_v33_seat_management.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

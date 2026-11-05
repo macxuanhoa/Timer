@@ -24,6 +24,7 @@ const queries: Record<string, string> = {
   operation_status: 'select public.operation_status($1) as result',
   handle_command: 'select public.handle_command($1,$2,$3,$4) as result',
   release_station: 'select public.release_station($1) as result',
+  station_admin: 'select public.station_admin() as result',
 };
 async function rpc(uid: string | null, name: string, body: Record<string, unknown> = {}) {
   if (!queries[name]) throw new Error('Unknown RPC');
@@ -48,7 +49,12 @@ const revision = async () => Number((await pool.query('select revision from sc.e
  * reproduces the production symptom exactly (the socket opens and never answers)
  * so the store's bounded-settle behaviour can be proven in a real browser.
  */
-async function phone(browser: Browser, transport: { hangSnapshot: boolean } = { hangSnapshot: false }) {
+async function phone(
+  browser: Browser,
+  transport: { hangSnapshot: boolean } = { hangSnapshot: false },
+  /** '/admin' for an organiser device: the retained admin is a route, not a tile. */
+  path = '/',
+) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   contexts.push(context);
   let uid: string | null = null;
@@ -75,9 +81,21 @@ async function phone(browser: Browser, transport: { hangSnapshot: boolean } = { 
     await route.fulfill({ status: 404, json: { message: 'Local transport only' } });
   });
   const page = await context.newPage();
-  await page.goto('http://127.0.0.1:5177/');
+  await page.goto('http://127.0.0.1:5177' + path);
   await expect(page.getByTestId('station-count')).toHaveText(/\d\/6/, { timeout: 20_000 });
   return { context, page, uid: () => uid, transport };
+}
+
+/** An organiser phone: /admin, allow-listed mid-session, then into the dashboard.
+ *  This is the exact chain the brief demands work — login SUPERVISOR → see the
+ *  seat management → free one seat. */
+async function adminPhone(browser: Browser) {
+  const a = await phone(browser, { hangSnapshot: false }, '/admin');
+  await expect(a.page.getByTestId('admin-panel')).toBeVisible();
+  await allowAdmin(a.uid()!);
+  await a.page.getByTestId('home-admin-open').click();
+  await expect(a.page.getByTestId('dashboard')).toBeVisible({ timeout: 25_000 });
+  return a;
 }
 
 test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervisor handoff', () => {
@@ -251,5 +269,104 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     } finally {
       await pool.query("select sc.configure_min_client_version('')");
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // The third production blocker: "Không tìm thấy chức năng GIẢI PHÓNG VỊ TRÍ
+  // mặc dù NPC1 đang ĐÃ ĐỦ NGƯỜI." These cases drive the real rendered admin
+  // surface in a browser, not the RPC, because the complaint was about a control
+  // nobody could find.
+  // -------------------------------------------------------------------------
+
+  test('a supervisor signs in and immediately sees QUẢN LÝ VỊ TRÍ, naming the device stuck on NPC1', async ({ browser }) => {
+    const gateUid = await identity();
+    expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
+    await pool.query('update sc.operators set display_name=$1 where user_id=$2', ['NPC1 bo may', gateUid]);
+
+    const a = await adminPhone(browser);
+    // One tap from the dashboard header — no menu hunting, no buried accordion.
+    await a.page.getByTestId('open-seat-management').click();
+    await expect(a.page.getByTestId('seat-management')).toBeVisible({ timeout: 20_000 });
+    await expect(a.page.getByTestId('seat-management')).toContainText('QUẢN LÝ VỊ TRÍ');
+
+    // The seat reads as held, and says who holds it. Before migration 0021 no
+    // screen could answer this at all.
+    await expect(a.page.getByTestId('seat-row-GATE')).toContainText('ĐANG GIỮ');
+    await expect(a.page.getByTestId('seat-holder-GATE')).toContainText('NPC1 bo may');
+    await expect(a.page.getByTestId('seat-holder-GATE')).toContainText(gateUid.slice(0, 8));
+    // The button speaks the operator's vocabulary, not an internal code name.
+    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('GIẢI PHÓNG NPC 1');
+    // An empty seat is reported as empty rather than offering a phantom release.
+    await expect(a.page.getByTestId('seat-state-ROOM305')).toHaveText('CÒN TRỐNG');
+  });
+
+  test('two taps free NPC1 only, and the picker opens that seat for the next phone', async ({ browser }) => {
+    const gateUid = await identity(); const lobbyUid = await identity();
+    expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
+    expect((await rpc(lobbyUid, 'claim_station', { p_role: 'LOBBY' })).ok).toBe(true);
+
+    const a = await adminPhone(browser);
+    await a.page.getByTestId('open-seat-management').click();
+    await expect(a.page.getByTestId('seat-release-GATE')).toBeEnabled({ timeout: 20_000 });
+
+    // Step one arms, and the panel explains what the second tap will do.
+    await a.page.getByTestId('seat-release-GATE').click();
+    await expect(a.page.getByTestId('seat-mgmt-armed')).toContainText('NPC 1 · CỬA TẦNG 3');
+    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('XÁC NHẬN GIẢI PHÓNG NPC 1');
+
+    // Step two commits.
+    await a.page.getByTestId('seat-release-GATE').click();
+    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NPC 1', { timeout: 20_000 });
+
+    const board = await rpc(null, 'station_board');
+    const seat = (role: string) => board.stations.find((s: { role: string }) => s.role === role) as
+      { role: string; devices: number };
+    expect(seat('GATE').devices).toBe(0);   // the stuck seat is back
+    // A per-seat release must never sweep the board.
+    expect(seat('LOBBY').devices).toBe(1);
+    // The audit trail names both parties, so the night can be reconstructed.
+    const audit = await pool.query(
+      "select metadata->>'by' as by from sc.access_audit where action='STATION_RELEASED' order by id desc limit 1");
+    expect(audit.rows[0]?.by).toBe(a.uid());
+
+    // A different phone now finds the seat claimable, with no cache clearing.
+    const p = await phone(browser);
+    await expect(p.page.getByTestId('station-GATE')).toBeEnabled({ timeout: 20_000 });
+  });
+
+  test('the panel will not free NPC1 while a team is inside, and says why in Vietnamese', async ({ browser }) => {
+    const lobbyUid = await identity(); const corridorUid = await identity(); const gateUid = await identity();
+    for (const [uid, role] of [[lobbyUid, 'LOBBY'], [corridorUid, 'CORRIDOR'], [gateUid, 'GATE']] as const) {
+      expect((await rpc(uid, 'claim_station', { p_role: role })).ok).toBe(true);
+    }
+    // Put a real team on the clock: the case where freeing NPC1 would strand it.
+    const press = async (uid: string, action: string, key: string) => {
+      const res = await rpc(uid, 'handle_command', {
+        p_action: action, p_meta: { _v: '3.3.0' }, p_expected_revision: await revision(), p_idempotency_key: key,
+      });
+      expect(res, action).toMatchObject({ ok: true });
+    };
+    await press(lobbyUid, 'CALL_TEAM', 'seatmg-call');
+    await press(corridorUid, 'CONFIRM_FLOOR2', 'seatmg-floor2');
+    await press(gateUid, 'START_GAME', 'seatmg-start');
+
+    const a = await adminPhone(browser);
+    await a.page.getByTestId('open-seat-management').click();
+    await expect(a.page.getByTestId('seat-mgmt-floor')).toContainText('ĐANG CÓ ĐỘI TRONG KHU VỰC', { timeout: 20_000 });
+    await expect(a.page.getByTestId('seat-release-GATE')).toBeDisabled();
+    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('KHÔNG ĐƯỢC — ĐANG CÓ LƯỢT');
+    // The database refuses for the same reason, so the UI is never ahead of it.
+    const refused = await rpc(a.uid(), 'release_station', { p_role: 'GATE' });
+    expect(refused.code).toBe('FLOOR_BUSY');
+    // Every floor seat is protected the same way: a live round needs all of them,
+    // and half a rescue would strand the team just as badly.
+    await expect(a.page.getByTestId('seat-release-ROOM305')).toBeDisabled();
+    await expect(a.page.getByTestId('seat-release-CORRIDOR')).toBeDisabled();
+    // The admin seat is never offered for release on this surface at all.
+    await expect(a.page.getByTestId('seat-release-SUPERVISOR')).toHaveCount(0);
+    // And the held device is still named, so the supervisor knows who to call.
+    await expect(a.page.getByTestId('seat-holder-GATE')).toContainText(gateUid.slice(0, 8));
+    const stillHeld = await rpc(null, 'station_board');
+    expect(stillHeld.stations.find((s: { role: string }) => s.role === 'GATE').devices).toBe(1);
   });
 });

@@ -207,18 +207,72 @@ export interface ReleaseStationResult {
 
 export async function releaseStation(role: Role): Promise<ReleaseStationResult> {
   await ensureAnonymousSession();
-  const { data, error } = await supabase().rpc('release_station', { p_role: role });
+  // Bounded like every other call: a socket that never answers must not leave
+  // this button spinning forever.
+  const { data, error } = await withTimeout(
+    supabase().rpc('release_station', { p_role: role }),
+    GATEWAY_TIMEOUT_MS,
+    'release_station',
+  );
   if (error) throw new Error(error.message);
   return data as ReleaseStationResult;
+}
+
+/**
+ * V3.3 seat management: who holds which duty seat, and whether a seat may be
+ * freed right now. Migration 0021 attaches the RPC; PostgreSQL only answers for
+ * a caller holding a live SUPERVISOR binding, because the report names other
+ * people's devices. `releasable` is the same predicate release_station enforces,
+ * so the panel can never offer a tap that the database will refuse.
+ */
+export interface SeatHolder {
+  user_id: string;
+  seat_slot: number;
+  display_name: string | null;
+  bound_at_ms: number;
+  held_ms: number;
+  last_action: string | null;
+  last_action_ms: number | null;
+}
+
+export interface SeatReport {
+  role: Role;
+  capacity: number;
+  devices: number;
+  holders: SeatHolder[];
+  releasable: boolean;
+}
+
+export interface StationAdminResult {
+  ok: boolean;
+  code: string;
+  revision?: number;
+  server_time_ms?: number;
+  floor_block_reason?: string | null;
+  stations?: SeatReport[];
+}
+
+export async function stationAdmin(): Promise<StationAdminResult> {
+  await ensureAnonymousSession();
+  const { data, error } = await withTimeout(
+    supabase().rpc('station_admin'),
+    GATEWAY_TIMEOUT_MS,
+    'station_admin',
+  );
+  if (error) throw new Error(error.message);
+  return (data ?? { ok: false, code: 'EMPTY' }) as StationAdminResult;
 }
 
 /** The Vietnamese readout of a release_station refusal. */
 const RELEASE_ERROR: Record<string, string> = {
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
-  RELEASE_NOT_AUTHORIZED: 'CHỈ MÁY ĐANG GIỮ GHẾ QUẢN TRỊ MỚI ĐƯỢC GIẢI CỨU MỘT VỊ TRÍ',
+  RELEASE_NOT_AUTHORIZED: 'CHỈ MÁY ĐANG GIỮ GHẾ QUẢN TRỊ MỚI GIẢI PHÓNG ĐƯỢC VỊ TRÍ',
   INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
   RELEASE_SELF_TARGET: 'GHẾ QUẢN TRỊ KHÔNG GIẢI PHÓNG BẰNG CÁCH NÀY — DÙNG NÚT "VỀ HOME"',
   RELEASE_NOT_BOUND: 'VỊ TRÍ ĐÓ ĐANG TRỐNG — KHÔNG CÓ GÌ ĐỂ GIẢI PHÓNG',
+  // V3.3: the release was refused because the floor is committed, not because
+  // anything failed. Saying so is the difference between a tool and a dead end.
+  FLOOR_BUSY: 'ĐANG CÓ ĐỘI TRONG KHU VỰC — KHÔNG GIẢI PHÓNG ĐƯỢC. CHỐT LƯỢT RỒI BẤM LẠI',
 };
 
 export function releaseErrorMessage(result: ReleaseStationResult | null): string {

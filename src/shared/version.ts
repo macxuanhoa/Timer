@@ -15,7 +15,14 @@
  * unit tests do not see the gate flap between assertions.
  */
 
-export const APP_VERSION = '3.3.0';
+/**
+ * 3.3.1 is the first bundle that carries QUẢN LÝ VỊ TRÍ: the seat roster naming
+ * which device holds each position, and the per-seat `GIẢI PHÓNG <seat>` control.
+ * A supervisor phone still on 3.3.0 has the RPCs but no way to reach them, which
+ * is exactly the "không tìm thấy chức năng giải phóng vị trí" report — so raising
+ * the floor to 3.3.1 is what makes that phone stop pretending it is usable.
+ */
+export const APP_VERSION = '3.3.1';
 
 /**
  * The version that first carries the OPEN_NEW_EVENT and per-seat release flow.

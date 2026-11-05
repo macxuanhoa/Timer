@@ -162,6 +162,26 @@ try {
     return `duty caller refused with RELEASE_NOT_AUTHORIZED on a ${free.role} probe`;
   });
 
+  await run('station_admin exists and refuses a non-admin caller (V3.3 P0)', async () => {
+    // The seat-management roster names other people's devices, so it must answer
+    // "no" to anybody not holding a live SUPERVISOR binding — and must not be a
+    // missing function, which is how a half-migrated host shows up here.
+    const probe = await fresh();
+    const token = await tokenOf(probe);
+    let answer;
+    try { answer = await rpc('station_admin', {}, token); }
+    catch (error) {
+      const text = String(error.message);
+      assert(!/PGRST202|does not exist/i.test(text),
+        `station_admin is not installed on this host — migration 0021 not applied: ${text.slice(0, 160)}`);
+      throw error;
+    }
+    assert(answer?.ok !== true, `unbound station_admin must not return the roster: ${JSON.stringify(answer).slice(0, 160)}`);
+    assert(answer?.code === 'RELEASE_NOT_AUTHORIZED' || answer?.code === 'NOT_AUTHENTICATED',
+      `unexpected: ${JSON.stringify(answer).slice(0, 160)}`);
+    return `unbound caller refused with ${answer.code}`;
+  });
+
   await run('an unbound caller cannot drive OPEN_NEW_EVENT (migration 0018 shape)', async () => {
     // Proves the handoff is real and permission-guarded WITHOUT performing it:
     // an anonymous, unbound identity must be refused, never allowed to open a

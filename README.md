@@ -257,19 +257,32 @@ The historical mint tool refuses operation on the new access model.
    event's real state off `station_board` (migration 0020), so an ended night is announced as
    `SỰ KIỆN ĐÃ KẾT THÚC · chờ Quản trị mở sự kiện mới` instead of looking like a sync failure.
 
-16. **One stuck seat, not a board sweep (migration 0019)**: when a duty phone walked off and its
-   seat still shows `ĐÃ ĐỦ NGƯỜI`, the whole-board release is refused while the floor looks busy and
-   nothing else could free a single binding. `Xem thêm → Quản trị → GIẢI CỨU MỘT VỊ TRÍ` releases
-   exactly one named seat (two taps), authorises itself by the caller's own live SUPERVISOR binding,
-   leaves every other phone bound, and writes a `STATION_RELEASED` row in `sc.access_audit` naming
-   both parties. It is a pure access action: no clock, round, claim or checklist is touched, and it
-   deliberately works even from a supervisor phone that is itself below the version floor.
+16. **One stuck seat, not a board sweep (migrations 0019 + 0021)**: when a duty phone walked off and
+   its seat still shows `ĐÃ ĐỦ NGƯỜI`, the whole-board release is refused while the floor looks busy
+   and nothing else could free a single binding. The admin tab now opens with **QUẢN LÝ VỊ TRÍ** — the
+   first block on the page, reachable in one tap from the `VỊ TRÍ` button in the supervisor header —
+   listing every seat as `CÒN TRỐNG` or `n/capacity ĐANG GIỮ`, and naming each holder: the display
+   name the operator chose, the device id prefix, how long the seat has been held, when it last acted,
+   and an explicit `có thể đã bỏ máy` note for a seat held long with no activity.
+   `GIẢI PHÓNG NPC 1` frees exactly that one seat (two taps), authorises itself by the caller's own
+   live SUPERVISOR binding, leaves every other phone bound, and writes a `STATION_RELEASED` row in
+   `sc.access_audit` naming both parties. It is a pure access action: no clock, round, claim or
+   checklist is touched, and it deliberately works even from a supervisor phone that is itself below
+   the version floor. Since 0021 PostgreSQL also **refuses** a floor seat while a team is on the clock
+   or a recorded claim still awaits judgement (`FLOOR_BUSY`, audited as `RELEASE_REFUSED`) — the panel
+   greys that seat out and says why, instead of letting the tap fail silently. Cancelling a live round
+   stays the emergency board reset's exclusive job.
+   This surface is deliberately separate from `MỞ SỰ KIỆN MỚI` (a new night) and from the prop
+   checklist (physical reset): freeing a binding is neither of those.
 
 17. **Forcing the fleet onto the current bundle**: the PWA now registers with `autoUpdate`,
    `skipWaiting` and `clientsClaim`, and checks for a new build every 3 minutes. A phone that
    reopens the app after a deploy gets the fresh shell immediately. For a phone that will not be
    reopened, raise the server floor from the Supabase SQL editor:
-   `select sc.configure_min_client_version('3.3.0');`
+   `select sc.configure_min_client_version('3.3.1');`
+   `3.3.1` is the first bundle carrying QUẢN LÝ VỊ TRÍ, so an organiser phone held on 3.3.0 has the
+   RPCs but no way to reach them: raising the floor to 3.3.1 is what turns "the button is missing"
+   into "update the app".
    From that moment every command from an older bundle is refused with `VERSION_STALE` *before* any
    state rule runs, and the phone locks onto `ỨNG DỤNG CẦN CẬP NHẬT` with a single
    `CẬP NHẬT NGAY` button that unregisters the service worker and reloads bypassing cache. Lower it
@@ -344,6 +357,34 @@ SQL path for driving `OPEN_NEW_EVENT` through `handle_command` when no superviso
 phone is reachable — same code path, same audit row, same idempotency key rules.
 
 Migration files 0001–0019 are otherwise unchanged.
+
+Migration **0021_v33_seat_management.sql** answers the third field report — "NPC1
+đang ĐÃ ĐỦ NGƯỜI mà không tìm thấy chức năng giải phóng vị trí". Two causes,
+both fixed server-side rather than by moving a button around:
+
+  * No screen could say **who** holds a seat. `sc.operators` RLS lets a device
+    read only its own row, so the picker could only ever show a count.
+    `sc.station_admin()` is a `SECURITY DEFINER` read that names each holder
+    (device id, chosen display name, how long it has held the seat, its last
+    action) plus `floor_block_reason`, and answers only for a caller currently
+    holding an unrevoked SUPERVISOR binding — the report describes other
+    people's devices, so a duty phone gets `RELEASE_NOT_AUTHORIZED` and an
+    unauthenticated one gets `NOT_AUTHENTICATED`.
+  * 0019's `release_station` had no floor rule at all, because "the NPC1 phone
+    walked off" is precisely what the tool is for. That also let a supervisor
+    drop NPC1 out of a **live** round and leave the players inside with nobody
+    able to confirm them out. The guard is now narrow and reads the same
+    `sc._floor_block_reason()` the board publishes: `RUNNING` (team on the clock
+    or inside, not confirmed out) and `PENDING_CLAIM` (a recorded claim still
+    owes its judgement) refuse with `FLOOR_BUSY`; a queued round, or a team that
+    is out with the area not yet closed, does **not** refuse — freeing the seat
+    is how the next operator takes over. Cancelling a live round stays the
+    whole-board emergency reset's exclusive job, which records why.
+
+Every refusal writes a `RELEASE_REFUSED` row to `sc.access_audit` naming the
+seat and the reason, so "we pressed it and nothing happened" is a queryable
+fact. The result codes, the one-argument signature and the
+outside-the-version-gate reachability of `release_station` are unchanged.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, the partial unique index on (role, seat_slot) and the slot CHECK constraints

@@ -90,6 +90,8 @@ try {
   run('042 v33 operations scenario', ['supabase/tests/042_v33_operations.sql']);
   run('020 v33 board diagnostics', ['supabase/migrations/0020_v33_board_diagnostics.sql']);
   run('043 v33 board diagnostics scenario', ['supabase/tests/043_v33_board_diagnostics.sql']);
+  run('021 v33 seat management', ['supabase/migrations/0021_v33_seat_management.sql']);
+  run('044 v33 seat management scenario', ['supabase/tests/044_v33_seat_management.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

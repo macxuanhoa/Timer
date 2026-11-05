@@ -208,6 +208,22 @@ export function Dashboard({ store, account, onLogout }: Props) {
             </div>
             <span className="pr-0.5 text-[8px] font-semibold tracking-[0.08em] text-mute">{ROLE_LABEL[account.role]}</span>
           </div>
+          {/* V3.3 P0: for the organiser, "where are the seats" is a first-class
+              destination, not the fourth thing inside a menu. One tap lands on
+              the QUẢN TRỊ group with QUẢN LÝ VỊ TRÍ at the top of it.
+              Unlike the station-settings gear, this stays available while a
+              countdown is locked: a live round is exactly when the supervisor
+              needs to read why a seat cannot be freed. */}
+          {account.role === 'SUPERVISOR' && (
+            <button
+              type="button"
+              onClick={() => { setSheetTab('admin'); setSheetOpen(true); }}
+              className="shrink-0 rounded-[10px] border border-ember/50 bg-ember/10 px-2.5 py-1.5 text-[9px] font-bold tracking-[0.06em] text-ember active:bg-ember/20"
+              data-testid="open-seat-management"
+            >
+              VỊ TRÍ
+            </button>
+          )}
           {!locked && (
             <button
               type="button"

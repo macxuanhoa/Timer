@@ -29,6 +29,7 @@ import { disputedRounds } from '../shared/metrics';
 import { pad } from '../client/selectors';
 import { alarms } from './sound';
 import { StationStrip } from './StationStrip';
+import { SeatManagement } from './SeatManagement';
 import type { Round } from '../shared/types';
 
 interface Props {
@@ -532,15 +533,9 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   const [releasing, setReleasing] = useState(false);
   const [armed, setArmed] = useState(false);
   const [released, setReleased] = useState<string | null>(null);
-  // V3.3 per-seat release. Migration 0019 added sc.release_station(role): the
-  // stuck-NPC1 case (a duty phone walked off, the whole-board sweep is refused
-  // because sc._floor_block_reason() still sees a team inside) now has an
-  // escape that does not have to touch every other seat. The state tracks
-  // which role is armed for a second-tap confirmation and which is currently
-  // sending; the release itself is one role at a time.
-  const [stuckArmed, setStuckArmed] = useState<Role | null>(null);
-  const [stuckReleasing, setStuckReleasing] = useState<Role | null>(null);
-  const [stuckResult, setStuckResult] = useState<string | null>(null);
+  // V3.3: the per-seat rescue surface lives in <SeatManagement />, which owns
+  // its own armed/busy/result state and its own read of who holds each seat
+  // (migration 0021), so this component stays about the event itself.
   const [reason, setReason] = useState('');
   const [reopen, setReopen] = useState<{ round_id: string; task_key: string; reason: string }>({
     round_id: '',
@@ -602,33 +597,17 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   };
 
   /**
-   * V3.3 per-seat release: frees one named duty binding. Two taps to commit.
-   * The migration 0019 RPC checks the caller's own live SUPERVISOR binding
-   * inside PostgreSQL, so an expired seat cannot be freed from a phone that
-   * is not admin any more. It never touches a round, a clock or a checklist,
-   * and every successful call leaves a `STATION_RELEASED` row in
-   * sc.access_audit naming both the caller and the freed identity.
+   * V3.3 per-seat release moved to <SeatManagement />: it needs its own read of
+   * who holds each seat (migration 0021) and its own busy/armed state.
    */
-  const releaseOne = async (target: Role) => {
-    setStuckReleasing(target); setStuckResult(null); setStuckArmed(null);
-    try {
-      const { releaseStation, releaseErrorMessage } = await import('../client/supabaseAuth');
-      const result = await releaseStation(target);
-      setStuckResult(result?.ok
-        ? `ĐÃ GIẢI PHÓNG ${ROLE_SHORT[target]}`
-        : releaseErrorMessage(result));
-      // Force the picker to refresh so the freed seat reappears as CÒN TRỐNG
-      // without waiting for the station_occupancy trigger to broadcast.
-      window.setTimeout(() => void store.refresh(), 300);
-    } catch {
-      setStuckResult('MẤT KẾT NỐI — CHƯA GIẢI PHÓNG ĐƯỢC');
-    } finally {
-      setStuckReleasing(null);
-    }
-  };
 
   return (
     <div className="flex flex-col gap-4" data-testid="management">
+      {/* V3.3 P0: seat management is the FIRST thing in the admin tab, not the
+          last thing in a stack. It is the control the operator comes looking for
+          by name when a tile reads ĐÃ ĐỦ NGƯỜI and nobody is standing there. */}
+      <SeatManagement store={store} now={snap.server_now_ms} />
+
       {/* Discoverability first (V3.2 UX brief): who holds a seat, then the one
           control a supervisor needs most often — releasing the board. */}
       <div className="flex flex-col gap-1" data-testid="admin-bindings">
@@ -692,54 +671,6 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </details>
           {released !== null && (
             <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
-          )}
-        </div>
-      )}
-
-      {/* V3.3 per-seat release. The stuck-NPC1 case that had no escape in V3.2:
-          a duty phone walked off, the whole-board sweep is refused because the
-          floor is still live, and the picker just says "ĐÃ ĐỦ NGƯỜI" forever.
-          The migration 0019 release_station RPC frees exactly one seat while
-          leaving every other phone in place, so the rest of the shift never
-          loses their session. */}
-      {USING_SUPABASE && (
-        <div className="flex flex-col gap-1.5" data-testid="release-seat-panel">
-          <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI CỨU MỘT VỊ TRÍ</p>
-          <p className="text-[0.66rem] leading-snug text-mute">
-            Dùng khi ca trước bỏ máy hoặc một seat kẹt “ĐÃ ĐỦ NGƯỜI” mà không tự
-            thoát được. Chỉ đúng một vị trí bị thu hồi; đồng hồ, kết quả và các máy
-            trực khác vẫn còn nguyên. Chạm hai lần để xác nhận.
-          </p>
-          <div className="grid grid-cols-2 gap-1.5">
-            {(['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'] as Role[]).map((r) => {
-              const isArmed = stuckArmed === r;
-              const isBusy = stuckReleasing === r;
-              return (
-                <button
-                  key={r}
-                  type="button"
-                  disabled={isBusy || stuckReleasing !== null}
-                  onClick={() => { if (!isArmed) { setStuckArmed(r); return; } void releaseOne(r); }}
-                  className={`rounded-panel border px-3 py-2.5 text-[0.72rem] font-semibold disabled:opacity-50 ${
-                    isArmed ? 'border-blood/60 bg-blood/10 text-blood' : 'border-hair bg-panel text-snow'
-                  }`}
-                  data-testid={`release-seat-${r}`}
-                >
-                  {isBusy ? 'ĐANG THỰC HIỆN…' : isArmed ? `XÁC NHẬN THÁO ${ROLE_SHORT[r]}` : `Tháo ${ROLE_SHORT[r]}`}
-                </button>
-              );
-            })}
-          </div>
-          {stuckArmed !== null ? (
-            <p className="text-[0.64rem] leading-snug text-ember" data-testid="release-seat-armed">
-              Lần bấm thứ hai sẽ đuổi máy đang giữ {ROLE_LABEL[stuckArmed]}. Máy đó mất
-              quyền thao tác ngay; các seat khác vẫn trực tiếp tục.
-            </p>
-          ) : null}
-          {stuckResult !== null && (
-            <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-seat-result">
-              {stuckResult}
-            </p>
           )}
         </div>
       )}

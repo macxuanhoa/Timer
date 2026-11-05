@@ -27,7 +27,7 @@ try {
 
   const { rows: led } = await client.query('select name from public._sc_migrations order by name');
   const applied = new Set(led.map((r) => r.name));
-  log(`\nLedger (${applied.size}/20 applied):`);
+  log(`\nLedger (${applied.size}/21 applied):`);
   for (const r of led) log('  ✓ ' + r.name);
 
   const { rows: files } = await client.query("select name from public._sc_migrations");
@@ -35,7 +35,7 @@ try {
   const { readdirSync } = await import('node:fs');
   const all = readdirSync(resolve(root, 'supabase/migrations')).filter(n => /^\d+_.*\.sql$/.test(n)).sort();
   const pending = all.filter(n => !applied.has(n));
-  log(`\nPending: ${pending.length ? pending.join(', ') : '(none — hosted đã 0020)'}`);
+  log(`\nPending: ${pending.length ? pending.join(', ') : '(none — hosted đã 0021)'}`);
 
   const { rows: rounds } = await client.query(`
     select id, team_number, status, game_started_at, exit_confirmed_at, aborted_at,

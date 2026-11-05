@@ -416,6 +416,16 @@ test('seats bind with one tap; only the admin seat is gated, and the allow-list 
   // A refresh does not challenge again: the binding is what authorises.
   await a.page.reload();
   await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
+  // NOTE on the picker's `self` state: it is the card's answer when this device
+  // holds the seat but its dashboard could not boot. It is deliberately NOT
+  // asserted here, because the hosted app re-verifies the session every five
+  // seconds (App.tsx `verify`), so clearing the local mirror lands the phone back
+  // in the dashboard rather than on the picker — reaching `self` would mean
+  // faking a failure of one specific request, which tests the stub, not the app.
+  // What IS pinned is the rule `self` exists to serve: a press is offered only
+  // for a seat the board confirmed free, or this device's own seat, and never for
+  // unknown/full (picker-v34-visual.spec.ts, "the board never promises a seat it
+  // has not confirmed").
   // The viewing seat still opens with nothing at all, and a viewer cannot upgrade.
   const v=await phone(browser); await claim(v,'OBSERVER');
   expect((await rpc(v.uid(),'claim_station',{p_role:'ROOM305'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
@@ -444,8 +454,17 @@ test('stale occupancy becomes neutral and disabled, reconnect refetches; old lin
   const a=await phone(browser); a.blockBoard(true);
   await expect(a.page.getByTestId('station-GATE')).toHaveAttribute('data-state','unknown');
   await expect(a.page.getByTestId('station-GATE')).toBeDisabled();
+  // An unreadable board is a named condition with a way out, not an infinite
+  // "đang đồng bộ": the card prints an em dash and the retry button is live.
+  await expect(a.page.getByTestId('home-board-stalled')).toContainText('Không đọc được bảng vị trí');
+  await expect(a.page.getByTestId('home-board-retry')).toBeEnabled();
+  await expect(a.page.getByTestId('station-GATE')).toContainText('—/1');
   await a.page.screenshot({path:'shots/v34-picker-unknown.png',fullPage:true});
-  a.blockBoard(false); await expect(a.page.getByTestId('station-GATE')).toBeEnabled();
+  a.blockBoard(false);
+  await a.page.getByTestId('home-board-retry').click();
+  await expect(a.page.getByTestId('home-board-stalled')).toHaveCount(0);
+  await expect(a.page.getByTestId('station-GATE')).toBeEnabled();
+  await expect(a.page.getByTestId('station-GATE')).toContainText('0/1');
   await a.page.goto('/i/'+ 'x'.repeat(43));
   await expect(a.page.getByTestId('scream-home')).toBeVisible(); await expect(a.page).toHaveURL('http://127.0.0.1:5177/');
   await expect(a.page.getByTestId('station-GATE')).toBeEnabled();

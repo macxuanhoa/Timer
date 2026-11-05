@@ -74,6 +74,43 @@ test('keyboard users can walk every seat in walking order', async ({ page }) => 
   }
 });
 
+test('a claim in flight shows as pending and cannot be pressed twice', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('scream-home')).toBeVisible();
+  // Hold the seat-binding answer open, so the intermediate state is observable
+  // instead of a flash nobody can test. The self-hosted engine binds a seat on
+  // /api/login; the hosted path goes through the claim RPC.
+  await page.route('/api/login', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    await route.continue();
+  });
+  await page.getByTestId('station-GATE').click();
+  await expect(page.getByTestId('station-GATE')).toHaveAttribute('data-state', 'pending');
+  // While the answer is out, the card promises nothing else: no second press, and
+  // the other seats stay as the board described them.
+  expect(await page.evaluate(() => getComputedStyle(
+    document.querySelector('[data-testid="station-GATE"]') as Element).cursor)).toBe('progress');
+  await expect(page.getByTestId('station-GATE')).toBeDisabled();
+  await page.screenshot({ path: 'shots/v34-picker-pending.png', fullPage: true });
+  await expect(page.getByTestId('dashboard')).toBeVisible({ timeout: 30_000 });
+});
+
+test('the board never promises a seat it has not confirmed', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('scream-home')).toBeVisible();
+  // Availability is only ever the server's answer. A card that cannot show a
+  // confirmed number prints an em dash instead of a hopeful "0/1", and it is not
+  // pressable — an unknown seat must never look like an open one.
+  const tones = await page.evaluate(() => Array.from(
+    document.querySelectorAll('[data-testid^="station-"][data-kind]'),
+    (el) => [el.getAttribute('data-testid'), el.getAttribute('data-state'), el.matches(':disabled')]));
+  expect(tones).toHaveLength(5);
+  for (const [id, state, disabled] of tones as [string, string, boolean][]) {
+    expect(['available', 'full', 'self', 'pending', 'unknown'], `${id} state`).toContain(state);
+    if (state === 'unknown' || state === 'full') expect(disabled, `${id} in state ${state}`).toBe(true);
+  }
+});
+
 test('screen readers get person, place and real state on every card', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: /NHÂN SỰ 01 — SẢNH TẦNG 1\. CÒN TRỐNG/ })).toBeVisible();

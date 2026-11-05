@@ -270,6 +270,14 @@
   cursor: default;
 }
 
+/* A card whose claim is in flight IS disabled — that is the whole point — but
+   the pointer must still say "working", not fall back to the inert default the
+   rule above gives a seat nobody can take. Declared after it on purpose. */
+.home-station[data-state='pending']:disabled,
+.home-observer-card[data-state='pending']:disabled {
+  cursor: progress;
+}
+
 .home-station-icon {
   display: grid;
   place-items: center;
@@ -377,13 +385,29 @@
   transition: border-color 150ms ease, box-shadow 160ms ease, transform 60ms ease;
 }
 
-.home-observer-card[data-state='available'],
-.home-observer-card[data-state='self'] {
-  border-color: color-mix(in srgb, var(--color-jade) 55%, var(--color-hair));
+/* One colour vocabulary for the whole board, matching the duty cards exactly:
+   ember means a seat is there to take, jade means THIS device already holds it,
+   muted dashed means nothing is promised. The viewer seat used to draw its
+   AVAILABLE state in jade — the very cue the duty cards reserve for SELF — so
+   one screen carried two opposite meanings for one colour. */
+.home-observer-card[data-state='available'] {
+  border-color: color-mix(in srgb, var(--color-ember) 55%, var(--color-hair));
   border-style: solid;
   color: var(--color-snow);
   box-shadow: var(--sc-edge);
   cursor: pointer;
+}
+
+.home-observer-card[data-state='self'] {
+  border-color: color-mix(in srgb, var(--color-jade) 55%, var(--color-hair));
+  border-style: solid;
+  color: var(--color-snow);
+  box-shadow: var(--sc-edge), var(--sc-glow-jade);
+  cursor: pointer;
+}
+
+.home-observer-card[data-state='full'] {
+  color: var(--color-mute);
 }
 
 .home-observer-card[data-state='pending'] {
@@ -403,7 +427,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .home-observer-card[data-state='available']:hover {
-    box-shadow: var(--sc-edge), var(--sc-glow-jade);
+    box-shadow: var(--sc-edge), var(--sc-glow-ember);
   }
 }
 
@@ -414,6 +438,10 @@
   height: 38px;
   border: 1px solid currentColor;
   border-radius: 999px;
+  color: var(--color-ember);
+}
+
+.home-observer-card[data-state='self'] .home-observer-icon {
   color: var(--color-jade);
 }
 

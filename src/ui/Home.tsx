@@ -306,13 +306,17 @@ export function Home({ onEnter, canSelect = true, error }: {
                 onClick={() => openStation('OBSERVER')}>
                 <span className="home-observer-icon" aria-hidden><EyeIcon className="h-5 w-5" /></span>
                 <span className="home-observer-id">
-                  <strong>XEM TRỰC TIẾP TOÀN BỘ DIỄN BIẾN</strong>
-                  <small>Chỉ đọc — không thao tác vào lượt chơi. Không cần mật khẩu.</small>
+                  <strong>XEM TRỰC TIẾP</strong>
+                  <small>Chỉ đọc — theo dõi toàn bộ diễn biến, không thao tác vào lượt chơi. Không cần mật khẩu.</small>
                 </span>
                 <span className="home-observer-state">
                   <span className="digital" data-testid="observer-seat-count">{known ? `${slot?.devices ?? 0}/${OBSERVER_CAPACITY}` : `—/${OBSERVER_CAPACITY}`}</span>
+                  {/* The same word has to look the same everywhere on this board:
+                      ember for a seat that is there to take, jade only for the seat
+                      this device already holds. The viewer card used to paint
+                      "CÒN TRỐNG" in the confirmed tone, which reads as done. */}
                   <span className="badge" data-tone={
-                    state === 'available' ? 'confirmed' : state === 'full' ? 'idle' : state === 'pending' ? 'live' : 'queued'
+                    state === 'available' ? 'live' : state === 'self' ? 'confirmed' : state === 'pending' ? 'live' : state === 'full' ? 'idle' : 'queued'
                   }>{state === 'full' ? `ĐÃ ĐỦ ${OBSERVER_CAPACITY} CHỖ` : SEAT_WORD[state]}</span>
                 </span>
               </button>

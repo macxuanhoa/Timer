@@ -86,6 +86,15 @@ const primary = (page: Page) => page.getByTestId('primary-action');
  * alert, hint, dialog or history row cannot pass unnoticed.
  */
 async function expectVietnamese(page: Page, phase: string): Promise<void> {
+  // V3.4 §9: the report tab folds each round card and its diagnostics, and the
+  // audit list opens shortened. `innerText` returns visible text only, so the
+  // sweep opens every disclosure first — the check therefore covers strictly
+  // MORE rendered text than it did before the folds existed, never less.
+  await page.evaluate(() => {
+    for (const d of Array.from(document.querySelectorAll('details'))) d.open = true;
+    const more = document.querySelector('[data-testid="audit-expand"]') as HTMLButtonElement | null;
+    more?.click();
+  });
   // `inner text` on the body picks up every visible element, and the aria-label
   // attributes carry the label layer too, so we also grab every aria-label / title
   // that a screen reader would speak.

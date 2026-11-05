@@ -1620,6 +1620,284 @@
   border-radius: 6px 6px 0 0;
 }
 
+/* --------------------------------------------------- admin tab hierarchy */
+
+/* V3.4 §9 (UI-07). QUẢN TRỊ and BÁO CÁO are read in an order, so the order is
+   part of the design: the highest-priority block is the loudest, the groups
+   below it share one rhythm, and the operations that can damage a night are
+   visually separated from routine work instead of mixed into it. Everything
+   here uses the existing scale — panel, hair, ember, blood, the eyebrow/label
+   type steps — with no new colour and no new radius. */
+
+.admin-group,
+.admin-risk-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-2);
+  border: 1px solid var(--color-hair);
+  border-radius: var(--sc-radius-card);
+  padding: var(--sc-space-3);
+  background: rgb(23 23 27 / 0.45);
+}
+
+.admin-group-title {
+  font-size: var(--sc-t-eyebrow);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+}
+
+/* High risk gets a different silhouette, not only a different colour: a blood
+   edge, a heavier title, and it sits last on the tab. */
+.admin-risk-group {
+  border-color: color-mix(in srgb, var(--color-blood) 45%, var(--color-hair));
+  background: color-mix(in srgb, var(--color-blood) 5%, transparent);
+}
+
+.admin-risk-title {
+  font-size: var(--sc-t-label);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-blood);
+}
+
+.admin-risk-note {
+  font-size: var(--sc-t-eyebrow);
+  line-height: 1.45;
+  color: var(--color-mute);
+}
+
+.admin-status,
+.admin-next {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--color-hair);
+  border-left: 3px solid var(--color-ember);
+  border-radius: var(--sc-radius-card);
+  padding: var(--sc-space-3);
+  background: linear-gradient(180deg, #202025 0%, #1b1b20 100%);
+}
+
+.admin-status-eyebrow {
+  font-size: var(--sc-t-eyebrow);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+}
+
+.admin-status-word {
+  font-size: var(--sc-t-title);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  color: var(--color-snow);
+}
+
+.admin-status-name {
+  font-size: var(--sc-t-label);
+  color: var(--color-mute);
+}
+
+.admin-status-rows {
+  margin-top: var(--sc-space-2);
+}
+
+/* Nothing to look at until there is something wrong. */
+.admin-next {
+  border-left-color: var(--color-hair);
+}
+
+.admin-next[data-attention='1'] {
+  border-left-color: var(--color-ember);
+}
+
+.admin-next-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: var(--sc-t-label);
+  line-height: 1.4;
+  color: var(--color-ember);
+  list-style: none;
+}
+
+.admin-next-clear {
+  font-size: var(--sc-t-label);
+  color: var(--color-mute);
+}
+
+.admin-next-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: var(--sc-space-1);
+  font-size: var(--sc-t-label);
+  line-height: 1.45;
+  color: var(--color-snow);
+}
+
+.admin-next-label {
+  font-size: var(--sc-t-eyebrow);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--color-mute);
+}
+
+/* ----------------------------------------------------- report tab blocks */
+
+.report-best {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.report-best-time {
+  font-size: clamp(1.9rem, 11vw, 2.6rem);
+  font-weight: 800;
+  line-height: 1.05;
+  color: var(--color-snow);
+  text-shadow: 0 0 26px rgb(244 137 58 / 0.22);
+}
+
+.report-best-team {
+  font-size: var(--sc-t-strong);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--color-ember);
+}
+
+.report-best-rule {
+  margin-top: var(--sc-space-1);
+  font-size: var(--sc-t-eyebrow);
+  line-height: 1.45;
+  color: var(--color-mute);
+}
+
+/* A round reads as one line until it is opened: the summary carries the whole
+   fact set an operator scans for, the eleven timestamp rows are the detail. */
+.round-card {
+  border-bottom: 1px solid var(--color-hair);
+  padding-bottom: var(--sc-space-2);
+}
+
+.round-card:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.round-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px var(--sc-space-2);
+  cursor: pointer;
+  list-style: none;
+  padding: var(--sc-space-1) 0;
+}
+
+.round-card-head::-webkit-details-marker {
+  display: none;
+}
+
+.round-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--sc-t-body);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: var(--color-snow);
+}
+
+.round-card-score {
+  font-size: var(--sc-t-strong);
+  color: var(--color-snow);
+}
+
+.round-card-result {
+  margin-left: 6px;
+  font-size: var(--sc-t-eyebrow);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--color-mute);
+}
+
+.round-card-result.is-won {
+  color: var(--color-jade);
+}
+
+.round-card-result.is-bad {
+  color: var(--color-blood);
+}
+
+.round-card-flag {
+  font-size: var(--sc-t-eyebrow);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--color-ember);
+  border: 1px dashed color-mix(in srgb, var(--color-ember) 55%, var(--color-hair));
+  border-radius: var(--sc-radius-chip);
+  padding: 1px 6px;
+}
+
+.round-card-flag.is-out {
+  color: var(--color-blood);
+  border-color: color-mix(in srgb, var(--color-blood) 55%, var(--color-hair));
+}
+
+.round-card-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--color-mute);
+  transition: transform 160ms ease;
+}
+
+.round-card[open] .round-card-chevron {
+  transform: rotate(180deg);
+}
+
+.round-card-body {
+  padding-top: var(--sc-space-1);
+}
+
+.audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sc-space-2);
+}
+
+.report-diagnostics {
+  border: 1px solid var(--color-hair);
+  border-radius: var(--sc-radius-card);
+  background: rgb(23 23 27 / 0.45);
+}
+
+.report-diagnostics-head {
+  cursor: pointer;
+  list-style: none;
+  padding: var(--sc-space-3);
+  font-size: var(--sc-t-eyebrow);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+}
+
+.report-diagnostics-head::-webkit-details-marker {
+  display: none;
+}
+
+.report-diagnostics[open] .report-diagnostics-head {
+  color: var(--color-snow);
+  border-bottom: 1px solid var(--color-hair);
+}
+
 /* The finished-event state replaces the idle clock on the dashboard. */
 .ended-card {
   border: 1px solid color-mix(in srgb, var(--color-jade) 40%, var(--color-hair));

@@ -120,6 +120,33 @@ test.describe.serial('V3.4 §11 — every redesigned screen at the 320px floor',
     await assertFits(sup, 'supervisor flow', width);
     await shot(sup, '320-supervisor');
 
+    // UI-07: the restructured sheet at the narrowest floor. The report tab is
+    // the longest surface in the app (summary, best result, ranking, folded
+    // round cards, KPIs, filters), and the admin tab carries the six-level
+    // hierarchy — both are measured with the round cards OPEN, because a folded
+    // card hides exactly the lines that would overflow at 320px.
+    //
+    // The round is RUNNING here, and a locked countdown hides the station gear
+    // and the footer. The organiser's own entry, VỊ TRÍ, deliberately stays
+    // available — a live round is exactly when QUẢN TRỊ is needed — so that is
+    // the affordance under test, and the tab bar reaches BÁO CÁO from there.
+    await expect(sup.getByTestId('open-settings')).toHaveCount(0);
+    await sup.getByTestId('open-seat-management').click();
+    await expect(sup.getByTestId('management')).toBeVisible();
+    await sup.getByTestId('sheet-tab-report').click();
+    // Open every disclosure in place: clicking each toggle re-renders the sheet
+    // and detaches the next locator, while the folds are pure display state.
+    await sup.evaluate(() => { for (const d of Array.from(document.querySelectorAll('details'))) d.open = true; });
+    await assertFits(sup, 'report tab at 320px', width);
+    await shot(sup, '320-report');
+    await sup.getByTestId('sheet-tab-admin').click();
+    await assertFits(sup, 'admin tab at 320px', width);
+    await shot(sup, '320-admin');
+    // The priority blocks are present in order, not merely rendered.
+    await expect(sup.getByTestId('admin-event-status')).toBeVisible();
+    await expect(sup.getByTestId('admin-next-action')).toBeVisible();
+    await expect(sup.getByTestId('admin-group-risk')).toBeVisible();
+
     await context.close();
   });
 });

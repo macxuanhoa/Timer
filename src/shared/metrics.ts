@@ -201,6 +201,21 @@ export function disputedRounds(rounds: Round[]): Round[] {
   return rounds.filter((r) => r.needs_review && r.official_duration_ms !== null);
 }
 
+/**
+ * Rounds a supervisor still has to decide, whether or not they carry a score.
+ *
+ * V3.4 §9 (UI-07) — this exists because one phrase covered two different
+ * populations. A cancellation flags its round for review and the round card
+ * prints `CHỜ XÉT`, but a cancelled round with no validated claim has no
+ * official time, so it never entered `disputedRounds` — and the report's KPI
+ * labelled "Kết quả chờ xét" read zero next to a card reading CHỜ XÉT. Both
+ * numbers were correct; only the shared label was wrong. Each population now
+ * has its own name and its own count.
+ */
+export function reviewPendingRounds(rounds: Round[]): Round[] {
+  return rounds.filter((r) => r.needs_review);
+}
+
 /* --------------------------------------------------------------- analytics */
 
 export interface Analytics {
@@ -209,6 +224,8 @@ export interface Analytics {
   timeouts: number;
   aborted: number;
   disputed: number;
+  /** Rounds awaiting a supervisor decision (`needs_review`), score or no score. */
+  reviewPending: number;
   avg_game_ms: number | null;
   avg_prep_ms: number | null;
   avg_reset_ms: number | null;
@@ -265,6 +282,7 @@ export function analytics(
     teams_completed: completed.length,
     teams_successful: rows.length,
     disputed: disputedRounds(snapshot.rounds).length,
+    reviewPending: reviewPendingRounds(snapshot.rounds).length,
     timeouts: rounds.filter((r) => r.result === 'TIME_UP' || r.outcome === 'TIMEOUT' || r.outcome === 'NO_PUZZLE').length,
     aborted: rounds.filter((r) => r.result === 'ABORTED' || r.aborted_at !== null).length,
     avg_game_ms: mean(qualifying.map((r) => r.official_duration_ms as number)),

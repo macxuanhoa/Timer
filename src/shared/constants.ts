@@ -89,6 +89,32 @@ export const ABORT_KIND_LABEL: Record<AbortKind, string> = {
 };
 
 /**
+ * The word for a recorded cancellation kind.
+ *
+ * V3.4 §9 (UI-07). The reported symptom was a round cancelled for
+ * "An toàn · y tế" while a transition described "vi phạm". Traced to source,
+ * the two authorities both refuse an unrecognised kind before anything is
+ * written — `onAbortRound` checks `ABORT_KINDS.includes(kind)` and
+ * `sc.handle_command` checks it at 0017 lines 1101-1104 — so the
+ * `case … else 'Kỷ luật · vi phạm luật chơi'` in the hosted sentence builder
+ * (line 1143) is only reached for a command that really said `misconduct`.
+ * The contradiction comes from a different place: the gate's early-exit path
+ * classifies the round as `safety` whatever the operator wrote in the reason
+ * box (engine.ts line 965, hosted 0017 line 908), and that is a business rule
+ * about decertification, not a label.
+ *
+ * This function still matters for what it refuses to do: a `null` or unknown
+ * kind — which history can hold from before the column existed — is named as
+ * unrecorded instead of defaulting to a violation, and the report no longer
+ * prints `undefined` for such a row.
+ */
+export function abortKindWord(kind: string | null | undefined): string {
+  return kind !== null && kind !== undefined && kind in ABORT_KIND_LABEL
+    ? ABORT_KIND_LABEL[kind as AbortKind]
+    : 'loại hủy không được ghi nhận';
+}
+
+/**
  * V3.2: the four operating positions are password-free by design. Opening the
  * link and tapping a free seat is the whole joining ritual; the only server-side
  * gate left is the supervisor allow-list, which lives in PostgreSQL and never in

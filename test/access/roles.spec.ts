@@ -636,3 +636,63 @@ test('post-migration workflow: one flow, one claim-based score, guarded exceptio
   expect(snap.operators.map((o:{role:string})=>o.role).sort()).toEqual(
     ['CORRIDOR','GATE','LOBBY','ROOM305','SUPERVISOR']);
 });
+
+test('UI-07 §9 — the cancellation kind is validated by the authority, never defaulted', async () => {
+  // What this case establishes, after the reported "cancelled for An toàn · y tế
+  // while a transition describes vi phạm" was traced to its source:
+  //
+  //   1. `sc.handle_command` REFUSES an ABORT_ROUND whose kind is missing or
+  //      unrecognised (0017 lines 1101-1104, INVALID_STATE). The
+  //      `case … else 'Kỷ luật · vi phạm luật chơi'` in the sentence builder
+  //      (line 1143) is therefore unreachable for an absent kind: the only way
+  //      that wording appears in the audit is a command that actually said
+  //      `misconduct`. The field and the sentence cannot diverge this way.
+  //   2. A cancellation that does arrive with a kind is written with that kind
+  //      in both places, so a safety cancellation is never called a violation.
+  //
+  // The remaining way to the reported contradiction is the OTHER path — a
+  // gate-side early departure, which the authority classifies as `safety`
+  // whatever the operator typed in the reason (0017 line 908; engine line 965).
+  // That is a business rule and it decides decertification, so it is reported
+  // for a decision rather than changed under a UI workstream.
+  const ids:Record<string,string>={};
+  for (const role of STATIONS) {
+    ids[role]=await identity();
+    expect((await rpc(ids[role],'claim_station',{p_role:role})).ok).toBe(true);
+  }
+  ids.SUPERVISOR=await identity(); await allowAdmin(ids.SUPERVISOR);
+  expect((await rpc(ids.SUPERVISOR,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+
+  expect((await act(ids.LOBBY,'CALL_TEAM')).ok).toBe(true);
+  expect((await act(ids.CORRIDOR,'CONFIRM_FLOOR2')).ok).toBe(true);
+  expect((await act(ids.GATE,'START_GAME')).ok).toBe(true);
+
+  // 1. no kind, and a wrong kind, are both refused before anything is written.
+  // The count is measured around the two commands rather than against zero,
+  // because the case shares the audit table with the rest of the suite: what
+  // matters is that a refusal leaves it exactly as it found it.
+  const abortCount = () => pool.query(
+    "select count(*)::int n from sc.action_log where action='ABORT_ROUND'");
+  const before = (await abortCount()).rows[0].n;
+  const noKind = await act(ids.SUPERVISOR,'ABORT_ROUND',{reason:'Can thiệp khẩn cấp'});
+  expect(noKind.ok).toBe(false);
+  expect(noKind.code).toBe('INVALID_STATE');
+  expect((await act(ids.SUPERVISOR,'ABORT_ROUND',{reason:'x',kind:'an toàn'})).code).toBe('INVALID_STATE');
+  expect((await abortCount()).rows[0].n, 'a refused cancellation writes nothing into the audit').toBe(before);
+  expect((await pool.query('select aborted_at from sc.rounds order by id desc limit 1')).rows[0].aborted_at).toBeNull();
+
+  // 2. a recognised safety cancellation names itself, in the field and in the
+  // audit sentence, and nowhere calls the team a violator.
+  expect((await act(ids.SUPERVISOR,'ABORT_ROUND',{reason:'Đội cần ra ngoài vì sức khỏe',kind:'safety'})).ok).toBe(true);
+  const roundRow = (await pool.query(
+    'select abort_kind, decertified from sc.rounds order by id desc limit 1')).rows[0];
+  expect(roundRow.abort_kind).toBe('safety');
+  // The rule that follows from the kind holds: not disqualified, so an in-time
+  // claim could still be judged.
+  expect(roundRow.decertified).toBe(false);
+  const sentence = String((await pool.query(
+    "select metadata->>'detail_text' as s from sc.action_log where action='ABORT_ROUND' order by seq desc limit 1"
+  )).rows[0].s);
+  expect(sentence).toContain('An toàn · y tế');
+  expect(sentence).not.toContain('vi phạm');
+});

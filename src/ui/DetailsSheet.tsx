@@ -22,13 +22,14 @@ import {
   STATUS_LABEL,
   TRANSPORT_LABEL,
   LAYOUTS,
+  abortKindWord,
   type AbortKind,
   type Role,
 } from '../shared/constants';
 import { flowStatus, liveStatus, roundLimitMs } from '../shared/machine';
 import { USING_SUPABASE } from '../client/gateway';
-import { disputedRounds } from '../shared/metrics';
-import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD, type OpsCommand, type OpsRoleStatus } from '../client/selectors';
+import { disputedRounds, reviewPendingRounds } from '../shared/metrics';
+import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, roundCounts, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD, type OpsCommand, type OpsRoleStatus } from '../client/selectors';
 import { alarms } from './sound';
 import { StationStrip } from './StationStrip';
 import { SeatManagement } from './SeatManagement';
@@ -143,45 +144,10 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
                   <Management store={store} snap={snap} />
                 </Section>
               </div>
+            ) : stats === null ? (
+              <p className="py-10 text-center text-[0.8rem] text-mute">Đang đọc số liệu…</p>
             ) : (
-              <div className="flex flex-col gap-2">
-                <Section title="Chi tiết lượt chơi" testid="section-rounds">
-                  <RoundDetails snap={snap} now={now} />
-                </Section>
-                <Section title="Bảng xếp hạng" testid="section-leaderboard">
-                  {rows.length === 0 ? (
-                    <p className="py-3 text-[0.75rem] text-mute">Chưa có đội hoàn thành trận đồ trong thời lượng lượt chơi.</p>
-                  ) : (
-                    <table className="w-full text-[0.75rem]" data-testid="leaderboard-table">
-                      <thead className="text-mute">
-                        <tr className="text-left">
-                          <th className="py-1 font-normal">#</th>
-                          <th className="py-1 font-normal">Đội</th>
-                          <th className="py-1 text-right font-normal">Thời gian</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((r) => (
-                          <tr key={r.round_id} className="border-t border-hair/60">
-                            <td className="py-1.5 text-ember">{r.rank}</td>
-                            <td className="py-1.5">#{pad(r.team_number)}{r.team_name ? ` · ${r.team_name}` : ''}</td>
-                            <td className="digital py-1.5 text-right text-snow">{formatClockMs(r.duration_ms)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </Section>
-                <Section title="Hiệu suất vận hành" testid="section-performance">
-                  {stats && <Performance stats={stats} store={store} now={now} />}
-                </Section>
-                <Section title="Lịch sử thao tác" testid="section-history">
-                  <History snap={snap} />
-                </Section>
-                <button type="button" onClick={() => exportCsv(snap)} className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow" data-testid="export-csv">
-                  XUẤT CSV
-                </button>
-              </div>
+              <ReportTab store={store} snap={snap} now={now} rows={rows} stats={stats} />
             )}
           </div>
         </Dialog.Content>
@@ -475,6 +441,71 @@ function OpsTab({
   );
 }
 
+/* ------------------------------------------------------- admin priority 1-2 */
+
+/**
+ * QUẢN TRỊ §1 — the event's real state, before anything else on the tab.
+ *
+ * Every word here comes from the same selectors the crew's operations tab uses,
+ * so an organiser and a station can never read two different versions of the
+ * night. `reset_block_reason` is printed because it is the server's own answer
+ * about the floor, and the seat-release controls downstream obey exactly that
+ * answer — the operator sees the reason the buttons are grey before trying to
+ * press one.
+ */
+function AdminEventStatus({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>; now: number }) {
+  const cmd = resolveOpsCommand(snap, now, { isSupervisor: true });
+  const ended = snap.event.event_ended_at !== null;
+  const round = snap.active_round;
+  return (
+    <section className="admin-status" data-testid="admin-event-status" data-state={cmd.state}>
+      <p className="admin-status-eyebrow">TRẠNG THÁI SỰ KIỆN HIỆN TẠI</p>
+      <p className="admin-status-word" data-testid="admin-event-state-word">{cmd.stateWord}</p>
+      <p className="admin-status-name" data-testid="admin-event-name">{cmd.eventName}</p>
+      <div className="admin-status-rows">
+        <Row k="Bắt đầu sự kiện" v={snap.event.event_started_at !== null ? formatWallTime(snap.event.event_started_at) : 'chưa mở'} />
+        <Row k="Kết thúc sự kiện" v={ended ? formatWallTime(snap.event.event_ended_at ?? now) : 'đang mở'} tone={ended ? 'text-mute' : 'text-jade'} />
+        <Row
+          k="Đang mở"
+          v={round ? `#${pad(round.team_number)} · ${cmd.stageWord}` : 'không có'}
+          tone={round !== null ? 'text-ember' : 'text-mute'}
+        />
+        <Row k="Lượt" v={cmd.counts.sentence} />
+        {cmd.whereText !== null ? <Row k="Đội đang ở" v={`${cmd.teamText} · ${cmd.whereText}`} tone="text-ember" /> : null}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * QUẢN TRỊ §2 — the issue that needs an organiser right now, and what happens
+ * next. `attention` is the same list the station phones see, built from
+ * server-stalled rounds, unheld seats and unresolved reviews; an empty list is
+ * reported as such rather than left blank, because silence and "nothing wrong"
+ * are different statements.
+ */
+function AdminNextAction({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>; now: number }) {
+  const cmd = resolveOpsCommand(snap, now, { isSupervisor: true });
+  return (
+    <section className="admin-next" data-testid="admin-next-action" data-attention={cmd.attention.length > 0 ? '1' : '0'}>
+      <p className="admin-status-eyebrow">VIỆC CẦN QUAN TÂM</p>
+      {cmd.attention.length === 0 ? (
+        <p className="admin-next-clear" data-testid="admin-attention-clear">
+          Không có vấn đề vận hành nào đang chờ Quản trị viên.
+        </p>
+      ) : (
+        <ul className="admin-next-issues" data-testid="admin-attention">
+          {cmd.attention.map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      )}
+      <p className="admin-next-next" data-testid="admin-next-next">
+        <span className="admin-next-label">TIẾP THEO</span>
+        {cmd.next ? `${cmd.next.who} · ${cmd.next.what}` : 'Không có bước tiếp theo cho tới khi sự kiện mở lại.'}
+      </p>
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ sections */
 
 function Section({ title, testid, children }: { title: string; testid: string; children: React.ReactNode }) {
@@ -495,6 +526,15 @@ function Row({ k, v, tone = 'text-snow' }: { k: string; v: string; tone?: string
   );
 }
 
+/**
+ * BÁO CÁO §4 — one card per team, folded by default.
+ *
+ * V3.4 §9: the full row list is eleven lines per round, and a night with a
+ * dozen teams turned the report into a wall of timestamps. Each round now opens
+ * as a single scannable line — who, how it ended, the official instant, and any
+ * flag that changes how the number should be read — with the detail behind one
+ * deliberate tap. Nothing is dropped: every row that was here is still here.
+ */
 function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>; now: number }) {
   const rounds = [...snap.rounds].reverse().slice(0, 6);
   const configLimit = snap.event.config.game_limit_ms;
@@ -506,60 +546,107 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
         const limit = roundLimitMs(r, configLimit);
         const m = roundMetrics(r, snap.reset_tasks, now, snap.attempts ?? [], configLimit);
         const claims = (snap.attempts ?? []).filter((a) => a.round_id === r.id);
+        // V3.4 §9 — this row is the round's SCHEDULED expiry instant, not its
+        // outcome. Labelling it `Hết giờ` put the outcome word next to a
+        // timestamp on a round that finished successfully minutes earlier, which
+        // read as "this team ran out of time". The word now says what the field
+        // is, and the relation to the finished round is stated explicitly.
+        //
+        // The completion instant is derived from the two stored fields the score
+        // itself is made of (`game_started_at` + the official duration), because
+        // `game_stopped_at` is only written when a clock is stopped by expiry or
+        // cancellation and stays null on a winning round.
+        const finishedAt = m.result === 'WON' && r.game_started_at !== null && m.game_ms !== null
+          ? r.game_started_at + m.game_ms
+          : r.game_stopped_at;
+        const deadlineText = r.deadline_at === null || finishedAt === null
+          ? (r.deadline_at === null ? '—' : formatWallTime(r.deadline_at))
+          : `${formatWallTime(r.deadline_at)} · ${m.result === 'WON'
+            ? (finishedAt < r.deadline_at ? 'đội hoàn thành trước mốc' : 'đội hoàn thành sau mốc')
+            : (finishedAt <= r.deadline_at ? 'đồng hồ dừng trước mốc' : 'đồng hồ dừng sau mốc')}`;
         return (
-          <div key={r.id} data-testid={`round-detail-${r.team_number}`}>
-            <p className="mb-1 text-[0.75rem] font-semibold text-snow">
-              ĐỘI #{pad(r.team_number)}{' '}
-              <span className="text-mute">· {STATUS_LABEL[r.status] ?? PHASE_LABEL[flowStatus(r) ?? ''] ?? 'Không rõ'}</span>
-            </p>
-            <Row k="Nhận đội" v={r.called_at ? formatWallTime(r.called_at) : '—'} />
-            <Row
-              k="Tầng 2"
-              v={r.floor2_confirmed_at ? formatWallTime(r.floor2_confirmed_at) : r.floor2_bypassed_at ? 'BỎ QUA (NPC 1)' : '—'}
-              tone={r.floor2_bypassed_at !== null ? 'text-ember' : 'text-snow'}
-            />
-            <Row k="Bắt đầu lượt chơi" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
-            <Row k="Thời lượng lượt" v={r.game_started_at !== null ? formatClockSec(limit) : '—'} />
-            <Row k="Hết giờ" v={r.deadline_at ? formatWallTime(r.deadline_at) : '—'} />
-            <Row
-              k="Điểm chính thức"
-              v={m.game_ms === null ? '—' : formatClockMs(m.game_ms)}
-              tone={m.game_ms !== null && m.game_ms > limit ? 'text-blood' : 'text-snow'}
-            />
-            <Row k="Chuẩn bị" v={formatSeconds(m.prep_ms)} />
-            <Row k="Rời tầng 3" v={r.exit_confirmed_at ? formatWallTime(r.exit_confirmed_at) : '—'} />
-            <Row k="Hủy lượt" v={r.aborted_at ? `${formatWallTime(r.aborted_at)}${r.abort_kind ? ` · ${ABORT_KIND_LABEL[r.abort_kind]}` : ''}` : '—'} tone={r.aborted_at !== null ? 'text-blood' : 'text-snow'} />
-            <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
-            <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
-            <Row k="Kết quả" v={OUTCOME_LABEL[m.result] ?? 'Không rõ'} tone={m.result === 'WON' ? 'text-jade' : m.result === 'TIME_UP' || m.result === 'ABORTED' ? 'text-blood' : 'text-mute'} />
-            {claims.length > 0 && (
-              <ul className="mt-1 flex flex-col gap-0.5" data-testid={`claims-${r.team_number}`}>
-                {claims.map((a) => (
-                  <li key={a.id} className="flex items-baseline justify-between gap-2 text-[0.66rem]">
-                    <span className="text-mute">Lần {a.seq} · {formatClockMs(a.elapsed_ms)}</span>
-                    <span className={a.status === 'VALID' ? 'text-jade' : a.status === 'INVALID' ? 'text-mute' : 'text-ember'}>
-                      {ATTEMPT_LABEL[a.status as keyof typeof ATTEMPT_LABEL] ?? 'Không rõ'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {r.game_reset_count > 0 && (
-              <Row k="Reset đồng hồ (lịch sử)" v={`${r.game_reset_count} lần`} tone="text-ember" />
-            )}
-            {r.needs_review && (
-              <p className="mt-1 text-[0.68rem] text-ember" data-testid={`review-${r.team_number}`}>
-                CHỜ XÉT: {r.review_reasons.map((x) => REVIEW_REASON_LABEL[x] ?? x).join(' · ')}
-              </p>
-            )}
-            {r.decertified && <p className="mt-1 text-[0.68rem] text-blood">Đã bị loại khỏi bảng xếp hạng (có nhật ký).</p>}
-            {r.start_transport_ms !== null && (
-              <p className="mt-1 text-[0.66rem] text-mute">
-                Network của nhịp BẮT ĐẦU: {r.start_transport_ms} ms (không trừ vào điểm)
-              </p>
-            )}
-            {m.admitted_by_override && <p className="mt-1 text-[0.68rem] text-ember">Vào trận bằng ngoại lệ có nhật ký kiểm toán.</p>}
-          </div>
+          <details key={r.id} className="round-card" data-testid={`round-detail-${r.team_number}`}>
+            <summary className="round-card-head" data-testid={`round-detail-toggle-${r.team_number}`}>
+              <span className="round-card-title">
+                ĐỘI #{pad(r.team_number)}{' '}
+                <span className="text-mute">· {STATUS_LABEL[r.status] ?? PHASE_LABEL[flowStatus(r) ?? ''] ?? 'Không rõ'}</span>
+              </span>
+              <span className="round-card-score digital" data-testid={`round-score-${r.team_number}`}>
+                {m.game_ms === null ? '—' : formatClockMs(m.game_ms)}
+                <span className={`round-card-result${m.result === 'WON' ? ' is-won' : m.result === 'TIME_UP' || m.result === 'ABORTED' ? ' is-bad' : ''}`}>
+                  {OUTCOME_LABEL[m.result] ?? 'Không rõ'}
+                </span>
+              </span>
+              {r.needs_review ? (
+                <span className="round-card-flag" data-testid={`round-flag-${r.team_number}`}>CHỜ XÉT</span>
+              ) : r.decertified ? (
+                <span className="round-card-flag is-out" data-testid={`round-flag-${r.team_number}`}>ĐÃ LOẠI KHỎI BẢNG</span>
+              ) : null}
+              <ChevronDownIcon className="round-card-chevron" />
+            </summary>
+            <div className="round-card-body" data-testid={`round-detail-rows-${r.team_number}`}>
+              <Row k="Nhận đội" v={r.called_at ? formatWallTime(r.called_at) : '—'} />
+              <Row
+                k="Tầng 2"
+                v={r.floor2_confirmed_at ? formatWallTime(r.floor2_confirmed_at) : r.floor2_bypassed_at ? 'BỎ QUA (NPC 1)' : '—'}
+                tone={r.floor2_bypassed_at !== null ? 'text-ember' : 'text-snow'}
+              />
+              <Row k="Bắt đầu lượt chơi" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
+              <Row k="Thời lượng lượt" v={r.game_started_at !== null ? formatClockSec(limit) : '—'} />
+              <Row k="Mốc hết giờ theo lịch" v={deadlineText} />
+              <Row
+                k="Điểm chính thức"
+                v={m.game_ms === null ? '—' : formatClockMs(m.game_ms)}
+                tone={m.game_ms !== null && m.game_ms > limit ? 'text-blood' : 'text-snow'}
+              />
+              <Row k="Chuẩn bị" v={formatSeconds(m.prep_ms)} />
+              <Row k="Rời tầng 3" v={r.exit_confirmed_at ? formatWallTime(r.exit_confirmed_at) : '—'} />
+              <Row k="Hủy lượt" v={r.aborted_at ? `${formatWallTime(r.aborted_at)} · ${abortKindWord(r.abort_kind)}` : '—'} tone={r.aborted_at !== null ? 'text-blood' : 'text-snow'} />
+              {/* V3.4 §9 — the reason the operator typed is a stored field, and it
+                  belongs next to the classification rather than only in the audit
+                  line. The authority assigns the kind from the PATH that stopped
+                  the round (a gate-side early exit is classified `safety`
+                  whatever was written in the reason box — engine.ts line 965), and
+                  the two paths keep their words in different columns:
+                  `abort_reason` for ABORT_ROUND, `exit_reason` for EARLY_EXIT.
+                  Showing whichever one is set makes the pair visible as two facts
+                  in one place instead of a contradiction spread across two tabs.
+                  Neither word is rewritten and no rule is changed. */}
+              {r.aborted_at !== null && (r.abort_reason ?? r.exit_reason) ? (
+                <Row k="Lý do ghi nhận" v={String(r.abort_reason ?? r.exit_reason)} tone="text-blood" />
+              ) : null}
+              <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
+              <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
+              <Row k="Kết quả" v={OUTCOME_LABEL[m.result] ?? 'Không rõ'} tone={m.result === 'WON' ? 'text-jade' : m.result === 'TIME_UP' || m.result === 'ABORTED' ? 'text-blood' : 'text-mute'} />
+              {claims.length > 0 && (
+                <ul className="mt-1 flex flex-col gap-0.5" data-testid={`claims-${r.team_number}`}>
+                  {claims.map((a) => (
+                    <li key={a.id} className="flex items-baseline justify-between gap-2 text-[0.66rem]">
+                      <span className="text-mute">Lần {a.seq} · {formatClockMs(a.elapsed_ms)}</span>
+                      <span className={a.status === 'VALID' ? 'text-jade' : a.status === 'INVALID' ? 'text-mute' : 'text-ember'}>
+                        {ATTEMPT_LABEL[a.status as keyof typeof ATTEMPT_LABEL] ?? 'Không rõ'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {r.game_reset_count > 0 && (
+                <Row k="Reset đồng hồ (lịch sử)" v={`${r.game_reset_count} lần`} tone="text-ember" />
+              )}
+              {r.needs_review && (
+                <p className="mt-1 text-[0.68rem] text-ember" data-testid={`review-${r.team_number}`}>
+                  CHỜ XÉT: {r.review_reasons.map((x) => REVIEW_REASON_LABEL[x] ?? x).join(' · ')}
+                </p>
+              )}
+              {r.decertified && <p className="mt-1 text-[0.68rem] text-blood">Đã bị loại khỏi bảng xếp hạng (có nhật ký).</p>}
+              {r.start_transport_ms !== null && (
+                <p className="mt-1 text-[0.66rem] text-mute">
+                  Network của nhịp BẮT ĐẦU: {r.start_transport_ms} ms (không trừ vào điểm)
+                </p>
+              )}
+              {m.admitted_by_override && <p className="mt-1 text-[0.68rem] text-ember">Vào trận bằng ngoại lệ có nhật ký kiểm toán.</p>}
+            </div>
+          </details>
         );
       })}
     </div>
@@ -654,12 +741,27 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
     <div data-testid="performance">
       <Row k="Đội đã xử lý" v={String(stats.teams_completed)} />
       <Row k="Đội thành công" v={String(stats.teams_successful)} tone="text-jade" />
+      {/* V3.4 §9 — two populations, two rows. One row called "Kết quả chờ xét"
+          counted only the withheld SCORES (a round with an official time), while
+          every round card printed `CHỜ XÉT` from `needs_review`, which a
+          cancellation also sets. A night with one cancelled round therefore read
+          "0" beside a card that said "awaiting review". Each count now names the
+          set it measures, and both come straight from the stored flags. */}
       <Row
-        k="Kết quả chờ xét"
+        k="Vòng đang chờ Quản trị viên quyết"
+        v={String(stats.reviewPending)}
+        tone={stats.reviewPending > 0 ? 'text-ember' : 'text-snow'}
+      />
+      <Row
+        k="Kết quả chờ xét (có điểm chính thức)"
         v={String(stats.disputed)}
         tone={stats.disputed > 0 ? 'text-ember' : 'text-snow'}
       />
       <Row k="Quá giờ" v={String(stats.timeouts)} tone={stats.timeouts > 0 ? 'text-blood' : 'text-snow'} />
+      {/* `aborted` was already computed and never printed, so a night with
+          cancellations reported them nowhere in the summary — the one number
+          that tells an organiser a round was stopped rather than run out. */}
+      <Row k="Lượt bị hủy" v={String(stats.aborted)} tone={stats.aborted > 0 ? 'text-blood' : 'text-snow'} />
       <Row k="TB thời gian chơi (thành công)" v={formatSeconds(stats.avg_game_ms, 2)} />
       <Row k="TB chuẩn bị" v={formatSeconds(stats.avg_prep_ms)} />
       <Row k="TB reset" v={formatSeconds(stats.avg_reset_ms)} />
@@ -680,33 +782,232 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
   );
 }
 
+/**
+ * BÁO CÁO §6 — the audit trail, searchable and folded by default.
+ *
+ * V3.4 §9: the log is the longest thing on the tab and the least often read
+ * end to end, so it now opens as its last eight entries with the count in the
+ * heading, and the three filters do the scrolling. Filtering is pure
+ * presentation over `snap.log`: the rows themselves are the server's, and no
+ * filter, search or fold can hide one from the export or change one.
+ */
 function History({ snap }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']> }) {
-  const entries = [...snap.log].reverse().slice(0, 80);
+  const [query, setQuery] = useState('');
+  const [role, setRole] = useState('');
+  const [action, setAction] = useState('');
+  const [open, setOpen] = useState(false);
+  const entries = [...snap.log].reverse();
+  const lineText = (l: Snapshot['log'][number]) => [
+    l.metadata?.detail_text ? String(l.metadata.detail_text) : ACTION_LABEL[l.action] ?? '',
+    l.action,
+    ROLE_SHORT[l.actor_role as Role] ?? l.actor_role ?? '',
+    l.actor_role ?? '',
+    l.team_number !== null ? `#${pad(l.team_number)}` : '',
+    l.metadata?.reason ? String(l.metadata.reason) : '',
+  ].join(' ').toLowerCase();
+  const needle = query.trim().toLowerCase();
+  const filtered = entries.filter((l) => {
+    if (role !== '' && l.actor_role !== role) return false;
+    if (action !== '' && l.action !== action) return false;
+    return needle === '' || lineText(l).includes(needle);
+  });
+  const filtering = needle !== '' || role !== '' || action !== '';
+  const shown = filtering || open ? filtered : filtered.slice(0, 8);
+  const roles = Array.from(new Set(entries.map((l) => l.actor_role))).sort();
+  const actions = Array.from(new Set(entries.map((l) => l.action))).sort();
   return (
-    <ul className="flex flex-col gap-1.5" data-testid="history">
-      {entries.map((l) => (
-        <li key={l.seq} className="border-b border-hair/40 pb-1.5 text-[0.7rem] last:border-0">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="digital text-mute">{formatWallTime(l.at_ms)}</span>
-            <span className="text-[0.62rem] tracking-[0.08em] text-mute">bản {l.revision}</span>
+    <div className="flex flex-col gap-2">
+      <div className="audit-filters" data-testid="audit-filters">
+        <input
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          placeholder="Tìm trong nhật ký…"
+          aria-label="Tìm trong nhật ký"
+          className="min-w-0 flex-1 rounded border border-hair bg-ink px-2 py-2 text-[0.72rem] text-snow"
+          data-testid="audit-search"
+        />
+        <select
+          value={role}
+          onChange={(e) => { setRole(e.target.value); setOpen(true); }}
+          aria-label="Lọc theo vị trí"
+          className="rounded border border-hair bg-ink px-2 py-2 text-[0.7rem] text-snow"
+          data-testid="audit-filter-role"
+        >
+          <option value="">Mọi vị trí</option>
+          {roles.map((r) => <option key={r} value={r}>{ROLE_SHORT[r as Role] ?? r}</option>)}
+        </select>
+        <select
+          value={action}
+          onChange={(e) => { setAction(e.target.value); setOpen(true); }}
+          aria-label="Lọc theo thao tác"
+          className="min-w-0 flex-1 rounded border border-hair bg-ink px-2 py-2 text-[0.7rem] text-snow"
+          data-testid="audit-filter-action"
+        >
+          <option value="">Mọi thao tác</option>
+          {actions.map((a) => <option key={a} value={a}>{ACTION_LABEL[a] ?? a}</option>)}
+        </select>
+      </div>
+      <p className="text-[0.66rem] text-mute" data-testid="audit-count">
+        {filtered.length === entries.length
+          ? `${entries.length} mục nhật ký`
+          : `${filtered.length}/${entries.length} mục khớp bộ lọc`}
+        {filtering ? ' · bỏ lọc để xem toàn bộ' : ''}
+      </p>
+      {filtered.length === 0 ? (
+        <p className="text-[0.7rem] text-mute" data-testid="audit-empty">Không có mục nào khớp bộ lọc.</p>
+      ) : (
+        <ul className="flex flex-col gap-1.5" data-testid="history">
+          {shown.map((l) => (
+            <li key={l.seq} className="border-b border-hair/40 pb-1.5 text-[0.7rem] last:border-0" data-testid={`audit-${l.seq}`}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="digital text-mute">{formatWallTime(l.at_ms)}</span>
+                <span className="text-[0.62rem] tracking-[0.08em] text-mute">bản {l.revision}</span>
+              </div>
+              <p className="text-snow">
+                {/* The engine already writes a Vietnamese sentence for every press; the
+                    action type is only a fallback for rows older than that habit. */}
+                {l.metadata?.detail_text ? String(l.metadata.detail_text) : ACTION_LABEL[l.action] ?? 'Thao tác không rõ'}
+                {l.team_number !== null ? <span className="text-mute"> · #{pad(l.team_number)}</span> : null}
+              </p>
+              <p className="text-[0.62rem] text-mute">
+                {ROLE_SHORT[l.actor_role as Role] ?? l.actor_role}
+                {l.actor_id === 'system.clock' ? ' (tự động)' : ''}
+                {l.from_state && l.to_state
+                  ? ` · ${STATUS_LABEL[l.from_state] ?? l.from_state} → ${STATUS_LABEL[l.to_state] ?? l.to_state}`
+                  : ''}
+                {l.metadata?.reason ? ` · lý do: ${String(l.metadata.reason)}` : ''}
+              </p>
+            </li>
+          ))}
+          {!filtering && filtered.length > shown.length ? (
+            <li>
+              <button
+                type="button"
+                onClick={() => setOpen(true)}
+                className="w-full rounded-panel border border-hair px-3 py-2 text-[0.7rem] text-snow"
+                data-testid="audit-expand"
+              >
+                XEM ĐỦ {filtered.length} MỤC
+              </button>
+            </li>
+          ) : null}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- report tab */
+
+/**
+ * V3.4 §9 (UI-07) — BÁO CÁO in the order an organiser reads it: what happened
+ * overall, what the best official result was, who is ranked, how each team got
+ * there, how the floor performed, the audit trail, and only then the technical
+ * diagnostics and the export.
+ *
+ * The numbers are the same ones the engine stored; this component only chooses
+ * the order and the words. Nothing here recalculates a score: the summary reads
+ * `roundCounts`, the best result and the leaderboard read `leaderboard(snap)`,
+ * which already excludes decertified and undecided rounds — so the headline and
+ * the table can never disagree about who won.
+ */
+function ReportTab({ store, snap, now, rows, stats }: {
+  store: LiveStore;
+  snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>;
+  now: number;
+  rows: ReturnType<typeof leaderboard>;
+  stats: ReturnType<typeof analytics>;
+}) {
+  const best = rows.length > 0 ? rows[0] : null;
+  const counts = roundCounts(snap);
+  return (
+    <div className="flex flex-col gap-2">
+      {/* ------------------------------------------------------- 1. summary */}
+      <Section title="Tổng quan sự kiện" testid="section-summary">
+        <div data-testid="report-summary">
+          <Row k="Sự kiện" v={snap.event.config.event_name} />
+          <Row k="Trạng thái" v={OPS_EVENT_STATE_WORD[statusOf(snap, now)]} tone={snap.event.event_ended_at !== null ? 'text-mute' : 'text-jade'} />
+          {/* The same sentence the operations tab prints, from the same selector:
+              recorded / closed / open / cancelled, spelled out rather than one
+              ambiguous total. */}
+          <Row k="Lượt" v={counts.sentence} tone={counts.aborted > 0 ? 'text-ember' : 'text-snow'} />
+          <Row k="Đội có kết quả chính thức" v={String(stats.teams_successful)} tone="text-jade" />
+          <Row k="Vòng chờ Quản trị viên quyết" v={String(stats.reviewPending)} tone={stats.reviewPending > 0 ? 'text-ember' : 'text-snow'} />
+        </div>
+      </Section>
+
+      {/* ------------------------------------------ 2. the best official result */}
+      <Section title="Kết quả chính thức tốt nhất" testid="section-best">
+        {best === null ? (
+          <p className="py-3 text-[0.75rem] text-mute" data-testid="report-best-empty">
+            Chưa có kết quả chính thức nào được xếp hạng.
+          </p>
+        ) : (
+          <div className="report-best" data-testid="report-best">
+            <p className="report-best-time digital">{formatClockMs(best.duration_ms)}</p>
+            <p className="report-best-team" data-testid="report-best-team">
+              ĐỘI #{pad(best.team_number)}{best.team_name ? ` · ${best.team_name}` : ''}
+            </p>
+            <p className="report-best-rule">
+              Chỉ tính đội có lần báo hoàn thành được NPC 2 chốt trong thời lượng lượt chơi; kết quả đã bị loại
+              hoặc còn chờ xét không đứng bảng này.
+            </p>
           </div>
-          <p className="text-snow">
-            {/* The engine already writes a Vietnamese sentence for every press; the
-                action type is only a fallback for rows older than that habit. */}
-            {l.metadata?.detail_text ? String(l.metadata.detail_text) : ACTION_LABEL[l.action] ?? 'Thao tác không rõ'}
-            {l.team_number !== null ? <span className="text-mute"> · #{pad(l.team_number)}</span> : null}
-          </p>
-          <p className="text-[0.62rem] text-mute">
-            {ROLE_SHORT[l.actor_role as Role] ?? l.actor_role}
-            {l.actor_id === 'system.clock' ? ' (tự động)' : ''}
-            {l.from_state && l.to_state
-              ? ` · ${STATUS_LABEL[l.from_state] ?? l.from_state} → ${STATUS_LABEL[l.to_state] ?? l.to_state}`
-              : ''}
-            {l.metadata?.reason ? ` · lý do: ${String(l.metadata.reason)}` : ''}
-          </p>
-        </li>
-      ))}
-    </ul>
+        )}
+      </Section>
+
+      {/* ---------------------------------------------------- 3. leaderboard */}
+      <Section title="Bảng xếp hạng" testid="section-leaderboard">
+        {rows.length === 0 ? (
+          <p className="py-3 text-[0.75rem] text-mute">Chưa có đội hoàn thành trận đồ trong thời lượng lượt chơi.</p>
+        ) : (
+          <table className="w-full text-[0.75rem]" data-testid="leaderboard-table">
+            <thead className="text-mute">
+              <tr className="text-left">
+                <th className="py-1 font-normal">#</th>
+                <th className="py-1 font-normal">Đội</th>
+                <th className="py-1 text-right font-normal">Thời gian</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.round_id} className="border-t border-hair/60">
+                  <td className="py-1.5 text-ember">{r.rank}</td>
+                  <td className="py-1.5">#{pad(r.team_number)}{r.team_name ? ` · ${r.team_name}` : ''}</td>
+                  <td className="digital py-1.5 text-right text-snow">{formatClockMs(r.duration_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Section>
+
+      {/* ------------------------------------------- 4. per-team result cards */}
+      <Section title="Từng đội" testid="section-rounds">
+        <RoundDetails snap={snap} now={now} />
+      </Section>
+
+      {/* ------------------------------------------ 5. operational performance */}
+      <Section title="Hiệu suất vận hành" testid="section-performance">
+        <Performance stats={stats} store={store} now={now} />
+      </Section>
+
+      {/* ------------------------------------------------------- 6. the audit */}
+      <Section title="Nhật ký vận hành" testid="section-history">
+        <History snap={snap} />
+      </Section>
+
+      {/* ------------------------------------------------- 7. technical read */}
+      <details className="report-diagnostics" data-testid="report-diagnostics">
+        <summary className="report-diagnostics-head">CHẨN ĐOÁN KỸ THUẬT</summary>
+        <Connectivity store={store} now={now} />
+      </details>
+
+      {/* --------------------------------------------------------- 8. export */}
+      <button type="button" onClick={() => exportCsv(snap)} className="rounded-panel border border-hair px-3 py-3 text-[0.75rem] text-snow" data-testid="export-csv">
+        XUẤT CSV
+      </button>
+    </div>
   );
 }
 
@@ -748,7 +1049,16 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
   const started = snap.event.event_started_at !== null;
   const ended = snap.event.event_ended_at !== null;
   const round: Round | null = snap.active_round;
-  const disputed = disputedRounds(snap.rounds);
+  // V3.4 §9 — the review control used to list `disputedRounds`, which requires an
+  // official duration. A misconduct cancellation with no validated claim sets
+  // `needs_review` and no duration, and the engine's own rule
+  // (`attemptsJudgable`: a misconduct round reopens only through REVIEW_RESOLVE)
+  // means nothing else can ever close it — so the one round that most needed a
+  // supervisor's decision was invisible to the control that makes it. The list is
+  // the awaiting-decision population now, and each row says which kind of wait it
+  // is. The prize-relevant subset keeps its own count in the heading.
+  const reviewable = reviewPendingRounds(snap.rounds);
+  const withheld = disputedRounds(snap.rounds).length;
   const durationMs = (Number(minutes) || 0) * 60_000 + (Number(seconds) || 0) * 1000;
   const durationValid =
     Number.isInteger(durationMs) && durationMs >= ROUND_DURATION_MIN_MS && durationMs <= ROUND_DURATION_MAX_MS;
@@ -794,30 +1104,46 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
    * who holds each seat (migration 0021) and its own busy/armed state.
    */
 
+  /**
+   * V3.4 §9 — the admin tab is ordered by what the organiser has to decide, not
+   * by the order the controls were written. One event state, then the one thing
+   * that needs action, then the seats, then the event itself, then settings, and
+   * only last the operations that can damage a night. Every confirmation,
+   * permission check and audit entry below is the one that was already there:
+   * nothing in this restructure adds, removes or softens a guard.
+   */
   return (
     <div className="flex flex-col gap-4" data-testid="management">
-      {/* V3.3 P0: seat management is the FIRST thing in the admin tab, not the
-          last thing in a stack. It is the control the operator comes looking for
-          by name when a tile reads ĐÃ ĐỦ NGƯỜI and nobody is standing there. */}
-      <SeatManagement store={store} now={snap.server_now_ms} />
+      {/* ---------------------------------------------- 1. current event status */}
+      <AdminEventStatus snap={snap} now={snap.server_now_ms} />
 
-      {/* Discoverability first (V3.2 UX brief): who holds a seat, then the one
-          control a supervisor needs most often — releasing the board. */}
-      <div className="flex flex-col gap-1" data-testid="admin-bindings">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">VỊ TRÍ ĐANG BIND</p>
-        {snap.operators.length === 0 ? (
-          <p className="text-[0.7rem] text-mute" data-testid="admin-bindings-empty">Chưa có thiết bị nào đang giữ vị trí.</p>
-        ) : snap.operators.map((op) => (
-          <p key={op.role} className="flex items-center justify-between gap-2 border-b border-hair/40 py-1.5 text-[0.7rem] last:border-0">
-            <span className="font-semibold text-snow">{ROLE_LABEL[op.role]}</span>
-            <span className="truncate text-[0.64rem] text-mute">
-              {op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác'}
-              {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
-            </span>
-          </p>
-        ))}
-      </div>
+      {/* ----------------------------------- 2. the issue and the next action */}
+      {/* Same selector the crew's own operations tab reads, so an organiser and a
+          station can never be shown two different versions of what happens next. */}
+      <AdminNextAction snap={snap} now={snap.server_now_ms} />
 
+      {/* --------------------------------------------------- 3. QUẢN LÝ VỊ TRÍ */}
+      <section className="admin-group" data-testid="admin-group-seats" aria-label="Quản lý vị trí">
+        <h4 className="admin-group-title">QUẢN LÝ VỊ TRÍ</h4>
+        <SeatManagement store={store} now={snap.server_now_ms} />
+
+        <div className="flex flex-col gap-1" data-testid="admin-bindings">
+          <p className="text-[0.7rem] tracking-[0.1em] text-mute">VỊ TRÍ ĐANG BIND</p>
+          {snap.operators.length === 0 ? (
+            <p className="text-[0.7rem] text-mute" data-testid="admin-bindings-empty">Chưa có thiết bị nào đang giữ vị trí.</p>
+          ) : snap.operators.map((op) => (
+            <p key={op.role} className="flex items-center justify-between gap-2 border-b border-hair/40 py-1.5 text-[0.7rem] last:border-0">
+              <span className="font-semibold text-snow">{ROLE_LABEL[op.role]}</span>
+              <span className="truncate text-[0.64rem] text-mute">
+                {op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác'}
+                {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
+              </span>
+            </p>
+          ))}
+        </div>
+      </section>
+
+      {/* ------------------------------- 4. release the whole board (bulk, risky) */}
       {USING_SUPABASE && (
         <div className="flex flex-col gap-2" data-testid="release-panel">
           <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
@@ -842,34 +1168,79 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
               không còn đội trong khu vực.
             </p>
           ) : null}
-          {/* Emergency path: the same sweep, but it also closes any still-open round
-              as a recorded safety cancellation. Hidden until deliberately opened. */}
-          <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
-            <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
-              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
-            </summary>
-            <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
-              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
-              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
-            </p>
-            <button
-              type="button"
-              disabled={releasing}
-              onClick={() => void releaseBoard(true)}
-              className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-bold text-blood disabled:opacity-50"
-              data-testid="release-force"
-            >
-              {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG KHẨN CẤP (HỦY LƯỢT ĐANG MỞ)'}
-            </button>
-          </details>
           {released !== null && (
             <p role="status" className="text-[0.68rem] leading-snug text-snow" data-testid="release-result">{released}</p>
           )}
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">CẤU HÌNH LƯỢT CHƠI</p>
+      {/* ------------------------------------------------ 5. event lifecycle */}
+      <section className="admin-group" data-testid="admin-group-lifecycle" aria-label="Vòng đời sự kiện">
+        <h4 className="admin-group-title">VÒNG ĐỜI SỰ KIỆN</h4>
+        {ended ? (
+          /* The event is closed. The only move that hands the room to the next shift
+             is OPEN_NEW_EVENT: it points sc.state at a fresh sc.events row that
+             inherits this event's configuration, and writes a new audit entry —
+             nothing on the closed event is deleted or rewritten. */
+          <div className="flex flex-col gap-2">
+            <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-open-hint">
+              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội. Lịch sử, lượt chơi,
+              lần báo hoàn thành, checklist reset và nhật ký của sự kiện vừa rồi giữ nguyên.
+            </p>
+            <input
+              value={newEventName}
+              onChange={(e) => setNewEventName(e.target.value)}
+              placeholder="Tên sự kiện mới (bỏ trống = giữ tên cũ)"
+              className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="new-event-name"
+            />
+            <button
+              type="button"
+              disabled={store.getSnapshot().pending === 'OPEN_NEW_EVENT'}
+              onClick={() => {
+                const name = newEventName.trim().replace(/\s+/g, ' ');
+                void store.act('OPEN_NEW_EVENT', name ? { event_name: name } : {});
+                setNewEventName('');
+              }}
+              className="rounded-panel border border-jade/60 bg-jade/10 px-3 py-4 text-[0.8rem] font-bold text-jade disabled:opacity-50"
+              data-testid="admin-open-new"
+            >
+              MỞ SỰ KIỆN MỚI
+            </button>
+          </div>
+        ) : !started ? (
+          <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
+            Nhân sự 01 nhận đội đầu tiên ở sảnh. NPC 1 bấm BẮT ĐẦU để mở đồng hồ lượt chơi.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <input
+              value={closeReason}
+              onChange={(e) => setCloseReason(e.target.value)}
+              placeholder="Lý do đóng sự kiện (bắt buộc, vào nhật ký)"
+              className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
+              data-testid="close-reason"
+            />
+            <button
+              type="button"
+              disabled={!closeReason.trim()}
+              onClick={() => {
+                void store.act('END_EVENT', { reason: closeReason.trim() });
+                setCloseReason('');
+              }}
+              className="rounded-panel border border-hair px-3 py-4 text-[0.78rem] font-semibold text-snow disabled:opacity-50"
+              data-testid="admin-end"
+            >
+              ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* --------------------------------------------------- 6. configuration */}
+      <section className="admin-group" data-testid="admin-group-config" aria-label="Cấu hình">
+        <h4 className="admin-group-title">CẤU HÌNH LƯỢT CHƠI</h4>
+        <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] text-mute" data-testid="cfg-duration-current">
           Thời lượng lượt chơi hiện hành: <span className="text-snow">{formatClockSec(snap.event.config.game_limit_ms)}</span>.
           {round && round.game_started_at !== null ? ' Thời lượng mới sẽ áp dụng từ lượt tiếp theo.' : ''}
@@ -931,70 +1302,48 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         >
           LƯU CẤU HÌNH
         </button>
-      </div>
+        </div>
+      </section>
 
-      <div className="flex flex-col gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
-        {ended ? (
-          /* The event is closed. The only move that hands the room to the next shift
-             is OPEN_NEW_EVENT: it points sc.state at a fresh sc.events row that
-             inherits this event's configuration, and writes a new audit entry —
-             nothing on the closed event is deleted or rewritten. */
-          <div className="flex flex-col gap-2">
-            <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-open-hint">
-              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội. Lịch sử, lượt chơi,
-              lần báo hoàn thành, checklist reset và nhật ký của sự kiện vừa rồi giữ nguyên.
+      {/* ------------------------------------------- 7. high-risk recovery */}
+      {/* Everything that can damage a night is in one place, behind its own
+          heading, and it is the LAST group on the tab. Each control keeps the
+          confirmation it already had — the two-tap release, the mandatory reason
+          fields, the server-side permission check — and none of them deletes a
+          score, a claim or a history row. */}
+      <section className="admin-risk-group" data-testid="admin-group-risk" aria-label="Khôi phục rủi ro cao">
+        <h4 className="admin-risk-title">KHÔI PHỤC RỦI RO CAO</h4>
+        <p className="admin-risk-note">
+          Các thao tác dưới đây thay đổi trạng thái của cả ca trực và đều vào nhật ký. Máy chủ vẫn
+          kiểm tra quyền của máy này trước khi thực hiện; không thao tác nào xoá điểm, lần báo hay lịch sử.
+        </p>
+
+        {/* Emergency board release, moved out of the release panel because it is the
+            one control here that closes a live round as a side effect. */}
+        {USING_SUPABASE && (
+          <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
+            <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
+              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
+            </summary>
+            <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
+              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
+              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
             </p>
-            <input
-              value={newEventName}
-              onChange={(e) => setNewEventName(e.target.value)}
-              placeholder="Tên sự kiện mới (bỏ trống = giữ tên cũ)"
-              className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
-              data-testid="new-event-name"
-            />
             <button
               type="button"
-              disabled={store.getSnapshot().pending === 'OPEN_NEW_EVENT'}
-              onClick={() => {
-                const name = newEventName.trim().replace(/\s+/g, ' ');
-                void store.act('OPEN_NEW_EVENT', name ? { event_name: name } : {});
-                setNewEventName('');
-              }}
-              className="rounded-panel border border-jade/60 bg-jade/10 px-3 py-4 text-[0.8rem] font-bold text-jade disabled:opacity-50"
-              data-testid="admin-open-new"
+              disabled={releasing}
+              onClick={() => void releaseBoard(true)}
+              className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-panel border border-blood/60 bg-blood/10 px-3 py-3 text-[0.75rem] font-bold text-blood disabled:opacity-50"
+              data-testid="release-force"
             >
-              MỞ SỰ KIỆN MỚI
+              {releasing ? 'ĐANG GIẢI PHÓNG…' : 'GIẢI PHÓNG KHẨN CẤP (HỦY LƯỢT ĐANG MỞ)'}
             </button>
-          </div>
-        ) : !started ? (
-          <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
-            Nhân sự 01 nhận đội đầu tiên ở sảnh. NPC 1 bấm BẮT ĐẦU để mở đồng hồ lượt chơi.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <input
-              value={closeReason}
-              onChange={(e) => setCloseReason(e.target.value)}
-              placeholder="Lý do đóng sự kiện (bắt buộc, vào nhật ký)"
-              className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
-              data-testid="close-reason"
-            />
-            <button
-              type="button"
-              disabled={!closeReason.trim()}
-              onClick={() => {
-                void store.act('END_EVENT', { reason: closeReason.trim() });
-                setCloseReason('');
-              }}
-              className="rounded-panel border border-hair px-3 py-4 text-[0.78rem] font-semibold text-snow disabled:opacity-50"
-              data-testid="admin-end"
-            >
-              ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT
-            </button>
-          </div>
+          </details>
         )}
+
         {round && (
           <>
+            <p className="text-[0.7rem] tracking-[0.1em] text-mute">KIỂM SOÁT KHẨN CẤP</p>
             <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Lý do can thiệp (bắt buộc)" className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="admin-reason" />
             <label className="text-[0.68rem] text-mute">
               Loại hủy lượt chơi
@@ -1029,9 +1378,8 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
             </button>
           </>
         )}
-      </div>
 
-      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] tracking-[0.1em] text-mute">HIỆU CHỈNH CÓ NHẬT KÝ</p>
         <select value={correction.round_id} onChange={(e) => setCorrection({ ...correction, round_id: e.target.value })} className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="corr-round">
           <option value="">Chọn đội…</option>
@@ -1049,12 +1397,18 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <input
           value={correction.value}
           onChange={(e) => setCorrection({ ...correction, value: e.target.value })}
-          placeholder="epoch ms · để trống = hoàn tác mốc"
+          placeholder="epoch ms"
           inputMode="numeric"
           className="rounded border border-hair bg-ink px-2 py-2 text-[0.7rem] text-snow"
           data-testid="corr-value"
         />
         </div>
+        {/* The explanation used to live in the placeholder, where the narrow
+            column of the two-up grid cut it to "epoch ms · để trống = hc" at
+            390px. A rule the operator has to guess is not a hint. */}
+        <p className="text-[0.62rem] leading-snug text-mute" data-testid="corr-value-hint">
+          Giá trị tính bằng epoch ms. Để trống để hoàn tác mốc đã ghi.
+        </p>
         <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Lý do hiệu chỉnh (bắt buộc)" className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="corr-reason" />
         <button
           type="button"
@@ -1075,19 +1429,22 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         </button>
       </div>
 
-      {disputed.length > 0 && (
+      {reviewable.length > 0 && (
         <div className="flex flex-col gap-2">
-          <p className="text-[0.7rem] tracking-[0.1em] text-ember">KẾT QUẢ CHỜ XÉT ({disputed.length})</p>
+          <p className="text-[0.7rem] tracking-[0.1em] text-ember" data-testid="review-count">
+            VÒNG CHỜ QUẢN TRỊ VIÊN QUYẾT ({reviewable.length})
+            {withheld > 0 ? ` · ${withheld} có điểm chính thức đang bị tạm xếp hạng` : ''}
+          </p>
           <select
             value={review.round_id}
             onChange={(e) => setReview({ ...review, round_id: e.target.value })}
             className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
             data-testid="review-round"
           >
-            <option value="">Chọn đội tranh chấp…</option>
-            {disputed.map((r) => (
+            <option value="">Chọn đội chờ xét…</option>
+            {reviewable.map((r) => (
               <option key={r.id} value={r.id}>
-                #{pad(r.team_number)} · {formatClockCs(r.official_duration_ms ?? 0)} ·{' '}
+                #{pad(r.team_number)} · {r.official_duration_ms !== null ? formatClockCs(r.official_duration_ms) : 'không có điểm chính thức'} ·{' '}
                 {r.review_reasons.map((x) => REVIEW_REASON_LABEL[x] ?? x).join(' · ')}
               </option>
             ))}
@@ -1189,6 +1546,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </button>
         </div>
       )}
+      </section>
     </div>
   );
 }

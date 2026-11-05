@@ -777,6 +777,16 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
     : received
       ? { text: 'ĐÃ NHẬN ĐỘI', tone: 'confirmed' as const }
       : { text: 'CHỜ NHẬN ĐỘI', tone: 'queued' as const };
+  // The card's headline has to state which of the three things is actually true:
+  // a team nobody has received yet, a team this phone received and handed up, and
+  // a team whose clock is really running. Calling a received-but-unstarted team
+  // “ĐANG CHƠI” told the operator the round had begun when the machine says it has
+  // not, and the badge underneath then contradicted the headline.
+  const stageWord = !received
+    ? 'ĐỘI KẾ TIẾP'
+    : round.game_started_at !== null
+      ? 'ĐỘI ĐANG CHƠI'
+      : 'ĐỘI VỪA NHẬN';
   // The idle clock never repeats what the card already says: one short label,
   // one duration, and one sentence about why the number is not moving.
   const idleCaption = syncBroken
@@ -784,9 +794,26 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
     : phase === 'WAITING_FLOOR2_CONFIRMATION'
       ? 'Đội đang lên tầng 2 · đồng hồ chỉ chạy khi NPC 1 bấm BẮT ĐẦU'
       : `Đồng hồ ${limitLabel} chỉ chạy khi NPC 1 bấm BẮT ĐẦU`;
+  // In pre-start the illuminated card under the team IS the phase statement, so
+  // neither the card's own state line nor the warning banner repeats it — the
+  // same rule NPC 1's screen applies, and the reason this screen previously read
+  // the same sentence five times inside one viewport.
+  const preStartShown = phase === 'READY_AT_FLOOR3';
+  const shownAlerts = alerts.filter((a) => !(a.id === 'PRESTART' && preStartShown));
 
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col gap-2.5">
+    // Spare height is spread across the column gaps instead of pooled into one
+    // empty band, which is the recorded layout decision for this dashboard: a
+    // single flex-1 spacer pushed the press to the very bottom and left a void
+    // between the route and the action. The press keeps its own group so
+    // justification can never separate a button from its hint or its warnings.
+    // `min-height` is deliberately NOT zeroed here: with a content floor removed,
+    // flex squeezes the cards below their own height whenever the column is taller
+    // than the viewport — measured at 320×640, the team card collapsed to 26 px
+    // while holding 164 px of text, so `.tm-card { overflow: hidden }` cut the
+    // Vietnamese lines off. The floor keeps every card readable and lets <main>
+    // scroll instead.
+    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col justify-evenly gap-3">
       {/* -------------------------------------------------------- identity */}
       <section
         className="role-band"
@@ -816,9 +843,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="team-eyebrow" data-testid="r01-team-stage">
-              {received ? 'ĐỘI ĐANG CHƠI' : 'ĐỘI KẾ TIẾP'}
-            </p>
+            <p className="team-eyebrow" data-testid="r01-team-stage">{stageWord}</p>
             <h1 className="digital team-digits mt-1 font-bold text-snow">
               #{pad(round?.team_number ?? snap.event.next_team_number)}
             </h1>
@@ -864,7 +889,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
         {/* Where the round stands, in the machine's own words, and whose hand it
             is in. One line — the button underneath already says what to do. */}
         <p className="r01-hand" data-testid="event-state">
-          <span className="r01-hand-state">{PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}</span>
+          {!preStartShown && <span className="r01-hand-state">{PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}</span>}
           {turn ? (
             <span className="r01-hand-who" data-testid="r01-hand" data-mine={turn.mine ? '1' : '0'}>
               {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
@@ -901,40 +926,40 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
       {/* --------------------------------------------------------- route */}
       <JourneyStepper journey={journey} onOpen={onOpenJourney} />
 
-      {/* Spare height belongs between the route and the press, not in an empty
-          band under the clock: the action ends up where the thumb already is. */}
-      <div className="sc-spacer" />
+      {/* One group, so the distribution above can never drive a wedge between the
+          press and the warnings, the acknowledgement or the hint that explain it. */}
+      <div className="flex flex-col gap-2.5" data-testid="r01-action-group">
+        {/* Safety and prize warnings stay on the main screen, never only in the sheet. */}
+        {shownAlerts.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => alarms.unlock()}
+            className="notice-band"
+            data-tone={a.tone === 'danger' ? 'danger' : 'warn'}
+            data-testid={`alert-${a.id}`}
+          >
+            <AlertIcon />
+            <span>{a.text}</span>
+          </button>
+        ))}
 
-      {/* Safety and prize warnings stay on the main screen, never only in the sheet. */}
-      {alerts.map((a) => (
-        <button
-          key={a.id}
-          type="button"
-          onClick={() => alarms.unlock()}
-          className="notice-band"
-          data-tone={a.tone === 'danger' ? 'danger' : 'warn'}
-          data-testid={`alert-${a.id}`}
-        >
-          <AlertIcon />
-          <span>{a.text}</span>
-        </button>
-      ))}
+        {state.error ? (
+          <p role="status" className="notice-band" data-tone="danger" data-testid="message">
+            <AlertIcon />
+            <span>{state.error}</span>
+          </p>
+        ) : state.notice ? (
+          <p role="status" className="notice-band" data-tone="info" data-testid="notice">
+            <span>{state.notice}</span>
+          </p>
+        ) : null}
 
-      {state.error ? (
-        <p role="status" className="notice-band" data-tone="danger" data-testid="message">
-          <AlertIcon />
-          <span>{state.error}</span>
-        </p>
-      ) : state.notice ? (
-        <p role="status" className="notice-band" data-tone="info" data-testid="notice">
-          <span>{state.notice}</span>
-        </p>
-      ) : null}
+        {/* ------------------------------------------------- the one press */}
+        <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName={teamName} />
 
-      {/* ------------------------------------------------- the one press */}
-      <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName={teamName} />
-
-      {phase === 'EXIT_CONFIRMED' ? <AttemptHistory attempts={attempts} /> : null}
+        {phase === 'EXIT_CONFIRMED' ? <AttemptHistory attempts={attempts} /> : null}
+      </div>
     </div>
   );
 }
@@ -1001,7 +1026,7 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
   // The bypass alert would repeat the bypass instruction one screen apart.
   const shownAlerts = alerts.filter((a) => !(a.id === 'BYPASS' && handoff.key === 'bypassed'));
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col gap-2.5">
+    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-2.5">
       {/* -------------------------------------------------------- identity */}
       <section
         className="role-band"
@@ -1385,7 +1410,7 @@ function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, sta
   // the tracker would be the old screen's duplication again.
   const shownAlerts = alerts.filter((a) => a.id !== 'PRESTART');
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col gap-2.5">
+    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-2.5">
       {/* ------------------------------------------------------------ identity */}
       <section
         className="role-band"

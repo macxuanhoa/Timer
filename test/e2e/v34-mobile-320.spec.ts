@@ -36,10 +36,31 @@ const shot = async (page: Page, name: string) => {
   await page.screenshot({ path: `shots/v34-${name}.png` });
 };
 
-/** The only overflow measurement that matters on a phone: document scroll vs client width. */
+/**
+ * The measurement that matters on a phone, on both axes. Horizontal overflow is
+ * the visible symptom; the vertical one is how a card squeezed by a flex parent
+ * with `min-height: 0` loses Vietnamese lines to its own `overflow: hidden`
+ * while the page still reports zero sideways overflow — the check that was
+ * missing when the team card measured 24 px of box around 164 px of text.
+ */
 async function assertFits(page: Page, label: string, width: number) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow, `${label} overflows ${width}px by ${overflow}px`).toBeLessThanOrEqual(0);
+  const m = await page.evaluate(() => {
+    const doc = document.documentElement;
+    const clipped: string[] = [];
+    for (const el of Array.from(document.querySelectorAll('[data-testid], .card, .role-band, .cta'))) {
+      const cs = getComputedStyle(el);
+      const id = el.getAttribute('data-testid') ?? el.className;
+      if (cs.overflowX !== 'visible' && cs.textOverflow !== 'ellipsis' && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) {
+        clipped.push(`${id} W ${el.scrollWidth}>${el.clientWidth}`);
+      }
+      if (cs.overflowY !== 'visible' && cs.textOverflow !== 'ellipsis' && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0) {
+        clipped.push(`${id} H ${el.scrollHeight}>${el.clientHeight}`);
+      }
+    }
+    return { pageOverflow: doc.scrollWidth - doc.clientWidth, clipped };
+  });
+  expect(m.pageOverflow, `${label}: horizontal overflow at ${width}px`).toBeLessThanOrEqual(0);
+  expect(m.clipped, `${label}: clipped content at ${width}px → ${m.clipped.join(' | ')}`).toEqual([]);
 }
 
 test.describe.serial('V3.4 §11 — every redesigned screen at the 320px floor', () => {

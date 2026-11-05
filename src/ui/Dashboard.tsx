@@ -394,7 +394,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
             <CorridorStage
               store={store}
               snap={snap}
-              phase={phase}
               primary={primary}
               journey={journey}
               teamLine={teamLine}
@@ -829,7 +828,11 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
         {/* The band answers "am I holding this seat" — the one of the four states
             the rest of the screen never states. What the event and the team are
             doing is read from the card and the route, where it belongs. */}
-        <span className="badge" data-tone={syncBroken ? 'danger' : 'confirmed'} data-testid="binding-state">
+        {/* The binding badge states one fact and one only: this phone holds the
+            seat. A read failure does not release it, so the tone must not turn
+            blood-red under words that are still true — the transport truth is
+            already said in words by the header chip and the workflow badge. */}
+        <span className="badge" data-tone="confirmed" data-testid="binding-state">
           <CheckIcon />
           ĐÃ GẮN VỊ TRÍ
         </span>
@@ -977,10 +980,9 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
  * failure always outranks the workflow badge so no press is offered into an
  * unread state.
  */
-function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff, alerts, state, syncBroken, onOpenJourney }: {
+function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alerts, state, syncBroken, onOpenJourney }: {
   store: LiveStore;
   snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>;
-  phase: SystemPhase;
   primary: PrimaryAction;
   journey: JourneyInfo;
   teamLine: TeamLine;
@@ -1018,13 +1020,24 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
           : handoff.key === 'waiting-next'
             ? 'Đang chờ bước tiếp theo từ máy chủ.'
             : 'Chưa có đội bàn giao. Khi Nhân sự 01 gửi đội lên, nút xác nhận sẽ hiển thị ở đây.';
-  const timerEyebrow = phase === 'WAITING_FLOOR2_CONFIRMATION'
-    ? 'CHƯA TÍNH GIỜ — ĐỘI ĐANG LÊN TẦNG 2'
-    : phase === 'READY_AT_FLOOR3'
-      ? 'ĐÃ XÁC NHẬN · CHỜ NPC 1 BẮT ĐẦU'
-      : 'CHƯA TÍNH GIỜ';
-  // The bypass alert would repeat the bypass instruction one screen apart.
-  const shownAlerts = alerts.filter((a) => !(a.id === 'BYPASS' && handoff.key === 'bypassed'));
+  const timerEyebrow = 'CHƯA TÍNH GIỜ';
+  // The bypass alert would repeat the bypass instruction one screen apart, and the
+  // pre-start band would repeat the route caption under the tracker. This screen
+  // states each fact once: the card says whose hand it is, the caption says where
+  // the team is, the summary says what the server recorded.
+  const confirmed = !syncBroken && handoff.key === 'confirmed' && round?.floor2_confirmed_at != null;
+  const shownAlerts = alerts.filter((a) => !(a.id === 'BYPASS' && handoff.key === 'bypassed')
+    && !(a.id === 'PRESTART' && handoff.key === 'confirmed'));
+  // "Being handed over through floor 2" is only true until this phone's press
+  // lands. After the stamp the team is on floor 3, and saying otherwise would
+  // leave the headline contradicting the summary underneath it.
+  const stageWord = !round
+    ? 'ĐỘI KẾ TIẾP'
+    : handoff.key === 'bypassed'
+      ? 'ĐỘI ĐÃ LÊN TẦNG 3'
+      : handoff.key === 'confirmed'
+        ? 'ĐỘI ĐÃ GỬI LÊN TẦNG 3'
+        : 'ĐỘI ĐANG BÀN GIAO QUA TẦNG 2';
   return (
     <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-2.5">
       {/* -------------------------------------------------------- identity */}
@@ -1039,7 +1052,7 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
           <p className="role-band-area">{ROLE_AREA.CORRIDOR}</p>
           <p className="mt-0.5 text-[9.5px] leading-snug text-mute">{ROLE_DUTY.CORRIDOR}</p>
         </div>
-        <span className="badge" data-tone={syncBroken ? 'danger' : 'confirmed'}>
+        <span className="badge" data-tone="confirmed" data-testid="r02-binding-state">
           <CheckIcon />
           ĐÃ GẮN VỊ TRÍ
         </span>
@@ -1053,9 +1066,7 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="team-eyebrow" data-testid="r02-team-stage">
-              {round ? 'ĐỘI ĐANG BÀN GIAO QUA TẦNG 2' : 'ĐỘI KẾ TIẾP'}
-            </p>
+            <p className="team-eyebrow" data-testid="r02-team-stage">{stageWord}</p>
             <h1 className="digital team-digits mt-1 font-bold text-snow">
               #{pad(round?.team_number ?? snap.event.next_team_number)}
             </h1>
@@ -1083,11 +1094,13 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
           </span>
         </p>
 
-        <p className="hero-caption mt-1.5" data-testid="r02-requirement">
-          {syncBroken
-            ? 'Máy chưa đọc được trạng thái mới — kiểm tra kết nối rồi xác nhận bước tiếp theo.'
-            : handoff.requirement}
-        </p>
+        {!confirmed && (
+          <p className="hero-caption mt-1.5" data-testid="r02-requirement">
+            {syncBroken
+              ? 'Máy chưa đọc được trạng thái mới — kiểm tra kết nối rồi xác nhận bước tiếp theo.'
+              : handoff.requirement}
+          </p>
+        )}
 
         {/* Whose hand the round is in — the next required action, from the same
             authoritative timestamps the buttons themselves are derived from. */}
@@ -1100,20 +1113,18 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
           </p>
         ) : null}
 
-        {/* Server-confirmed arrival: the acknowledgement appears only once the
-            stamp exists on the round, never on the local press. */}
-        {!syncBroken && handoff.key === 'confirmed' && round?.floor2_confirmed_at != null && (
-          <p role="status" className="r01-confirmed" data-testid="r02-confirmed">
-            <CheckIcon className="h-4 w-4 shrink-0" />
-            Máy chủ đã ghi nhận xác nhận tầng 2 lúc {formatWallTime(round.floor2_confirmed_at)} — NPC 1 mở đồng hồ ở cửa tầng 3
-          </p>
-        )}
+        {/* The arrival CTA is gone once the server has the stamp — replaced by the
+            same fact as a read-only summary in the place the thumb already knows.
+            The acknowledgement is keyed on `floor2_confirmed_at`, never on this
+            phone's own press, so a write that is still on the wire reads pending. */}
       </section>
 
       {/* ----------------------------------------------------- instruction */}
-      <section className="r02-instruct" data-testid="r02-instruction">
-        <p>{instruction}</p>
-      </section>
+      {!confirmed && (
+        <section className="r02-instruct" data-testid="r02-instruction">
+          <p>{instruction}</p>
+        </section>
+      )}
 
       {/* --------------------------------------------------------- route */}
       <JourneyStepper journey={journey} onOpen={onOpenJourney} />
@@ -1145,7 +1156,22 @@ function CorridorStage({ store, snap, phase, primary, journey, teamLine, handoff
       ) : null}
 
       {/* ------------------------------------------------- the one press */}
-      <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName="" />
+      {confirmed ? (
+        // Non-interactive, and in the slot the arrival button used to hold: the
+        // operator looks at the same place and now reads what the server recorded
+        // plus who owns the next step, instead of a control that can only refuse.
+        <section className="state-block" data-tone="confirmed" role="status" data-testid="r02-handoff-summary">
+          <span className="state-block-icon" aria-hidden><CheckIcon /></span>
+          <p className="state-block-title" data-testid="r02-confirmed">ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2</p>
+          <p className="state-block-note" data-testid="r02-waiting-npc1">ĐANG CHỜ NPC 1 BẮT ĐẦU</p>
+          <p className="text-[0.62rem] leading-snug text-mute" data-testid="r02-confirmed-at">
+            Máy chủ ghi nhận lúc {formatWallTime(round?.floor2_confirmed_at ?? snap.server_now_ms)} · đội #{pad(round?.team_number ?? snap.event.next_team_number)}
+            {round?.team_name ? ` · ${round.team_name}` : ''}
+          </p>
+        </section>
+      ) : (
+        <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName="" />
+      )}
 
       {/* ------------------------------------- compact, view-only clock info */}
       <section className="hero-block" data-testid="r02-timer-info">

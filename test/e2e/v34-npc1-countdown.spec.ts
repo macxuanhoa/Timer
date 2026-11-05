@@ -95,18 +95,17 @@ test.describe.serial('V3.4 NPC1 — three screens, one countdown contract', () =
     const start = gate.page.getByTestId('primary-action');
     await expect(start).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
     await expect(start).toHaveClass(/cta-ember/);
-    // §7: unauthorised roles see a disabled lock, never a START of their own.
-    // Each lock speaks in its own role's voice: floor 2 acknowledges the handoff it
-    // already pressed (V3.4 Role 02), NPC 2 only names who owns the next press.
-    const waitingWords: [Page, string][] = [
-      [corridor.page, 'ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2'],
-      [room.page, 'ĐỘI CHƠI SẮP BẮT ĐẦU'],
-    ];
-    for (const [p, word] of waitingWords) {
-      await expect(p.getByTestId('waiting-state')).toContainText(word);
-      await expect(p.getByTestId('waiting-state')).toHaveAttribute('data-unavailable', '1');
-      await expect(p.getByTestId('primary-action')).toHaveCount(0);
-    }
+    // §7: unauthorised roles get no START of their own, and each says so in its
+    // own role's voice. Floor 2 has already pressed, so it no longer shows a
+    // control at all — V3.4 Role 02 replaced that lock with a read-only summary.
+    // NPC 2, which owns nothing here, still reads the disabled lock.
+    await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
+    await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
+    await expect(corridor.page.getByTestId('waiting-state')).toHaveCount(0);
+    await expect(corridor.page.getByTestId('primary-action')).toHaveCount(0);
+    await expect(room.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
+    await expect(room.page.getByTestId('waiting-state')).toHaveAttribute('data-unavailable', '1');
+    await expect(room.page.getByTestId('primary-action')).toHaveCount(0);
     await shot(gate.page, 'npc1-screenA-prestart');
 
     /* ---------------------------------------------------------- Screen B */

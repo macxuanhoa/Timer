@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
+import { assertActionReachable, assertReadable, shot } from './lib/visual';
 
 /**
  * V3.4 §1 (UI-01) — NHÂN SỰ 01 · SẢNH TẦNG 1, the eight states the brief names.
@@ -42,62 +42,8 @@ async function phone(browser: Browser, which: Phone) {
   return { context, page: await signIn(context, which) };
 }
 
-const shot = async (page: Page, name: string) => {
-  mkdirSync('shots', { recursive: true });
-  await page.screenshot({ path: `shots/v34-${name}.png` });
-};
-
 const tokenOf = (page: Page) =>
   page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
-
-/**
- * The clipping the brief forbids, on both axes. An element that scrolls its own
- * content, or that is pushed past the viewport edge, is a defect; a box whose
- * overflow is merely visible is not.
- */
-const clipReport = (page: Page) =>
-  page.evaluate(() => {
-    const doc = document.documentElement;
-    const clipped: string[] = [];
-    for (const el of Array.from(document.querySelectorAll('[data-testid], .card, .role-band, .cta'))) {
-      const cs = getComputedStyle(el);
-      const cuts = (axis: 'x' | 'y') =>
-        (axis === 'x' ? cs.overflowX : cs.overflowY) !== 'visible' && cs.textOverflow !== 'ellipsis';
-      if (cuts('x') && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) {
-        clipped.push(`${el.getAttribute('data-testid') ?? el.className} W ${el.scrollWidth}>${el.clientWidth}`);
-      }
-      if (cuts('y') && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0) {
-        clipped.push(`${el.getAttribute('data-testid') ?? el.className} H ${el.scrollHeight}>${el.clientHeight}`);
-      }
-    }
-    return { clipped, pageOverflow: doc.scrollWidth - doc.clientWidth };
-  });
-
-async function assertReadable(page: Page, label: string) {
-  const m = await clipReport(page);
-  expect(m.pageOverflow, `${label}: horizontal overflow`).toBeLessThanOrEqual(0);
-  expect(m.clipped, `${label}: clipped content → ${m.clipped.join(' | ')}`).toEqual([]);
-}
-
-/**
- * The acceptance bar for this screen is that the operator finds the next action
- * without hunting, so the control itself has to be inside the first screen — no
- * scrolling to discover what to press. A state with no press at all (a locked
- * wall display, a finished event) is allowed and skipped: those screens have
- * nothing to reach.
- */
-async function assertActionReachable(page: Page, label: string) {
-  const verdict = await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="primary-action"], [data-testid="waiting-state"]');
-    if (!el) return { present: false };
-    const r = el.getBoundingClientRect();
-    return { present: true, top: Math.round(r.top), bottom: Math.round(r.bottom), height: window.innerHeight };
-  });
-  if (!verdict.present) return;
-  expect(verdict.top, `${label}: the action starts above the viewport`).toBeGreaterThanOrEqual(0);
-  expect(verdict.bottom, `${label}: the action is below the fold (${verdict.bottom} > ${verdict.height})`)
-    .toBeLessThanOrEqual(verdict.height!);
-}
 
 test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () => {
   test('no team → accepted → handed over → locked → ended → offline, at every width', async ({ browser }) => {

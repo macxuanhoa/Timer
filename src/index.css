@@ -1246,23 +1246,6 @@
   color: color-mix(in srgb, var(--color-snow) 82%, transparent);
 }
 
-/* The server's own acknowledgement. It appears only once the stamp exists on the
-   round, so it reads as confirmation of a recorded fact, never as a local echo of
-   a press. */
-.r01-confirmed {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: var(--sc-space-2);
-  padding: 7px var(--sc-space-3);
-  border: 1px solid color-mix(in srgb, var(--color-jade) 45%, transparent);
-  border-radius: var(--sc-radius-chip);
-  background: color-mix(in srgb, var(--color-jade) 10%, transparent);
-  font-size: var(--sc-t-label);
-  line-height: 1.35;
-  color: var(--color-jade);
-}
-
 .r01-progress {
   min-width: 0;
   flex: 1;

@@ -131,8 +131,16 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(confirmed.active_round?.floor2_confirmed_by_role).toBe('CORRIDOR');
     // Confirmation of arrival is not the start: 02 has no clock authority at all.
     expect(confirmed.active_round?.game_started_at).toBeNull();
-    // V3.4 Role 02: the landed press is acknowledged; the caption names the hand.
-    await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
+    // V3.4 Role 02: the landed press is acknowledged by a read-only summary in the
+    // slot the arrival button used to hold — the button itself is gone, so no
+    // second confirmation can even be offered, and the two lines name what the
+    // server recorded and who owns the next step.
+    await expect(corridor.page.getByTestId('primary-action')).toHaveCount(0);
+    await expect(corridor.page.getByTestId('waiting-state')).toHaveCount(0);
+    await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
+    await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
+    await expect(corridor.page.getByTestId('r02-waiting-npc1')).toHaveText('ĐANG CHỜ NPC 1 BẮT ĐẦU');
+    await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
 
     // §8 Pre-start: the same loud alert on every phone, one START permission.
     await expect(room.page.getByTestId('prestart-alert')).toBeVisible();

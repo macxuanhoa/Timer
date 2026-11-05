@@ -167,6 +167,41 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await expect(p.page.getByTestId('station-LOBBY')).toBeEnabled({ timeout: 20_000 });
   });
 
+  test('an already-connected phone adopts the new event_id with no reload and no cache clearing', async ({ browser }) => {
+    // The production requirement is explicit: after a successful handoff the
+    // devices must pick up the new event on their own. A phone is connected and
+    // looking at the closed night before the supervisor acts.
+    await pool.query('update sc.events set event_ended_at = sc.now_ms(), event_started_at = 1, next_team_number = 7 where id = (select event_id from sc.state where id=true)');
+    const closedId = (await pool.query('select id from sc.events where id=(select event_id from sc.state where id=true)')).rows[0].id;
+    const supUid = await identity(); await allowAdmin(supUid);
+    expect((await rpc(supUid, 'claim_station', { p_role: 'SUPERVISOR' })).ok).toBe(true);
+
+    const p = await phone(browser);
+    await p.page.getByTestId('station-LOBBY').click();
+    await expect(p.page.getByTestId('dashboard')).toBeVisible();
+    await expect(p.page.getByTestId('event-ended-card')).toContainText('SỰ KIỆN ĐÃ KẾT THÚC');
+    const beforeEvent = await p.page.getByTestId('dashboard').getAttribute('data-revision');
+    void beforeEvent;
+
+    // The handoff happens after the phone is already open. Nothing touches it.
+    const opened = await rpc(supUid, 'handle_command', {
+      p_action: 'OPEN_NEW_EVENT', p_meta: { _v: '3.3.0', event_name: 'v33 adopted night' },
+      p_expected_revision: await revision(), p_idempotency_key: 'v33-adopt-' + randomUUID(),
+    });
+    expect(opened).toMatchObject({ ok: true });
+
+    // The open phone must cross to the new event by itself: the ended card
+    // disappears and the lobby CTA returns, on the store's own verification tick.
+    await expect(p.page.getByTestId('event-ended-card')).toHaveCount(0, { timeout: 30_000 });
+    await expect(p.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 30_000 });
+    // And it is genuinely the new event, not the old one re-labelled.
+    const snap = await rpc(await p.uid() as string, 'snapshot');
+    expect(Number(snap.event.id)).not.toBe(Number(closedId));
+    expect(snap.event.event_ended_at).toBeNull();
+    expect(snap.event.next_team_number).toBe(1);
+    await expect(p.page.getByTestId('team-identity')).toBeVisible();
+  });
+
   test('release_station frees exactly one stuck seat and leaves the others bound', async () => {
     const lobbyUid = await identity(); const gateUid = await identity(); const supUid = await identity();
     await allowAdmin(supUid);

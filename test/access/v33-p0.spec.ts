@@ -279,6 +279,9 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
   // -------------------------------------------------------------------------
 
   test('a supervisor signs in and immediately sees QUẢN LÝ VỊ TRÍ, naming the device stuck on NPC1', async ({ browser }) => {
+    // Each case opens two real browsers against the RPC harness; under a serial
+    // full-suite run that is slower than the 90 s default.
+    test.setTimeout(180_000);
     const gateUid = await identity();
     expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
     await pool.query('update sc.operators set display_name=$1 where user_id=$2', ['NPC1 bo may', gateUid]);
@@ -301,6 +304,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
   });
 
   test('two taps free NPC1 only, and the picker opens that seat for the next phone', async ({ browser }) => {
+    test.setTimeout(180_000);
     const gateUid = await identity(); const lobbyUid = await identity();
     expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
     expect((await rpc(lobbyUid, 'claim_station', { p_role: 'LOBBY' })).ok).toBe(true);
@@ -335,6 +339,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
   });
 
   test('the panel will not free NPC1 while a team is inside, and says why in Vietnamese', async ({ browser }) => {
+    test.setTimeout(180_000);
     const lobbyUid = await identity(); const corridorUid = await identity(); const gateUid = await identity();
     for (const [uid, role] of [[lobbyUid, 'LOBBY'], [corridorUid, 'CORRIDOR'], [gateUid, 'GATE']] as const) {
       expect((await rpc(uid, 'claim_station', { p_role: role })).ok).toBe(true);

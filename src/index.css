@@ -2633,6 +2633,15 @@
 .npc2-history-state-VALID { color: var(--color-jade); }
 .npc2-history-state-INVALID { color: var(--color-mute); }
 .npc2-history-state-LATE { color: var(--color-ember); }
+/* A claim the round sealed over without a decision is neither accepted nor
+   rejected, and it must not read like either. The dashed pill is the same
+   "still open" silhouette the queued badges already use. */
+.npc2-history-state-PENDING {
+  color: var(--color-amber);
+  border: 1px dashed color-mix(in srgb, var(--color-amber) 55%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+}
 
 .npc2-history-note {
   margin: 2px 0 0;

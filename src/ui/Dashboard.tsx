@@ -1556,6 +1556,12 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
   // real bottom band, so the digits stop stretching to fill a whole empty
   // viewport between them — the clock stays dominant without the dead air.
   const dense = role === 'ROOM305' || (role === 'GATE' && primary.action === 'CONFIRM_EXIT');
+  // V3.4 §6: on the phone that owns the decision, the milestone card IS the
+  // statement — team, official time and who holds the next step, all from the
+  // stored result. The hero keeps the frozen number itself (the contract the
+  // workflow suite pins), but the screen stops repeating the same fact in three
+  // more places under it.
+  const npc2Sealed = role === 'ROOM305' && npc2Stage.finalized;
 
   return (
     <main
@@ -1589,19 +1595,28 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           number beside it. One component for phone, wall and result. */}
       <div className="countdown-hero flex flex-1 flex-col items-center justify-center gap-2 py-1" data-testid="countdown-hero">
         <TimeDigits mm={countdown.mm} ss={countdown.ss} cs={countdown.cs} stage={stageInput} mode={countdown.mode} variant="phone" />
-        <div className="clock-meter" data-testid="countdown-meter" aria-hidden>
-          <span style={{ width: `${(remainingShare * 100).toFixed(2)}%` }} />
-        </div>
-        <p className="countdown-team" data-testid="countdown-team">
-          {countdown.teamText.toUpperCase()}
-        </p>
-        <p
-          className="countdown-status"
-          style={{ color: tone }}
-          data-testid="countdown-status"
-        >
-          {countdown.statusLine}
-        </p>
+        {/* The bar is the remaining share of a clock that is still running. Under
+            a frozen official number it would read as "time ran out", which is a
+            different fact — and for a win, a wrong one. */}
+        {countdown.mode === 'GAME' && (
+          <div className="clock-meter" data-testid="countdown-meter" aria-hidden>
+            <span style={{ width: `${(remainingShare * 100).toFixed(2)}%` }} />
+          </div>
+        )}
+        {!npc2Sealed && (
+          <p className="countdown-team" data-testid="countdown-team">
+            {countdown.teamText.toUpperCase()}
+          </p>
+        )}
+        {!npc2Sealed && (
+          <p
+            className="countdown-status"
+            style={{ color: tone }}
+            data-testid="countdown-status"
+          >
+            {countdown.statusLine}
+          </p>
+        )}
         {countdown.officialMs !== null && countdown.result === 'WON' && !(role === 'ROOM305' && npc2Stage.finalized) ? (
           <p className="mt-1 text-[11px] font-bold text-jade" data-testid="countdown-official">
             KẾT QUẢ CHÍNH THỨC · {formatClockCs(countdown.officialMs)}
@@ -1644,7 +1659,10 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           <AlertIcon />
           <span>{error}</span>
         </p>
-      ) : notice ? (
+      ) : notice && !npc2Sealed ? (
+        /* An error is never hidden. This is the success acknowledgement — and on
+           the sealed NPC2 screen the card below already states the same server
+           sentence, in larger type, with the timestamp that counts. */
         <p role="status" className="notice-band w-full" data-tone="info" data-testid="notice">
           <span>{notice}</span>
         </p>

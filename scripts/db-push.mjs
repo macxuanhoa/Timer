@@ -116,6 +116,11 @@ async function main() {
       // indexes back the live-round and outstanding-task probes. No rewrite of
       // any historical row.
       '0019_v33_operations.sql',
+      // V3.3 P0 diagnostics: the public board now carries the event's real state
+      // and the version floor (so "ĐANG ĐỒNG BỘ" and "the night is closed" are
+      // distinguishable without a session), plus public.min_client_version().
+      // Additive to the board payload; board_version stays 3.
+      '0020_v33_board_diagnostics.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

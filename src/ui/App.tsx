@@ -4,7 +4,7 @@ import { Home } from './Home';
 import { Observer } from './Observer';
 import { UpdateGate } from './UpdateGate';
 import { enterStation, gatewayFor, logout, refreshSession, saveSession, type StoredSession } from './session';
-import { USING_SUPABASE } from '../client/gateway';
+import { USING_SUPABASE, withTimeout } from '../client/gateway';
 import { LiveStore } from '../client/liveStore';
 import { PwaUpdate } from './PwaUpdate';
 import { isClientStale } from '../shared/version';
@@ -32,30 +32,28 @@ export default function App() {
     setError(null); setVerified(true); setSession(next);
   }, []);
 
-  // Pre-login probe. Supabase anon can call public.state_revision() (granted
-  // in migration 0019); local dev uses /api/revision directly. Failing the
-  // probe never blocks the app: an offline phone falls back to the store's own
-  // verifyNow tick once a session exists.
+  // Pre-login probe. public.min_client_version() (migration 0020) answers without
+  // a binding, unlike state_revision which is operator-only, so a phone learns it
+  // is stale before it claims a seat. Local dev reads the in-process hub instead.
+  // The probe never gates the app on success: only a definitive "stale" answer
+  // locks the surface, and a failed probe falls through to the normal flow where
+  // the store's own verify tick (now timeout-backed) keeps watching.
   useEffect(() => {
+    const probe = (floor: unknown) => {
+      if (typeof floor === 'string' && isClientStale(floor)) setBootStale(true);
+    };
     if (!USING_SUPABASE) {
-      // Local dev / transport test engine: read the ceiling from the in-process
-      // hub. If the fixture has raised it, lock the surface immediately.
-      void fetch('/api/revision').then((res) => res.ok ? res.json() : null)
-        .then((body) => {
-          const floor = (body as { min_client_version?: string } | null)?.min_client_version;
-          if (isClientStale(floor)) setBootStale(true);
-        })
+      withTimeout(
+        fetch('/api/revision', { signal: AbortSignal.timeout(6_000) }).then((res) => (res.ok ? res.json() : null)),
+        7_000, '/api/revision',
+      ).then((body) => probe((body as { min_client_version?: string } | null)?.min_client_version))
         .catch(() => undefined);
       return;
     }
     void import('../client/supabaseAuth').then(({ supabase }) =>
-      supabase().rpc('state_revision').then(
-        ({ data }) => {
-          const row = data as { min_client_version?: string } | null;
-          if (isClientStale(row?.min_client_version)) setBootStale(true);
-        },
-        () => undefined,
-      ),
+      withTimeout(supabase().rpc('min_client_version'), 7_000, 'min_client_version')
+        .then(({ data }) => probe(data))
+        .catch(() => undefined),
     ).catch(() => undefined);
   }, []);
 

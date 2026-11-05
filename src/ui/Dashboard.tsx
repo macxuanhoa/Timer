@@ -126,11 +126,36 @@ export function Dashboard({ store, account, onLogout }: Props) {
   }, [snap, locked, countdown, bigOpen]);
 
   if (!snap || !countdown || !primary || !journey || !teamLine) {
+    // V3.3 P0: the boot screen must never be a dead end. Every gateway call now
+    // carries a hard timeout, so if no authoritative snapshot has landed the
+    // phone is genuinely offline or the read failed — say so in Vietnamese, name
+    // what it is doing about it, and give the operator a manual retry next to
+    // the automatic one (liveStore.verifyTick keeps polling on its own).
+    const syncAge = store.dataAgeMs();
+    const syncStalled = syncAge === null && state.status === 'SYNCING';
+    const failed = state.status === 'OFFLINE' || state.status === 'DEGRADED' || syncStalled;
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-ink text-mute" data-testid="booting">
-        <div className="text-center">
+        <div className="w-full max-w-[19rem] px-6 text-center">
           <p className="text-lg font-extrabold tracking-[0.18em] text-blood">SCREAM CONTROL</p>
-          <p className="mt-3 text-sm">{state.status === 'OFFLINE' ? 'ĐANG THỬ LẠI KẾT NỐI…' : 'ĐANG ĐỒNG BỘ TRẠNG THÁI…'}</p>
+          <p className="mt-3 text-sm" data-testid="booting-state">
+            {failed ? 'KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI MÁY CHỦ' : 'ĐANG ĐỒNG BỘ TRẠNG THÁI…'}
+          </p>
+          <p className="mt-1.5 text-[0.72rem] leading-snug text-mute" data-testid="booting-cause">
+            {failed
+              ? 'Máy chưa lấy được dữ liệu sự kiện. Kiểm tra Wi-Fi, hoặc bấm thử lại.'
+              : 'Đang tải dữ liệu trực tiếp từ máy chủ…'}
+          </p>
+          {failed ? (
+            <button
+              type="button"
+              onClick={() => void store.recover()}
+              className="mt-4 w-full rounded-panel border border-ember/60 bg-ember/10 px-4 py-3 text-[0.82rem] font-bold text-ember active:bg-ember/20"
+              data-testid="booting-retry"
+            >
+              THỬ LẠI NGAY
+            </button>
+          ) : null}
           <ReturnHome onLogout={onLogout} />
         </div>
       </div>

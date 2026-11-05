@@ -9,6 +9,7 @@ import {
 } from '../shared/constants';
 import type { StationBoard } from '../shared/types';
 import { USING_SUPABASE } from '../client/gateway';
+import { isClientStale } from '../shared/version';
 import { isAdminRoute, selectStation, type StoredSession } from './session';
 
 /** What each tile says to the person about to stand there. */
@@ -264,6 +265,40 @@ export function Home({ onEnter, canSelect = true, error }: {
               </>
             )}
           </div>
+        ) : null}
+        {/* V3.3 P0: the board now carries the event's real state, so the picker can
+            tell the truth instead of leaving every phone guessing at a spinner. The
+            three lines below are mutually exclusive diagnoses:
+              * board unreachable / too old  → retry, never an infinite "đang đồng bộ";
+              * event closed                 → say so, and say who reopens it;
+              * bundle below the server floor→ the update gate will take the phone
+                over on the next load, so point at it here too. */}
+        {USING_SUPABASE && !fresh ? (
+          <div className="mt-3 flex flex-col gap-2 rounded-panel border border-ember/50 bg-ember/5 px-3 py-2.5" role="status" data-testid="home-board-stalled">
+            <p className="text-[0.72rem] leading-snug text-ember">
+              Không đọc được bảng vị trí — kiểm tra kết nối internet của máy này.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refresh.current()}
+              className="rounded border border-ember/60 bg-ember/10 px-3 py-2 text-[0.72rem] font-bold text-ember"
+              data-testid="home-board-retry"
+            >
+              THỬ LẠI NGAY
+            </button>
+          </div>
+        ) : null}
+        {fresh && board && board.event_ended_at != null ? (
+          <p className="mt-2 rounded-panel border border-hair bg-panel px-3 py-2.5 text-[0.72rem] leading-snug text-mute" role="status" data-testid="home-event-closed">
+            <strong className="text-snow">SỰ KIỆN ĐÃ KẾT THÚC.</strong>{' '}
+            Ca trực trước đã đóng. Quản trị viên bấm <strong className="text-ember">MỞ SỰ KIỆN MỚI</strong> ở bảng quản trị
+            để bàn giao phòng cho ca tiếp theo — các máy khác sẽ tự chuyển sang sự kiện mới trong vài giây.
+          </p>
+        ) : null}
+        {fresh && board && isClientStale(board.min_client_version) ? (
+          <p className="mt-2 rounded-panel border border-blood/50 bg-blood/10 px-3 py-2.5 text-[0.72rem] leading-snug text-blood" role="status" data-testid="home-bundle-stale">
+            Máy này đang chạy bản ứng dụng cũ. Hãy đóng hẳn ứng dụng và mở lại để nhận bản mới.
+          </p>
         ) : null}
         <div aria-live="polite" className="home-feedback">
           {message || error ? <p role="alert" data-testid="home-error">{message ?? error}</p> :

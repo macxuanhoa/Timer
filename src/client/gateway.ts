@@ -32,6 +32,34 @@ export interface RevisionHint {
   event_id?: string;
 }
 
+/**
+ * V3.3 P0: every network call the store or the boot path makes carries a hard
+ * deadline. A stalled socket on venue Wi-Fi used to leave a phone awaiting a
+ * promise that never settled — the visible symptom was "ĐANG ĐỒNG BỘ" forever,
+ * because the boot read, the clock probe and the periodic verification all
+ * inherited the hang. withTimeout guarantees a settle (rejection) so each
+ * caller's existing failure path — OFFLINE, the retry notice, the periodic
+ * recheck — actually runs.
+ */
+export const GATEWAY_TIMEOUT_MS = 8_000;
+
+/**
+ * Accepts a PromiseLike on purpose: the Supabase client returns a Postgrest-
+ * FilterBuilder (a thenable) from `.rpc()`, and awaiting it directly is the
+ * idiomatic call site. The deadline must therefore wrap the thenable, not a
+ * pre-awaited promise.
+ */
+export function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolveP, rejectP) => {
+    const timer = setTimeout(() => rejectP(new Error(`${label}: request timed out after ${ms} ms`)), ms);
+    // unref-style guard for browsers: the timer is cleared on settle below.
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(timer); resolveP(v); },
+      (e) => { clearTimeout(timer); rejectP(e instanceof Error ? e : new Error(String(e))); },
+    );
+  });
+}
+
 /** Minimal transport contract shared by the local engine and Supabase. */
 export interface Gateway {
   kind: 'local' | 'supabase';
@@ -88,10 +116,14 @@ export class LocalGateway implements Gateway {
   private snapshotInFlight: Promise<Snapshot> | null = null;
 
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${this.cfg.baseUrl}${path}`, {
-      ...init,
-      headers: { ...this.auth, 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    });
+    const res = await withTimeout(
+      fetch(`${this.cfg.baseUrl}${path}`, {
+        ...init,
+        signal: init?.signal ?? AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
+        headers: { ...this.auth, 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      }),
+      GATEWAY_TIMEOUT_MS + 500, path,
+    );
     const body = (await res.json()) as T & { error?: string };
     if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `HTTP ${res.status}`);
     return body;

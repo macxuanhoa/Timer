@@ -248,6 +248,37 @@ The historical mint tool refuses operation on the new access model.
    Realtime broadcast for `sc.state` lands (the frame carries the new `event_id`, so a lower
    revision on the new pointer is treated as authoritative, not stale).
 
+15. **A phone stuck on `ĐANG ĐỒNG BỘ` (V3.3 P0)**: there is no such state any more. Every
+   authoritative read, command and clock probe now carries a deadline (8 s at the gateway, 9.5 s at
+   the store), so a stalled venue-Wi-Fi socket resolves instead of hanging a promise forever. When
+   no authoritative state can be read the screen says so in Vietnamese —
+   `KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI MÁY CHỦ` with `THỬ LẠI NGAY` — and the 10-second verification loop
+   keeps healing the phone by itself the moment the network answers again. The role picker reads the
+   event's real state off `station_board` (migration 0020), so an ended night is announced as
+   `SỰ KIỆN ĐÃ KẾT THÚC · chờ Quản trị mở sự kiện mới` instead of looking like a sync failure.
+
+16. **One stuck seat, not a board sweep (migration 0019)**: when a duty phone walked off and its
+   seat still shows `ĐÃ ĐỦ NGƯỜI`, the whole-board release is refused while the floor looks busy and
+   nothing else could free a single binding. `Xem thêm → Quản trị → GIẢI CỨU MỘT VỊ TRÍ` releases
+   exactly one named seat (two taps), authorises itself by the caller's own live SUPERVISOR binding,
+   leaves every other phone bound, and writes a `STATION_RELEASED` row in `sc.access_audit` naming
+   both parties. It is a pure access action: no clock, round, claim or checklist is touched, and it
+   deliberately works even from a supervisor phone that is itself below the version floor.
+
+17. **Forcing the fleet onto the current bundle**: the PWA now registers with `autoUpdate`,
+   `skipWaiting` and `clientsClaim`, and checks for a new build every 3 minutes. A phone that
+   reopens the app after a deploy gets the fresh shell immediately. For a phone that will not be
+   reopened, raise the server floor from the Supabase SQL editor:
+   `select sc.configure_min_client_version('3.3.0');`
+   From that moment every command from an older bundle is refused with `VERSION_STALE` *before* any
+   state rule runs, and the phone locks onto `ỨNG DỤNG CẦN CẬP NHẬT` with a single
+   `CẬP NHẬT NGAY` button that unregisters the service worker and reloads bypassing cache. Lower it
+   again with `select sc.configure_min_client_version('');`. Raise the floor only once every duty
+   phone is known to be on the new build — the gate has no exception for a night already running.
+   If no supervisor phone can be reached at all, the same `OPEN_NEW_EVENT` handoff can be driven
+   from the SQL editor through `handle_command` (documented at the bottom of migration 0020); it
+   uses the identical code path, so the audit row and idempotency bookkeeping are the same.
+
 ## Security and administration
 
 Migration **0016_unified_flow.sql** carries the V3 flow into the production authority: it adds the
@@ -295,6 +326,24 @@ Migration **0019_v33_operations.sql** adds the V3.3 stabilisation surface:
     dashboard runs on every read.
 
 Migration files 0001–0018 are unchanged.
+
+Migration **0020_v33_board_diagnostics.sql** makes the two field symptoms
+self-describing instead of supportable only by SQL. `sc.station_board()` — the one
+RPC reachable without any binding — additionally publishes the event the state
+pointer names (`event_id`, `event_name`, `event_started_at`, `event_ended_at`,
+`event_next_team_number`) and the current `min_client_version`, so the role picker
+can announce "the night is closed, a supervisor must open the next one" rather
+than showing a spinner that looks like a sync failure, and so support can verify
+Production event state read-only with no session. `public.min_client_version()`
+answers the same question for a phone that has not claimed anything yet.
+`board_version` stays 3 and every pre-existing field keeps its exact shape
+(scenario 043 asserts the seat capacities the client validates, because a board
+that fails that check is the one thing that would wedge the picker at
+"ĐANG ĐỒNG BỘ"). The migration also documents, but does not execute, the owner-only
+SQL path for driving `OPEN_NEW_EVENT` through `handle_command` when no supervisor
+phone is reachable — same code path, same audit row, same idempotency key rules.
+
+Migration files 0001–0019 are otherwise unchanged.
 
 Claims, releases, PIN changes and commands share a PostgreSQL transaction advisory lock.
 The user primary key, the partial unique index on (role, seat_slot) and the slot CHECK constraints

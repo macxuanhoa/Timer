@@ -441,6 +441,19 @@ export interface StationBoard {
    */
   reset_allowed?: boolean;
   reset_block_reason?: ResetBlockReason | null;
+  /**
+   * V3.3 P0: the real state of the event the state pointer names, published on the
+   * one RPC a phone can read before it holds any seat. This is what lets the picker
+   * say "ca trực đã đóng" instead of an unexplained "ĐANG ĐỒNG BỘ", and lets anyone
+   * verify Production event state read-only without an operator session.
+   */
+  event_id?: string | null;
+  event_name?: string | null;
+  event_started_at?: number | string | null;
+  event_ended_at?: number | string | null;
+  event_next_team_number?: number | null;
+  /** Minimum client bundle the command surface accepts; '' means the gate is off. */
+  min_client_version?: string;
   stations: StationSlot[];
 }
 

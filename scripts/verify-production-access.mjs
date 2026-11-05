@@ -1,14 +1,21 @@
-/* Non-destructive checks against the real production Supabase backend, V3.2.
+/* Non-destructive checks against the real production Supabase backend, V3.3.
  *
  * Run:  node --env-file=.env.local scripts/verify-production-access.mjs
  *
  * Proves: the V3.2 RPC surface is live (open seats, admin-gated SUPERVISOR,
- * force-aware reset, observer wrapper), the retired credential surface is
- * gone, and board reads work with zero auth.
+ * force-aware reset, observer wrapper), the retired credential surface is gone,
+ * board reads work with zero auth, and — new since V3.3 P0 — the board answers
+ * the two questions field support kept asking without a session:
+ *   "is the Production night actually closed?"   (station_board.event_*)
+ *   "is this bundle going to be refused?"        (public.min_client_version)
+ * plus the presence of the migration 0019/0020 surface (release_station, the
+ * version gate) reported by name so a partially-migrated host is visible.
  *
- * Safety: NO round is ever created, modified or aborted. The only seat writes
- * are claim + immediate release of a slot that was FREE before the test,
- * using throwaway probe identities, always cleaned up in finally. */
+ * Safety: NO round is ever created, modified or aborted, and no real seat is
+ * released. The only seat writes are claim + immediate release of a slot that
+ * was FREE before the test, using throwaway probe identities, always cleaned up
+ * in finally. The supervisor-handoff and version-gate checks below are read-only
+ * probes that assert a refusal, never a state change. */
 import { writeFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 
@@ -119,6 +126,53 @@ try {
     const answer = await rpc('reset_all_stations', { p_force: false }, await tokenOf(probe));
     assert(answer.code === 'RESET_NOT_AUTHORIZED', `unexpected: ${JSON.stringify(answer)}`);
     await rpc('release_device', {}, await tokenOf(probe));
+  });
+
+  await run('board answers the real event state with no session (V3.3 P0)', async () => {
+    assert('event_id' in boardSnapshot, 'station_board is missing event_id — migration 0020 not applied');
+    assert('event_ended_at' in boardSnapshot, 'station_board is missing event_ended_at — migration 0020 not applied');
+    assert('min_client_version' in boardSnapshot, 'station_board is missing min_client_version — migration 0020 not applied');
+    const closed = boardSnapshot.event_ended_at !== null;
+    // The next team number is what a new night starts from; it proves the fields
+    // describe the live pointer rather than a stale cache.
+    assert(Number.isInteger(boardSnapshot.event_next_team_number), `event_next_team_number=${boardSnapshot.event_next_team_number}`);
+    return `event ${boardSnapshot.event_id} "${boardSnapshot.event_name}" · ${closed ? 'ĐÃ ĐÓNG (cần mở sự kiện mới)' : 'đang mở'} · đội tiếp theo #${boardSnapshot.event_next_team_number} · floor=${boardSnapshot.min_client_version || 'off'}`;
+  });
+
+  await run('public.min_client_version() answers without any binding (V3.3 P0)', async () => {
+    const floor = await rpc('min_client_version', {});
+    assert(typeof floor === 'string', `unexpected ${JSON.stringify(floor)}`);
+    return floor === '' ? 'gate is off — every bundle is accepted' : `gate is on, floor = ${floor}`;
+  });
+
+  await run('release_station exists and refuses a non-admin caller (V3.3 P0)', async () => {
+    // Read-only shape check: a duty binding asking to free a peer must be turned
+    // away with the specific refusal, never by an absent function.
+    const free = (boardSnapshot.stations || []).find((s) => s.role !== 'SUPERVISOR' && s.role !== 'OBSERVER' && s.devices === 0);
+    if (!free) { skipped.push('every duty seat occupied: release_station refusal probe skipped'); return 'skipped (busy)'; }
+    const probe = await fresh();
+    const claimed = await rpc('claim_station', { p_role: free.role }, await tokenOf(probe));
+    assert(claimed.ok === true, `claim failed: ${JSON.stringify(claimed)}`);
+    const answer = await rpc('release_station', { p_role: 'GATE' }, await tokenOf(probe));
+    assert(answer.code === 'RELEASE_NOT_AUTHORIZED', `unexpected: ${JSON.stringify(answer)}`);
+    // The probe's own binding is untouched by a refused release, and we hand the
+    // seat back exactly as we found it.
+    assert((await rpc('whoami', {}, await tokenOf(probe)))?.role === free.role, 'refused release disturbed the caller');
+    await rpc('release_device', {}, await tokenOf(probe));
+    return `duty caller refused with RELEASE_NOT_AUTHORIZED on a ${free.role} probe`;
+  });
+
+  await run('an unbound caller cannot drive OPEN_NEW_EVENT (migration 0018 shape)', async () => {
+    // Proves the handoff is real and permission-guarded WITHOUT performing it:
+    // an anonymous, unbound identity must be refused, never allowed to open a
+    // night. No event state is written by this check.
+    const probe = await fresh();
+    let answer;
+    try { answer = await rpc('handle_command', { p_action: 'OPEN_NEW_EVENT', p_meta: {}, p_expected_revision: 0, p_idempotency_key: `probe-${crypto.randomUUID()}` }, await tokenOf(probe)); }
+    catch (error) { answer = JSON.parse(String(error.message).slice(0, 0) || '{}'); answer.message = String(error.message); }
+    const refused = answer?.ok !== true && (answer?.code === 'PERMISSION_DENIED' || /PERMISSION_DENIED|VỊ TRÍ/.test(answer?.message ?? ''));
+    assert(refused, `unbound OPEN_NEW_EVENT was not refused: ${JSON.stringify(answer).slice(0, 160)}`);
+    return 'handoff requires a live SUPERVISOR binding, as designed';
   });
 
   await run('observer wrapper joins, beats and leaves through public RPCs', async () => {

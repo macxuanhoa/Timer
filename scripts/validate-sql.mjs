@@ -88,6 +88,8 @@ try {
   run('041 open new event scenario', ['supabase/tests/041_open_new_event.sql']);
   run('019 v33 operations', ['supabase/migrations/0019_v33_operations.sql']);
   run('042 v33 operations scenario', ['supabase/tests/042_v33_operations.sql']);
+  run('020 v33 board diagnostics', ['supabase/migrations/0020_v33_board_diagnostics.sql']);
+  run('043 v33 board diagnostics scenario', ['supabase/tests/043_v33_board_diagnostics.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

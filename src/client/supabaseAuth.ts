@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Role } from '../shared/constants';
 import type { StationBoard } from '../shared/types';
+import { GATEWAY_TIMEOUT_MS, withTimeout } from './gateway';
 
 /**
  * Passwordless operator access (V3.2).
@@ -99,7 +100,14 @@ export async function ensureAnonymousSession(): Promise<void> {
   if (error) throw new Error(error.message);
   if (data.session) return;
 
-  const { error: signInError } = await sb.auth.signInAnonymously();
+  const { error: signInError } = await withTimeout(
+    sb.auth.signInAnonymously(), GATEWAY_TIMEOUT_MS, 'signInAnonymously',
+  ).catch((err: unknown) => {
+    // A stalled or refused network round trip must surface as the plain failure
+    // the caller already knows how to report ("CHƯA TẠO ĐƯỢC PHIÊN…"), never as
+    // an unhandled rejection, and never as a promise that never settles.
+    throw err instanceof Error ? err : new Error(String(err));
+  });
   if (!signInError) return;
   const raw = signInError.message ?? '';
   if (/anonymous/i.test(raw)) {
@@ -113,9 +121,9 @@ export async function ensureAnonymousSession(): Promise<void> {
 /** The server derives identity from auth.uid(), never a caller-supplied device. */
 export async function claimStation(role: Role): Promise<ClaimResult> {
   await ensureAnonymousSession();
-  const { data, error } = await supabase().rpc('claim_station', {
-    p_role: role,
-  });
+  const { data, error } = await withTimeout(
+    supabase().rpc('claim_station', { p_role: role }), GATEWAY_TIMEOUT_MS, 'claim_station',
+  );
   if (error) throw new Error(error.message);
   return data as ClaimResult;
 }
@@ -138,7 +146,7 @@ export async function currentProfile(): Promise<OperatorProfile | null> {
   if (sessionError) throw new Error(sessionError.message);
   if (!sessionData.session) return null;
 
-  const { data, error } = await sb.rpc('whoami');
+  const { data, error } = await withTimeout(sb.rpc('whoami'), GATEWAY_TIMEOUT_MS, 'whoami');
   if (error) throw new Error(error.message);
   const row = data as { user_id?: string; role?: Role; display_name?: string } | null;
   // The server resolves the binding from auth.uid(); refuse to use a profile

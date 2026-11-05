@@ -1,9 +1,20 @@
 import type { ConnectionStatus, Gateway, RevisionHint } from './gateway';
+import { GATEWAY_TIMEOUT_MS, withTimeout } from './gateway';
 import { ServerClockEstimate } from './clockSync';
 import { DEGRADED_AFTER_MS, VERIFY_INTERVAL_MS } from '../shared/constants';
 import { CLIENT_BUILD, isClientStale } from '../shared/version';
 import type { ActionType, CommandRequest, CommandResult, Snapshot } from '../shared/types';
 import type { Role } from '../shared/constants';
+
+/**
+ * Store-level ceiling for any single authoritative interaction. The gateways
+ * already carry their own timeout; this one is defence in depth: the promise the
+ * UI waits on ("ĐANG ĐỒNG BỘ …") must settle even if a gateway implementation
+ * forgets to bound a request, so no screen can ever hang on a network that went
+ * quiet. Slightly above the gateway budget so the gateway's sharper error
+ * normally wins.
+ */
+const STORE_SETTLE_MS = GATEWAY_TIMEOUT_MS + 1_500;
 
 export interface StoreState {
   status: ConnectionStatus;
@@ -49,6 +60,12 @@ export interface LiveStoreOptions {
   /** Verification cadence; overridden by tests. */
   verifyIntervalMs?: number;
   degradedAfterMs?: number;
+  /**
+   * Store-level settle ceiling for one authoritative interaction; overridden by
+   * tests that prove a hung transport still resolves quickly. Production uses the
+   * default, which sits just above the gateway's own request timeout.
+   */
+  settleMs?: number;
 }
 
 let seq = 0;
@@ -81,12 +98,14 @@ export class LiveStore {
   private verifyTimer: number | null = null;
   private readonly verifyMs: number;
   private readonly degradedMs: number;
+  private readonly settleMs: number;
   readonly clock: ServerClockEstimate;
 
   constructor(private readonly opts: LiveStoreOptions) {
     this.clock = new ServerClockEstimate(opts.mono);
     this.verifyMs = opts.verifyIntervalMs ?? VERIFY_INTERVAL_MS;
     this.degradedMs = opts.degradedAfterMs ?? DEGRADED_AFTER_MS;
+    this.settleMs = opts.settleMs ?? STORE_SETTLE_MS;
   }
 
   /* ---------------------------------------------------- useSyncExternalStore */
@@ -111,8 +130,13 @@ export class LiveStore {
     // one round trip before the dashboard appears instead of two. The results are
     // still applied in the original order — probe first, then snapshot — so every
     // patch, including every failure path, lands exactly as it did serially.
+    // V3.3 P0: neither await may hang. The clock probe is raced against the store
+    // ceiling, and the first read carries its own deadline inside readSnapshot, so
+    // `start()` always resolves and the periodic verification always gets its
+    // timer — the old failure mode was a boot that never settled and left the
+    // phone on "ĐANG ĐỒNG BỘ TRẠNG THÁI…" with no retry ever running.
     const firstRead = this.readSnapshot();
-    await this.probeClock();
+    await withTimeout(this.probeClock(), this.settleMs, 'boot clock').catch(() => undefined);
     await this.commitRead(firstRead);
     this.unsubscribe = this.opts.gateway.subscribe({
       onRevision: (hint) => {
@@ -164,7 +188,7 @@ export class LiveStore {
   /** Called after a reconnect, a foreground resume or a manual retry. */
   async recover(): Promise<void> {
     this.clock.reset();
-    await this.probeClock();
+    await withTimeout(this.probeClock(), this.settleMs, 'recover clock').catch(() => undefined);
     await this.refresh();
   }
 
@@ -183,12 +207,21 @@ export class LiveStore {
   private verifyTick = () => {
     this.checkFreshness();
     void this.verifyNow();
+    // V3.3 P0: a dead or silent realtime stream must never leave the phone waiting
+    // on a "ĐANG ĐỒNG BỘ" that only resolves on the next slow poll. When the
+    // stream claims to be alive but no authoritative read has landed for more
+    // than a quarter of the verify window, the hint channel is lying — verify
+    // again immediately instead of idling until the next tick.
+    const since = this.dataAgeMs();
+    if (!this.state.streamAlive || (since !== null && since > Math.max(2_500, this.verifyMs / 4))) {
+      void this.verifyNow();
+    }
   };
 
   async verifyNow(): Promise<void> {
     try {
       const started = this.now();
-      const rev = await this.opts.gateway.revision();
+      const rev = await withTimeout(this.opts.gateway.revision(), this.settleMs, 'revision');
       this.clock.observe(rev.server_now_ms, started);
       const fresh = rev.event_id === (this.state.snapshot?.event.id ?? rev.event_id) && rev.revision === this.state.snapshot?.revision;
       // V3.3 forced-update: the same probe that checks freshness also reports the
@@ -223,10 +256,12 @@ export class LiveStore {
   /**
    * Issues an authoritative read without waiting for it. A failed read becomes
    * `null` rather than a rejection, so a read started before its consumer awaits
-   * it can never surface as an unhandled rejection.
+   * it can never surface as an unhandled rejection. V3.3 P0: the read is also
+   * bounded at the store ceiling, so the boot snapshot and every hint-driven
+   * refresh settle even when the transport never answers.
    */
   private readSnapshot(): Promise<Snapshot | null> {
-    return this.opts.gateway.snapshot().then(
+    return withTimeout(this.opts.gateway.snapshot(), this.settleMs, 'snapshot').then(
       (snap) => snap,
       () => null,
     );
@@ -368,7 +403,16 @@ export class LiveStore {
     for (let i = 0; i < attempts; i++) {
       const drop = options.dropAllResponses === true || (options.dropResponseOnce === true && i === 0);
       try {
-        return await this.opts.gateway.command(req, drop ? { dropResponseOnce: true } : {});
+        // V3.3 P0: the store ceiling applies to writes as well. A command whose
+        // reply never arrives must fall into the reconcile path (which asks the
+        // server, by idempotency key, whether the action committed) instead of
+        // leaving the phone holding `pending` forever with the CTA stuck on
+        // "ĐANG GHI…". The timeout is a client-side give-up, never a claim that
+        // the write did not happen.
+        return await withTimeout(
+          this.opts.gateway.command(req, drop ? { dropResponseOnce: true } : {}),
+          this.settleMs, 'command',
+        );
       } catch (err) {
         lastError = err;
         if (i < attempts - 1) await new Promise((r) => setTimeout(r, 350 * (i + 1)));
@@ -386,7 +430,7 @@ export class LiveStore {
     this.patch({ verifying: action, status: 'SYNCING' });
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const status = await this.opts.gateway.operationStatus(key);
+        const status = await withTimeout(this.opts.gateway.operationStatus(key), this.settleMs, 'operationStatus');
         if (status && status.found === true) {
           await this.refresh(status.revision);
           this.patch({ notice: 'ĐÃ GHI NHẬN (xác minh với máy chủ)' });

@@ -7,6 +7,7 @@ import type {
   Snapshot,
 } from '../shared/types';
 import type { ConnectionStatus, Gateway, RevisionHint } from './gateway';
+import { GATEWAY_TIMEOUT_MS, withTimeout } from './gateway';
 import { supabase } from './supabaseAuth';
 import { finalizeSnapshot } from '../shared/machine';
 
@@ -14,12 +15,29 @@ import { finalizeSnapshot } from '../shared/machine';
  * Production gateway: every write goes through the transactional `sc.handle_command`
  * RPC (permissions enforced inside Postgres), every read through `sc.snapshot()`.
  * Realtime is used only as a revision hint — the snapshot is the truth.
+ *
+ * V3.3 P0: every RPC carries a hard deadline. supabase-js has no request timeout
+ * of its own, and a stalled socket on venue Wi-Fi used to leave the phone awaiting
+ * a promise that never settled — the boot read, the clock probe and the periodic
+ * verification all inherited the hang, and the visible symptom was "ĐANG ĐỒNG BỘ"
+ * forever. Each call now rejects within GATEWAY_TIMEOUT_MS so the store's failure
+ * paths (OFFLINE, retry, notice) actually run.
  */
 export class SupabaseGateway implements Gateway {
   kind = 'supabase' as const;
   private channel: ReturnType<SupabaseClient['channel']> | null = null;
   /** The one authoritative read in flight, shared by everyone who asks for it. */
   private snapshotInFlight: Promise<Snapshot> | null = null;
+
+  private rpc<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+    return withTimeout(
+      this.sb.rpc(name, args).then(({ data, error }) => {
+        if (error) throw new Error(error.message);
+        return data as T;
+      }),
+      GATEWAY_TIMEOUT_MS, name,
+    );
+  }
 
   private constructor(private readonly sb: SupabaseClient, private readonly role: string) {}
 
@@ -57,9 +75,7 @@ export class SupabaseGateway implements Gateway {
   }
 
   private async readSnapshot(): Promise<Snapshot> {
-    const { data, error } = await this.sb.rpc('snapshot');
-    if (error) throw new Error(error.message);
-    const raw = data as { revision: number; server_now_ms: number } & Omit<Snapshot, 'event_status' | 'phase' | 'active_round' | 'server_now_ms'>;
+    const raw = await this.rpc<Snapshot & { revision: number | string; server_now_ms: number | string }>('snapshot');
     return finalizeSnapshot({
       revision: Number(raw.revision),
       server_now_ms: Number(raw.server_now_ms),
@@ -79,36 +95,34 @@ export class SupabaseGateway implements Gateway {
   }
 
   async time(): Promise<number> {
-    const { data, error } = await this.sb.rpc('server_now_ms');
-    if (error) throw new Error(error.message);
-    return Number(data);
+    return Number(await this.rpc<number>('server_now_ms'));
   }
 
   /** Cheap revision probe for the periodic freshness check. */
   async revision(): Promise<RevisionHintResponse> {
-    const { data, error } = await this.sb.rpc('state_revision');
-    if (error) throw new Error(error.message);
-    return data as RevisionHintResponse;
+    return await this.rpc<RevisionHintResponse>('state_revision');
   }
 
   /** Scenario G: was this idempotency key already committed? */
   async operationStatus(idempotencyKey: string): Promise<OperationStatus> {
-    const { data, error } = await this.sb.rpc('operation_status', { p_idempotency_key: idempotencyKey });
-    if (error) throw new Error(error.message);
-    return (data ?? { found: false }) as OperationStatus;
+    const data = await this.rpc<OperationStatus>('operation_status', { p_idempotency_key: idempotencyKey });
+    return data ?? { found: false };
   }
 
   async command(req: CommandRequest, opts?: { dropResponseOnce?: boolean }): Promise<CommandResult> {
-    const { data, error } = await this.sb.rpc('handle_command', {
+    // The command timeout is deliberately the same window as a read: a committed
+    // write whose reply is lost lands in the store's reconcile path, which answers
+    // by idempotency key. A client-side timeout here never means "the server did
+    // not do it".
+    const data = await this.rpc<CommandResult>('handle_command', {
       p_action: req.action,
       p_meta: { ...(req.meta ?? {}), ...(req.press ? { _press: req.press } : {}) },
       p_expected_revision: req.expected_revision,
       p_idempotency_key: req.idempotency_key,
     });
-    if (error) throw new Error(error.message);
     // Test-only simulation of a lost reply (G02); the RPC itself already committed.
     if (opts?.dropResponseOnce) throw new Error('ECONNRESET after commit');
-    return data as CommandResult;
+    return data;
   }
 
   /**

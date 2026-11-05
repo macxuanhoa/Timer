@@ -51,7 +51,7 @@ const revision = async () => Number((await pool.query('select revision from sc.e
  */
 async function phone(
   browser: Browser,
-  transport: { hangSnapshot: boolean } = { hangSnapshot: false },
+  transport: { hangSnapshot: boolean; noStationAdmin?: boolean } = { hangSnapshot: false },
   /** '/admin' for an organiser device: the retained admin is a route, not a tile. */
   path = '/',
 ) {
@@ -72,6 +72,15 @@ async function phone(
       const name = url.pathname.split('/').at(-1)!;
       // The field symptom: an authoritative read that never settles.
       if (name === 'snapshot' && transport.hangSnapshot) return;
+      // Today's Production: migration 0021 is not applied yet, so the roster RPC
+      // is simply not in the schema cache. PostgREST says PGRST202.
+      if (name === 'station_admin' && transport.noStationAdmin) {
+        await route.fulfill({ status: 404, json: {
+          code: 'PGRST202',
+          message: `Could not find the function public.${name} without parameters in the schema cache`,
+        } });
+        return;
+      }
       try {
         const result = await rpc(uid, name, route.request().postDataJSON() ?? {});
         await route.fulfill({ json: result });
@@ -89,8 +98,11 @@ async function phone(
 /** An organiser phone: /admin, allow-listed mid-session, then into the dashboard.
  *  This is the exact chain the brief demands work — login SUPERVISOR → see the
  *  seat management → free one seat. */
-async function adminPhone(browser: Browser) {
-  const a = await phone(browser, { hangSnapshot: false }, '/admin');
+async function adminPhone(
+  browser: Browser,
+  transport: { hangSnapshot: boolean; noStationAdmin?: boolean } = { hangSnapshot: false },
+) {
+  const a = await phone(browser, transport, '/admin');
   await expect(a.page.getByTestId('admin-panel')).toBeVisible();
   await allowAdmin(a.uid()!);
   await a.page.getByTestId('home-admin-open').click();
@@ -373,5 +385,37 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await expect(a.page.getByTestId('seat-holder-GATE')).toContainText(gateUid.slice(0, 8));
     const stillHeld = await rpc(null, 'station_board');
     expect(stillHeld.stations.find((s: { role: string }) => s.role === 'GATE').devices).toBe(1);
+  });
+
+  test('with migration 0021 not applied yet, the panel still frees the stuck seat', async ({ browser }) => {
+    // This is Production as it stands right now: release_station exists since
+    // 0019, station_admin does not exist at all. The missing roster must degrade
+    // to an unnamed seat list, never to a dead end — the whole complaint was that
+    // the operator could not free NPC1.
+    test.setTimeout(180_000);
+    const gateUid = await identity();
+    expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
+
+    const a = await adminPhone(browser, { hangSnapshot: false, noStationAdmin: true });
+    await a.page.getByTestId('open-seat-management').click();
+    await expect(a.page.getByTestId('seat-management')).toBeVisible({ timeout: 20_000 });
+    // Every seat is still listed, and the honest note says the roster is missing.
+    await expect(a.page.getByTestId('seat-row-ROOM305')).toBeVisible();
+    await expect(a.page.getByTestId('seat-mgmt-degraded')).toContainText('Không đọc được danh sách thiết bị');
+    // Presence still comes through: the snapshot names which seats are bound, so
+    // NPC1 is not falsely reported as free.
+    await expect(a.page.getByTestId('seat-state-GATE')).toContainText('ĐANG GIỮ');
+    await expect(a.page.getByTestId('seat-state-ROOM305')).toHaveText('CÒN TRỐNG');
+    // No holder names are invented when the server cannot supply them.
+    await expect(a.page.getByTestId('seat-holder-GATE')).toHaveCount(0);
+
+    await a.page.getByTestId('seat-release-GATE').click();
+    await a.page.getByTestId('seat-release-GATE').click();
+    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NPC 1', { timeout: 20_000 });
+
+    const board = await rpc(null, 'station_board');
+    expect(board.stations.find((s: { role: string }) => s.role === 'GATE').devices).toBe(0);
+    const p = await phone(browser);
+    await expect(p.page.getByTestId('station-GATE')).toBeEnabled({ timeout: 20_000 });
   });
 });

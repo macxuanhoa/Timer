@@ -16,6 +16,11 @@ import type { StoredSession } from '../src/ui/session';
  */
 let server: Server;
 let baseUrl = '';
+/** The authoritative clock for this harness. It is a FakeClock on purpose, so a
+ *  test can step the server's notion of time; it therefore does NOT follow
+ *  Date.now(). Any assertion about the client's clock estimate has to compare
+ *  against this clock, never against the wall clock. */
+let clock: FakeClock;
 const stores = new Map<Role, LiveStore>();
 const tokens = new Map<Role, string>();
 /** Filled by the convergence test; reported, never invented. */
@@ -90,7 +95,8 @@ async function press(role: Role, action: Parameters<LiveStore['act']>[0], meta?:
 }
 
 beforeAll(async () => {
-  const hub = createHub({ store: new MemoryStore(), allowTestClock: true, clock: new FakeClock(Date.now()) });
+  clock = new FakeClock(Date.now());
+  const hub = createHub({ store: new MemoryStore(), allowTestClock: true, clock });
   server = createServer(hub.handler);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -335,7 +341,9 @@ describe('PASS 4 — real HTTP synchronisation between the phones', () => {
     };
     expect(probe.revision).toBe(stores.get('SUPERVISOR')!.getSnapshot().revision);
     expect(typeof probe.event_id).toBe('string');
-    expect(Math.abs(probe.server_now_ms - Date.now())).toBeLessThan(1500);
+    // Against the authoritative clock, not Date.now(): the harness clock is a
+    // frozen FakeClock, so wall time has no bearing on what the server reports.
+    expect(Math.abs(probe.server_now_ms - clock.nowMs())).toBeLessThan(50);
 
     const missing = await (await fetch(`${baseUrl}/api/operation?key=nope`, { headers: { authorization: `Bearer ${token}` } })).json() as { found: boolean };
     expect(missing.found).toBe(false); // never a null body the client must guess about
@@ -363,7 +371,11 @@ describe('PASS 4 — real HTTP synchronisation between the phones', () => {
     // The countdown is the stored deadline, not something the phone recomputes.
     expect(snap.active_round?.deadline_at).toBe(deadline);
     expect(snap.event.event_started_at).toBe(eventStarted);
-    expect(Math.abs(reloaded.serverNow() - Date.now())).toBeLessThan(1000);
+    // The reloaded store's estimate has to track the authoritative clock. It is
+    // compared with `clock`, not `Date.now()`: this harness never advances its
+    // FakeClock, so the wall clock drifts away from server time by the suite's
+    // own runtime — measuring that would say nothing about the estimate.
+    expect(Math.abs(reloaded.serverNow() - clock.nowMs())).toBeLessThan(1_000);
     await clearFloor();
   });
 

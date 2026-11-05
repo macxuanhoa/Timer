@@ -356,7 +356,10 @@ that fails that check is the one thing that would wedge the picker at
 SQL path for driving `OPEN_NEW_EVENT` through `handle_command` when no supervisor
 phone is reachable — same code path, same audit row, same idempotency key rules.
 
-Migration files 0001–0019 are otherwise unchanged.
+Migration files 0001–0020 are unchanged as files. 0021 does what 0019 did to 0018:
+it installs a **new** `create or replace function sc.release_station(text)` in its own
+file, so the already-applied 0019 script is never rewritten while the live definition
+moves forward — the forward-only pattern this schema uses throughout.
 
 Migration **0021_v33_seat_management.sql** answers the third field report — "NPC1
 đang ĐÃ ĐỦ NGƯỜI mà không tìm thấy chức năng giải phóng vị trí". Two causes,
@@ -471,7 +474,21 @@ npm run test:access
 npm run build
 ~~~
 
-SQL validation uses a disposable local PostgreSQL 16 Docker container. Historical access
+One case was measuring the wrong clock. `test/transport.test.ts` "15b" checks that a
+reloading phone's server-clock estimate tracks the server, but the harness runs the
+authoritative engine on a frozen `FakeClock`: server time stands still while `Date.now()`
+keeps moving, so the old 1000 ms window against the wall clock was really measuring how
+long the suite had been running (it reached 1240 ms). "15b" and the revision-probe case
+now compare against the harness clock they are actually testing — stricter than before
+and stable under load. Every other case, including the measured propagation numbers in
+"14b/15", is deterministic.
+
+SQL validation uses a disposable local PostgreSQL 16 Docker container. Scenario
+**044** covers the seat-management surface against the real RPCs: the roster names the
+device holding each seat and how long it has held it, a duty caller and an anonymous
+caller are both refused, a queued round stays releasable, a live round is refused with
+`FLOOR_BUSY` and audited, and closing the round unblocks the seat without moving a
+score or a revision. Historical access
 scenarios run before 0010; scenario 033 then checks the capacity, binding, preservation,
 PIN and RLS contract of that release. 0011 normalises press instants and scenario 034 checks that a
 fractional or malformed press still commits the command; scenarios 035–038 check the round-only

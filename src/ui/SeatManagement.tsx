@@ -122,14 +122,32 @@ export function SeatManagement({ store, now }: Props) {
     );
   }
 
-  const stations: SeatReport[] = report?.stations
-    ?? DUTY_SEATS.map((role) => ({
-      role, capacity: role === 'SUPERVISOR' ? 2 : 1, devices: 0, holders: [], releasable: true,
-    }));
-  const blockReason = report?.floor_block_reason ?? null;
   // Without the 0021 report we cannot know the floor verdict, so we never claim
   // a seat is blocked: the buttons stay live and PostgreSQL gives the answer.
   const knowsFloor = report?.ok === true;
+
+  // Degraded mode (0021 not applied — Production today). The live snapshot
+  // already lists which roles a device is currently bound to, so the panel can
+  // still say "ĐANG GIỮ" instead of falsely reporting every seat as free. It
+  // just cannot name the individual phone, and it says so.
+  //
+  // Trap worth naming: sc.operator_states() emits a row for all five roles
+  // whether or not anybody holds the seat, and marks an empty one with a null
+  // display_name. Presence has to be read from that, never from row count.
+  const bound = new Set<Role>(
+    (store.getSnapshot().snapshot?.operators ?? [])
+      .filter((o) => o.role !== 'OBSERVER' && Boolean(o.display_name))
+      .map((o) => o.role),
+  );
+  const stations: SeatReport[] = report?.stations
+    ?? DUTY_SEATS.map((role) => ({
+      role,
+      capacity: role === 'SUPERVISOR' ? 2 : 1,
+      devices: bound.has(role) ? 1 : 0,
+      holders: [],
+      releasable: true,
+    }));
+  const blockReason = report?.floor_block_reason ?? null;
 
   return (
     <div className="flex flex-col gap-2" data-testid="seat-management">

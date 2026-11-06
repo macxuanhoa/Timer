@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import type { AttemptRow, ReadinessView, ResetBoard, ResetRow, ResultSummary } from '../client/selectors';
 import { pad } from '../client/selectors';
-import { ROLE_SHORT, type ResetTaskKey, type Role } from '../shared/constants';
+import { type ResetTaskKey, type Role } from '../shared/constants';
 import { formatClockCs, formatWallTime } from '../shared/metrics';
 import {
   AlertIcon,
@@ -65,8 +65,23 @@ function RowMark({ row }: { row: ResetRow }) {
  * walks them. The rows are read-only by construction: the only press that can
  * change one of them lives in the station's own action control, and only for the
  * rows that belong to that station.
+ *
+ * V3.4.1 — a note line is only printed where it carries a fact the badge cannot:
+ * the server timestamp, or this phone's own write outcome. “Phần việc của NPC 2 ·
+ * máy này không xác nhận thay được” under a row already badged “CHỜ NPC 2” said the
+ * same thing twice, three times down one card, and the card footnote then said it
+ * a fourth time. The “check the area first” rule is the press's own hint, which
+ * names the area the button is about to mark — so the row stays quiet.
+ *
+ * The owner gets named once too. `resolveResetBoard` builds the waiting badge from
+ * the owner's own short code, so “NPC 2” next to “CHỜ NPC 2” was one station
+ * introduced twice in the same line; the label keeps its owner only where the
+ * badge does not already carry it.
  */
 export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role }) {
+  const noteWorthReading = (row: ResetRow) =>
+    row.state === 'done' || row.state === 'failed' || row.state === 'submitting';
+  const badgeNamesOwner = (row: ResetRow) => row.owner !== '' && row.status.includes(row.owner);
   return (
     <section className="reset-card" data-testid="reset-checklist" data-done={board.done} data-total={board.total}>
       <header className="reset-head">
@@ -94,24 +109,34 @@ export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role 
               <span className="reset-row-top">
                 <span className="reset-area">
                   {row.label}
-                  {row.mine ? <span className="reset-mine">· phần của bạn</span> : <span className="reset-owner">{row.owner}</span>}
+                  {row.mine ? (
+                    <span className="reset-mine">· phần của bạn</span>
+                  ) : !badgeNamesOwner(row) ? (
+                    <span className="reset-owner">{row.owner}</span>
+                  ) : null}
                 </span>
                 <span className="badge" data-tone={ROW_TONE[row.state]} data-testid={`reset-state-${row.key}`}>
                   {row.status}
                 </span>
               </span>
-              <span className="reset-note" data-testid={`reset-note-${row.key}`}>{row.note}</span>
+              {noteWorthReading(row) ? (
+                <span className="reset-note" data-testid={`reset-note-${row.key}`}>{row.note}</span>
+              ) : null}
             </span>
           </li>
         ))}
       </ul>
-      <p className="reset-foot" data-testid="reset-footnote">
-        {board.allDone
-          ? 'Cả ba khu vực đã được xác nhận · NPC 1 còn một bước chốt khu vực.'
-          : role === 'GATE'
-            ? 'Máy này chỉ xác nhận phần việc của NPC 1 · các khu vực khác do đúng vị trí đó chốt.'
-            : 'Chỉ vị trí đứng tại khu vực này mới xác nhận được · màn hình này chỉ đọc.'}
-      </p>
+      {board.allDone ? (
+        <p className="reset-foot" data-testid="reset-footnote">
+          Cả ba khu vực đã được xác nhận · NPC 1 còn một bước chốt khu vực.
+        </p>
+      ) : role !== 'GATE' ? (
+        /* The one reader who has no row of their own still needs to know why the
+           card cannot be pressed here. NPC 1's own screen says it row by row. */
+        <p className="reset-foot" data-testid="reset-footnote">
+          Chỉ vị trí đứng tại khu vực này mới xác nhận được · màn hình này chỉ đọc.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -158,9 +183,7 @@ export function RoundResultCard({ summary, teamNumber, nextLimitLabel }: {
       </p>
       <p className="round-result-next" data-testid="next-round-note">
         <ClockIcon className="h-3.5 w-3.5 shrink-0" />
-        <span>
-          <span className="digital">{nextLimitLabel}</span> là thời lượng <b>lượt chơi kế tiếp</b> — chưa chạy và không thuộc lượt vừa xong
-        </span>
+        <span>LƯỢT KẾ TIẾP · <span className="digital">{nextLimitLabel}</span></span>
       </p>
     </section>
   );
@@ -180,17 +203,19 @@ export function NextTeamStatus({ readiness }: { readiness: ReadinessView }) {
         {readiness.key === 'ready' ? <CheckIcon className="h-4 w-4" /> : <HourglassIcon className="h-4 w-4" />}
         {readiness.title}
       </p>
-      <p className="readiness-detail" data-testid="next-team-detail">{readiness.detail}</p>
+      {/* V3.4.1: the sentence naming the outstanding areas was the checklist directly
+          above it, row for row. Who is still owed a confirmation is the badge. */}
       {readiness.waitingOn.length > 0 ? (
         <p className="readiness-owners">
           <span className="badge" data-tone={tone} data-testid="next-team-waiting">
             CHỜ {readiness.waitingOn.join(' · ')}
           </span>
         </p>
-      ) : null}
-      <p className="readiness-foot">
-        Xác nhận reset chỉ hoàn tất khu vực — không nhả vị trí máy, không đóng hay mở sự kiện, không xóa lịch sử và kết quả đã chốt.
-      </p>
+      ) : (
+        <p className="readiness-detail" data-testid="next-team-detail">{readiness.detail}</p>
+      )}
+      {/* V3.4.1: what a reset confirmation does and does not touch is stated once, in
+          the sheet's Quản trị group, next to the controls it describes. */}
     </section>
   );
 }
@@ -238,34 +263,5 @@ export function AttemptLedger({ attempts }: { attempts: AttemptRow[] }) {
         </ul>
       ) : null}
     </section>
-  );
-}
-
-/**
- * The one sentence under the reset action, naming whose hands the remaining
- * areas are in. It never restates a status the checklist has not got from the
- * server, and it never offers a press for an area this station does not own.
- */
-export function ResetActionNote({ board }: { board: ResetBoard }) {
-  const mine = board.rows.filter((r) => r.mine);
-  if (mine.length === 0) {
-    return (
-      <p className="reset-action-note" data-testid="reset-action-note" data-tone="idle">
-        Máy này không giữ khu vực nào trong ba mục trên · không có thao tác reset ở đây.
-      </p>
-    );
-  }
-  const outstanding = mine.filter((r) => r.state !== 'done');
-  return (
-    <p
-      className="reset-action-note"
-      data-testid="reset-action-note"
-      data-tone={outstanding.length === 0 ? 'confirmed' : 'live'}
-      data-state={outstanding.length === 0 ? 'done' : 'todo'}
-    >
-      {outstanding.length === 0
-        ? `${ROLE_SHORT.GATE ?? 'Máy này'} đã xác nhận đủ phần việc · chỉ còn trạng thái đọc.`
-        : 'Chỉ bấm khi khu vực đã được đặt lại thật · máy chủ lưu mốc và người xác nhận.'}
-    </p>
   );
 }

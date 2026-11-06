@@ -235,7 +235,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     expect(Number(snap.event.id)).not.toBe(Number(closedId));
     expect(snap.event.event_ended_at).toBeNull();
     expect(snap.event.next_team_number).toBe(1);
-    await expect(p.page.getByTestId('team-identity')).toBeVisible();
+    await expect(p.page.getByTestId('r01-team-stage')).toBeVisible();
   });
 
   test('release_station frees exactly one stuck seat and leaves the others bound', async () => {
@@ -307,8 +307,13 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     const a = await adminPhone(browser);
     // One tap from the dashboard header — no menu hunting, no buried accordion.
     await a.page.getByTestId('open-seat-management').click();
-    await expect(a.page.getByTestId('seat-management')).toBeVisible({ timeout: 20_000 });
-    await expect(a.page.getByTestId('seat-management')).toContainText('QUẢN LÝ VỊ TRÍ');
+    await expect(a.page.getByTestId('admin-group-seats')).toBeVisible({ timeout: 20_000 });
+    // V3.4.1: the panel used to print its own “QUẢN LÝ VỊ TRÍ” one row under the
+    // group heading of exactly that name. The heading belongs to the group, so
+    // this guard reads the group the operator actually lands on — the promise it
+    // tests (station management is the first thing a supervisor sees) is unchanged.
+    await expect(a.page.getByTestId('admin-group-seats')).toContainText('QUẢN LÝ VỊ TRÍ');
+    await expect(a.page.getByTestId('seat-management')).toBeVisible();
 
     // The seat reads as held, and says who holds it. Before migration 0021 no
     // screen could answer this at all.

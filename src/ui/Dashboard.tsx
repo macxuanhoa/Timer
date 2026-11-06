@@ -34,8 +34,6 @@ import { alarms } from './sound';
 import {
   PHASE_LABEL,
   ROLE_AREA,
-  ROLE_DUTY,
-  ROLE_LABEL,
   ROLE_PERSON,
   ROLE_SHORT,
   TEAM_NAME_MAX,
@@ -63,7 +61,6 @@ import {
   GearIcon,
   PencilIcon,
   PlayIcon,
-  RunnerIcon,
   SignalIcon,
   SignalOffIcon,
   StopIcon,
@@ -314,12 +311,9 @@ export function Dashboard({ store, account, onLogout }: Props) {
                 {ROLE_SHORT[account.role]}
               </span>
             </div>
-            {/* The pill is a readout, not a menu — it no longer wears a chevron it
-                cannot act on. The caption under it is dropped on the phone that
-                already states its identity in full one row below. */}
-            {locked || account.role !== 'LOBBY' ? (
-              <span className="pr-0.5 text-[8px] font-semibold tracking-[0.08em] text-mute">{ROLE_LABEL[account.role]}</span>
-            ) : null}
+            {/* V3.4.1: the caption under the pill spelled out the same identity the
+                role band prints one block below, at a readable size. The pill is a
+                readout, not a menu, so it now carries the code and nothing else. */}
           </div>
           {/* V3.3 P0: for the organiser, "where are the seats" is a first-class
               destination, not the fourth thing inside a menu. One tap lands on
@@ -403,7 +397,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
               snap={snap}
               primary={primary}
               journey={journey}
-              teamLine={teamLine}
               handoff={handoff}
               alerts={alerts}
               state={state}
@@ -475,7 +468,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
               phase={phase}
               primary={primary}
               journey={journey}
-              teamLine={teamLine}
               alerts={alerts}
               state={state}
               syncBroken={syncBroken}
@@ -486,7 +478,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
           {/* ------------------------------------------------------- team card */}
           <section className="card tm-card" data-testid="active-team">
             <div className="flex items-center justify-between gap-2">
-              <h1 className="digital team-digits font-bold text-snow">
+              <h1 className="digital team-digits font-bold text-snow" data-testid="team-identity">
                 ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}
               </h1>
               <TeamNameEditor
@@ -526,11 +518,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
               {teamLine.text}
               {round?.team_name ? <span className="text-mute"> · {round.team_name}</span> : null}
             </p>
-            {nameOpen ? null : (
-              <p className="mt-1 text-[9.5px] leading-snug text-mute" data-testid="team-identity">
-                {teamLabel(round, snap.event.next_team_number)}
-              </p>
-            )}
           </section>
 
           {/* ------------------------------------------------- central status block
@@ -557,13 +544,12 @@ export function Dashboard({ store, account, onLogout }: Props) {
               <p className="digital hero-digits mt-1 font-bold text-snow/70" data-testid="hero-clock" data-mode="IDLE">
                 {formatClockSec(snap.event.config.game_limit_ms)}
               </p>
-              <p className="mt-1 text-[10px] leading-snug text-mute" data-testid="hero-note">
-                Đồng hồ {formatClockSec(snap.event.config.game_limit_ms)} chỉ chạy khi NPC 1 bấm BẮT ĐẦU
-              </p>
+              {/* V3.4.1: the sentence under the number said the clock waits for NPC 1 —
+                  already in the status line above and the press below. */}
             </section>
           )}
 
-          <JourneyStepper journey={journey} onOpen={() => setJourneyOpen(true)} />
+          <JourneyStepper journey={journey} onOpen={() => setJourneyOpen(true)} caption={false} />
 
           {/* Safety and prize warnings stay on the main screen, never only in the sheet. */}
           {alerts.map((a) => (
@@ -602,39 +588,34 @@ export function Dashboard({ store, account, onLogout }: Props) {
       {!locked && (
         <footer className="safe-bottom nav-row">
           {account.role === 'CORRIDOR' ? (
-            /* V3.4 §9: the floor-2 station has no record to watch mid-handoff —
-               ranking and history live in the sheet's BÁO CÁO group now. The two
-               secondary destinations are named by what they open, and neither
-               competes with the confirmation button above. */
-            <>
-              <button
-                type="button"
-                onClick={() => setJourneyOpen(true)}
-                className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2 text-[10px] font-semibold text-snow active:bg-panel2"
-                data-testid="r02-open-map"
-              >
-                <RunnerIcon className="h-3.5 w-3.5 text-mute" />
-                SƠ ĐỒ HÀNH TRÌNH
-              </button>
-              <button
-                type="button"
-                onClick={() => { setSheetTab('report'); setSheetOpen(true); }}
-                className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2 text-[10px] font-semibold text-snow active:bg-panel2"
-                data-testid="open-details"
-              >
-                <BarsIcon className="h-3.5 w-3.5" />
-                BÁO CÁO & LỊCH SỬ
-                <ChevronRightIcon className="h-3 w-3 text-mute" />
-              </button>
-            </>
+            /* V3.4.1: the route rail at the top of this screen is already the map
+               button, so the footer keeps the one destination nothing else
+               offers — the report — and names it in two words. */
+            <button
+              type="button"
+              onClick={() => { setSheetTab('report'); setSheetOpen(true); }}
+              className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2 text-[10px] font-semibold text-snow active:bg-panel2"
+              data-testid="open-details"
+            >
+              <BarsIcon className="h-3.5 w-3.5" />
+              BÁO CÁO
+              <ChevronRightIcon className="h-3 w-3 text-mute" />
+            </button>
           ) : (
             <>
               {/* V3.4 §7: the footer is navigation, not a second dashboard. The
                   record, the ranking and the round history live in the sheet's
                   BÁO CÁO group now, so the strip names where it goes instead of
                   saying "Xem thêm" about nothing. */}
+              {/* V3.4.1 §3: the strip used to read “LƯỢT #002 · ĐÃ CHƠI 0”. The first
+                  half is `next_team_number` — the number the team card is already
+                  printing one screen above as “ĐỘI #001”, so one phone showed two
+                  different “#00N” figures for two different things and invited the
+                  operator to read them as one. The second half counted leaderboard
+                  entries, which are closed official results, not rounds played.
+                  Both facts now say what they actually are. */}
               <p className="r01-progress" data-testid="summary-line">
-                LƯỢT #{pad(snap.event.next_team_number)} · ĐÃ CHƠI {rows.length}
+                KẾT QUẢ ĐÃ CHỐT {rows.length}
               </p>
               <button
                 type="button"
@@ -643,7 +624,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
                 data-testid="open-details"
               >
                 <BarsIcon className="h-3.5 w-3.5" />
-                CHI TIẾT & BÁO CÁO
+                CHI TIẾT
                 <ChevronRightIcon className="h-3 w-3" />
               </button>
             </>
@@ -719,13 +700,10 @@ function EventEndedCard({ rounds, successful, endedAt, onOpenReport, isSuperviso
         className="w-full rounded-panel border border-hair bg-panel px-4 py-3.5 text-[0.78rem] font-semibold text-snow active:bg-panel2"
         data-testid="open-report"
       >
-        XEM BÁO CÁO & LỊCH SỬ
+        XEM BÁO CÁO
       </button>
-      <p className="text-[0.66rem] leading-snug text-mute" data-testid="ended-board-note">
-        {isSupervisor
-          ? 'Bấm MỞ SỰ KIỆN MỚI để bàn giao phòng cho ca tiếp theo. Lịch sử sự kiện vừa rồi được giữ nguyên.'
-          : 'Bảng vị trí vẫn mở. Chờ Quản trị viên mở sự kiện mới để ca tiếp theo bắt đầu.'}
-      </p>
+      {/* V3.4.1: the note under the two buttons explained what the buttons already
+          say. The handover wording lives in the sheet, next to the control. */}
     </section>
   );
 }
@@ -783,23 +761,13 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
     : received
       ? { text: 'ĐÃ NHẬN ĐỘI', tone: 'confirmed' as const }
       : { text: 'CHỜ NHẬN ĐỘI', tone: 'queued' as const };
-  // The card's headline has to state which of the three things is actually true:
-  // a team nobody has received yet, a team this phone received and handed up, and
-  // a team whose clock is really running. Calling a received-but-unstarted team
-  // “ĐANG CHƠI” told the operator the round had begun when the machine says it has
-  // not, and the badge underneath then contradicted the headline.
-  const stageWord = !received
-    ? 'ĐỘI KẾ TIẾP'
-    : round.game_started_at !== null
-      ? 'ĐỘI ĐANG CHƠI'
-      : 'ĐỘI VỪA NHẬN';
-  // The idle clock never repeats what the card already says: one short label,
-  // one duration, and one sentence about why the number is not moving.
+  // V3.4.1 — one fact, one place. The heading used to carry a fourth wording of the
+  // same stage (“ĐỘI VỪA NHẬN” over “ĐÃ NHẬN ĐỘI” over “Đang lên tầng 2”), so the
+  // card now names the team and the badge alone says what has happened to it.
+  // The idle clock never repeats what the card already says: one label, one duration.
   const idleCaption = syncBroken
-    ? 'Không đọc được máy chủ — kiểm tra Wi-Fi rồi bấm THỬ LẠI ở đầu màn hình.'
-    : phase === 'WAITING_FLOOR2_CONFIRMATION'
-      ? 'Đội đang lên tầng 2 · đồng hồ chỉ chạy khi NPC 1 bấm BẮT ĐẦU'
-      : `Đồng hồ ${limitLabel} chỉ chạy khi NPC 1 bấm BẮT ĐẦU`;
+    ? 'Không đọc được máy chủ — bấm THỬ LẠI ở đầu màn hình.'
+    : null;
   // In pre-start the illuminated card under the team IS the phase statement, so
   // neither the card's own state line nor the warning banner repeats it — the
   // same rule NPC 1's screen applies, and the reason this screen previously read
@@ -830,7 +798,8 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="r01-role">{ROLE_PERSON.LOBBY}</p>
           <p className="role-band-area">{ROLE_AREA.LOBBY}</p>
-          <p className="mt-0.5 text-[9.5px] leading-snug text-mute">{ROLE_DUTY.LOBBY}</p>
+          {/* V3.4.1: the duty sentence was the label of the button at the bottom of
+              this same screen. The band says who and where; the press says what. */}
         </div>
         {/* The band answers "am I holding this seat" — the one of the four states
             the rest of the screen never states. What the event and the team are
@@ -853,9 +822,8 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="team-eyebrow" data-testid="r01-team-stage">{stageWord}</p>
-            <h1 className="digital team-digits mt-1 font-bold text-snow">
-              #{pad(round?.team_number ?? snap.event.next_team_number)}
+            <h1 className="digital team-digits font-bold text-snow" data-testid="r01-team-stage">
+              ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}
             </h1>
           </div>
           <span className="badge" data-tone={badge.tone} data-testid="r01-team-badge">
@@ -888,24 +856,17 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
           </span>
         </p>
 
-        {nameOpen ? null : (
-          <p className="hero-caption mt-1.5" data-testid="team-identity">
-            {received
-              ? `${teamLabel(round, snap.event.next_team_number)} · đã nhận lúc ${formatWallTime(round.called_at)}`
-              : `Chưa tiếp nhận — đội kế tiếp sẽ là ${teamLabel(null, snap.event.next_team_number)}`}
-          </p>
-        )}
-
-        {/* Where the round stands, in the machine's own words, and whose hand it
-            is in. One line — the button underneath already says what to do. */}
-        <p className="r01-hand" data-testid="event-state">
-          {!preStartShown && <span className="r01-hand-state">{PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}</span>}
-          {turn ? (
-            <span className="r01-hand-who" data-testid="r01-hand" data-mine={turn.mine ? '1' : '0'}>
+        {/* V3.4.1: the identity caption printed the team label a second time and the
+            reception timestamp, which the route strip and the sheet's history both
+            already carry. Whose hand the round is in stays, because nothing else
+            on this screen says it. */}
+        {turn ? (
+          <p className="r01-hand" data-testid="r01-hand" data-mine={turn.mine ? '1' : '0'}>
+            <span className="r01-hand-who" data-testid="r01-hand-who">
               {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
             </span>
-          ) : null}
-        </p>
+          </p>
+        ) : null}
       </section>
 
       {/* ------------------------------------------------- context timer */}
@@ -917,7 +878,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
           durationLabel={limitLabel}
         />
       ) : (
-        <section className="hero-block" data-testid="hero">
+        <section className="hero-block is-slim" data-testid="hero">
           <div className="flex w-full items-baseline justify-between gap-2">
             <p className="team-eyebrow flex items-center gap-1.5" data-testid="hero-label">
               <ClockIcon className="h-3.5 w-3.5" />
@@ -927,14 +888,17 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
               {limitLabel}
             </p>
           </div>
-          <p className="hero-caption mt-1" data-testid="hero-note">
-            {idleCaption}
-          </p>
+          {/* V3.4.1: the sentence under the number explained that the clock waits for
+              NPC 1 — the same fact the badge, the route caption and the disabled
+              press already state. Only a read failure still earns a line here. */}
+          {idleCaption ? (
+            <p className="hero-caption mt-1" data-testid="hero-note">{idleCaption}</p>
+          ) : null}
         </section>
       )}
 
       {/* --------------------------------------------------------- route */}
-      <JourneyStepper journey={journey} onOpen={onOpenJourney} />
+      <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />
 
       {/* One group, so the distribution above can never drive a wedge between the
           press and the warnings, the acknowledgement or the hint that explain it. */}
@@ -987,12 +951,11 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
  * failure always outranks the workflow badge so no press is offered into an
  * unread state.
  */
-function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alerts, state, syncBroken, onOpenJourney }: {
+function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, syncBroken, onOpenJourney }: {
   store: LiveStore;
   snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>;
   primary: PrimaryAction;
   journey: JourneyInfo;
-  teamLine: TeamLine;
   handoff: HandoffInfo;
   alerts: AlertInfo[];
   state: StoreState;
@@ -1016,37 +979,30 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
           ? { tone: 'live' as const, Icon: AlertIcon, text: handoff.badge }
           : { tone: 'queued' as const, Icon: ClockIcon, text: handoff.badge };
   const BadgeIcon = badge.Icon;
-  const instruction = syncBroken
-    ? 'Không thể xác nhận khi máy chưa đọc được trạng thái mới — kiểm tra Wi-Fi rồi bấm THỬ LẠI ở đầu màn hình.'
-    : handoff.key === 'incoming'
-      ? 'Theo dõi lối lên tầng 2. Chỉ bấm xác nhận khi đội đã có mặt thật ở đây.'
-      : handoff.key === 'confirmed'
-        ? 'Đội đã được xác nhận — NPC 1 phổ biến luật và mở đồng hồ ở cửa tầng 3.'
-        : handoff.key === 'bypassed'
-          ? 'NPC 1 đã bỏ qua tầng 2 có ghi nhật ký. Không cần thao tác ở đây.'
-          : handoff.key === 'waiting-next'
-            ? 'Đang chờ bước tiếp theo từ máy chủ.'
-            : 'Chưa có đội bàn giao. Khi Nhân sự 01 gửi đội lên, nút xác nhận sẽ hiển thị ở đây.';
-  const timerEyebrow = 'CHƯA TÍNH GIỜ';
-  // The bypass alert would repeat the bypass instruction one screen apart, and the
-  // pre-start band would repeat the route caption under the tracker. This screen
-  // states each fact once: the card says whose hand it is, the caption says where
-  // the team is, the summary says what the server recorded.
+  // V3.4.1 — this screen used to say “đội đang lên tầng 2” four times over: in the
+  // heading, the badge, the status line and the instruction block. The badge is
+  // the server-derived state and it stays; the instruction block is the one place
+  // that says what the operator must actually do, so it stays too, and the rest
+  // goes. The bypass alert would repeat the bypass instruction one screen apart,
+  // and the pre-start band would repeat the route caption under the tracker.
   const confirmed = !syncBroken && handoff.key === 'confirmed' && round?.floor2_confirmed_at != null;
   const shownAlerts = alerts.filter((a) => !(a.id === 'BYPASS' && handoff.key === 'bypassed')
     && !(a.id === 'PRESTART' && handoff.key === 'confirmed'));
-  // "Being handed over through floor 2" is only true until this phone's press
-  // lands. After the stamp the team is on floor 3, and saying otherwise would
-  // leave the headline contradicting the summary underneath it.
-  const stageWord = !round
-    ? 'ĐỘI KẾ TIẾP'
-    : handoff.key === 'bypassed'
-      ? 'ĐỘI ĐÃ LÊN TẦNG 3'
-      : handoff.key === 'confirmed'
-        ? 'ĐỘI ĐÃ GỬI LÊN TẦNG 3'
-        : 'ĐỘI ĐANG BÀN GIAO QUA TẦNG 2';
+  const instruction = syncBroken
+    ? 'Không đọc được máy chủ — kiểm tra Wi-Fi rồi bấm THỬ LẠI ở đầu màn hình.'
+    : handoff.key === 'incoming'
+      ? 'Theo dõi lối lên tầng 2. Chỉ bấm xác nhận khi đội đã có mặt thật ở đây.'
+      : handoff.key === 'bypassed'
+        ? 'NPC 1 đã bỏ qua tầng 2 có ghi nhật ký. Không cần thao tác ở đây.'
+        : handoff.key === 'waiting-next'
+          ? 'Đang chờ bước tiếp theo từ máy chủ.'
+          : 'Chưa có đội bàn giao. Khi Nhân sự 01 gửi đội lên, nút xác nhận sẽ hiện ở đây.';
   return (
-    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-2.5">
+    // V3.4.1: the spare height belongs between the blocks, not under the last one.
+    // With the duplicated sentences gone this column is shorter than the phone, and
+    // the trailing spacer parked all of that space as one dead band below the
+    // clock — the same distribution the lobby screen already uses.
+    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col justify-evenly gap-3">
       {/* -------------------------------------------------------- identity */}
       <section
         className="role-band"
@@ -1057,7 +1013,7 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="r02-role">{ROLE_PERSON.CORRIDOR}</p>
           <p className="role-band-area">{ROLE_AREA.CORRIDOR}</p>
-          <p className="mt-0.5 text-[9.5px] leading-snug text-mute">{ROLE_DUTY.CORRIDOR}</p>
+          {/* V3.4.1: the duty line was the button label below it. */}
         </div>
         <span className="badge" data-tone="confirmed" data-testid="r02-binding-state">
           <CheckIcon />
@@ -1073,10 +1029,10 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="team-eyebrow" data-testid="r02-team-stage">{stageWord}</p>
-            <h1 className="digital team-digits mt-1 font-bold text-snow">
-              #{pad(round?.team_number ?? snap.event.next_team_number)}
+            <h1 className="digital team-digits font-bold text-snow" data-testid="r02-team-stage">
+              ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}
             </h1>
+            {round?.team_name ? <p className="team-name mt-0.5" data-testid="r02-team-name">{round.team_name}</p> : null}
           </div>
           <span
             className="badge"
@@ -1089,52 +1045,34 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
           </span>
         </div>
 
-        <p
-          className="team-status mt-2"
-          data-testid="team-status"
-          style={{ color: TEAM_TONE_HEX[syncBroken ? 'red' : teamLine.tone] }}
-        >
-          <UsersIcon className="h-4 w-4 shrink-0" />
-          <span className="min-w-0">
-            {teamLine.text}
-            {round?.team_name ? <span className="text-mute"> · {round.team_name}</span> : null}
-          </span>
-        </p>
-
-        {!confirmed && (
-          <p className="hero-caption mt-1.5" data-testid="r02-requirement">
-            {syncBroken
-              ? 'Máy chưa đọc được trạng thái mới — kiểm tra kết nối rồi xác nhận bước tiếp theo.'
-              : handoff.requirement}
-          </p>
-        )}
-
-        {/* Whose hand the round is in — the next required action, from the same
-            authoritative timestamps the buttons themselves are derived from. */}
+        {/* V3.4.1: the status line and the requirement sentence both restated the
+            badge and the instruction block. Whose hand the round is in is the one
+            fact nothing else on this screen carries, so that is what stays. */}
         {turn ? (
-          <p className="r01-hand" data-testid="r02-hand" data-mine={turn.mine ? '1' : '0'}>
-            <span className="r01-hand-who">
+          <p className="r01-hand mt-2" data-testid="r02-hand" data-mine={turn.mine ? '1' : '0'}>
+            <span className="r01-hand-who" data-testid="r02-hand-who">
               {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
             </span>
             {!turn.mine ? <span className="r01-hand-what">{turn.label}</span> : null}
           </p>
         ) : null}
-
-        {/* The arrival CTA is gone once the server has the stamp — replaced by the
-            same fact as a read-only summary in the place the thumb already knows.
-            The acknowledgement is keyed on `floor2_confirmed_at`, never on this
-            phone's own press, so a write that is still on the wire reads pending. */}
       </section>
 
       {/* ----------------------------------------------------- instruction */}
-      {!confirmed && (
+      {/* V3.4.1: when the arrival press is on screen, its own hint is the rule —
+          “Chỉ xác nhận khi đội đã có mặt tại tầng 2.” A second block saying it again
+          one finger-length below the button was the old duplication. The
+          instruction stays for every state where there is nothing to press, and
+          for the read failure, where the hint would promise a press the phone
+          cannot honour. */}
+      {!confirmed && (syncBroken || handoff.key !== 'incoming') && (
         <section className="r02-instruct" data-testid="r02-instruction">
           <p>{instruction}</p>
         </section>
       )}
 
       {/* --------------------------------------------------------- route */}
-      <JourneyStepper journey={journey} onOpen={onOpenJourney} />
+      <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />
 
       {/* Safety and prize warnings stay on the main screen, never only in the sheet. */}
       {shownAlerts.map((a) => (
@@ -1170,10 +1108,10 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
         <section className="state-block" data-tone="confirmed" role="status" data-testid="r02-handoff-summary">
           <span className="state-block-icon" aria-hidden><CheckIcon /></span>
           <p className="state-block-title" data-testid="r02-confirmed">ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2</p>
-          <p className="state-block-note" data-testid="r02-waiting-npc1">ĐANG CHỜ NPC 1 BẮT ĐẦU</p>
+          {/* V3.4.1: the team number and its label are the card above; what is left
+              to say is the timestamp the server holds, and who owns the next step. */}
           <p className="text-[0.62rem] leading-snug text-mute" data-testid="r02-confirmed-at">
-            Máy chủ ghi nhận lúc {formatWallTime(round?.floor2_confirmed_at ?? snap.server_now_ms)} · đội #{pad(round?.team_number ?? snap.event.next_team_number)}
-            {round?.team_name ? ` · ${round.team_name}` : ''}
+            Máy chủ ghi nhận lúc {formatWallTime(round?.floor2_confirmed_at ?? snap.server_now_ms)}
           </p>
         </section>
       ) : (
@@ -1181,20 +1119,15 @@ function CorridorStage({ store, snap, primary, journey, teamLine, handoff, alert
       )}
 
       {/* ------------------------------------- compact, view-only clock info */}
-      <section className="hero-block" data-testid="r02-timer-info">
+      <section className="hero-block is-slim" data-testid="r02-timer-info">
         <div className="flex w-full items-baseline justify-between gap-2">
           <p className="team-eyebrow flex items-center gap-1.5" data-testid="r02-timer-label">
             <ClockIcon className="h-3.5 w-3.5" />
-            {timerEyebrow}
+            CHƯA TÍNH GIỜ
           </p>
           <p className="digital hero-digits font-bold" data-testid="r02-timer-value">{limitLabel}</p>
         </div>
-        <p className="hero-caption mt-1" data-testid="r02-timer-note">
-          {limitLabel} là thời lượng lượt chơi · NPC 1 bấm BẮT ĐẦU để mở đồng hồ
-        </p>
       </section>
-
-      <div className="sc-spacer" />
     </div>
   );
 }
@@ -1218,7 +1151,8 @@ function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
     <div className="px-3 pb-1.5 text-center">
       {/* V3.4 §7: leaving a seat is a real destination, so it stays one tap away on
           every screen — but it is a text link now, not a second filled button
-          competing with the action above it. The hit area is still 44 px. */}
+          competing with the action above it. The hit area is still 44 px.
+          V3.4.1 shortened it to what the press does: this phone lets go of its seat. */}
       <button
         type="button"
         onClick={() => void leave()}
@@ -1226,7 +1160,7 @@ function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
         className="nav-link w-full"
         data-testid="return-home"
       >
-        {busy ? 'ĐANG NHẢ VỊ TRÍ…' : 'VỀ MÀN HÌNH CHỌN VỊ TRÍ'}
+        {busy ? 'ĐANG NHẢ VỊ TRÍ…' : 'RỜI VỊ TRÍ'}
       </button>
       {error ? (
         <p role="alert" className="mt-1 text-[11px] text-ember" data-testid="release-error">
@@ -1347,10 +1281,8 @@ function PreStartAlert({ round, isNpc1, label, durationLabel }: { round: Round |
       <p className="prestart-hint" data-testid="prestart-hint">
         {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'NPC 1 đang phổ biến luật ở cửa vào tầng 3'}
       </p>
-      <p className="prestart-meta">
-        <ClockIcon className="h-3.5 w-3.5" />
-        Đồng hồ {durationLabel} sẽ chạy khi NPC 1 bấm BẮT ĐẦU
-      </p>
+      {/* V3.4.1: the duration already sits at the top of the band, and “chờ NPC 1 bấm
+          BẮT ĐẦU” is what the badge, the route and the disabled press all say. */}
       {round?.floor2_bypassed_at !== null && round?.floor2_bypassed_at !== undefined ? (
         <p className="prestart-hint" data-testid="prestart-bypassed">
           Tầng 2 đã được bỏ qua có ghi nhật ký
@@ -1371,27 +1303,22 @@ function PreStartAlert({ round, isNpc1, label, durationLabel }: { round: Round |
  * large panel. The card keeps the `prestart-alert` testid because it *is*
  * the alert now: the loudest fact on the screen is the one it always was.
  */
-function PreStartCard({ round, isNpc1, label, durationLabel, teamLine }: {
+function PreStartCard({ round, isNpc1, label, durationLabel }: {
   round: Round | null;
   isNpc1: boolean;
   label: string;
   durationLabel: string;
-  teamLine: TeamLine;
 }) {
   return (
     <section className="prestart-block px-4 py-3.5" data-testid="prestart-alert">
-      <p className="prestart-eyebrow text-amber">CHUẨN BỊ BẮT ĐẦU · CỬA VÀO TẦNG 3</p>
+      {/* V3.4.1: the area belongs to the role band above, so the eyebrow only names
+          the stage. The status line under the team number repeated it a second
+          time (“Sắp bắt đầu ở tầng 3” under “CHUẨN BỊ BẮT ĐẦU”), so it is gone. */}
+      <p className="prestart-eyebrow text-amber">CHUẨN BỊ BẮT ĐẦU</p>
       <div className="mt-1.5">
         <h1 className="digital team-digits font-bold text-snow" data-testid="prestart-team">
           {label.toUpperCase()}
         </h1>
-        <p className="team-status mt-2" data-testid="team-status" style={{ color: TEAM_TONE_HEX[teamLine.tone] }}>
-          <UsersIcon className="h-4 w-4 shrink-0" />
-          <span className="min-w-0">
-            {teamLine.text}
-            {round?.team_name ? <span className="text-mute"> · {round.team_name}</span> : null}
-          </span>
-        </p>
       </div>
       {isNpc1 ? (
         <ul className="prestart-steps mt-3" data-testid="prestart-checklist">
@@ -1425,13 +1352,12 @@ function PreStartCard({ round, isNpc1, label, durationLabel, teamLine }: {
  * READY_AT_FLOOR3, only to GATE, and the duration shown is the one the round
  * snapshots at the press.
  */
-function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, state, syncBroken, onOpenJourney }: {
+function GateStage({ store, snap, phase, primary, journey, alerts, state, syncBroken, onOpenJourney }: {
   store: LiveStore;
   snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>;
   phase: SystemPhase;
   primary: PrimaryAction;
   journey: JourneyInfo;
-  teamLine: TeamLine;
   alerts: AlertInfo[];
   state: StoreState;
   syncBroken: boolean;
@@ -1443,7 +1369,7 @@ function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, sta
   // the tracker would be the old screen's duplication again.
   const shownAlerts = alerts.filter((a) => a.id !== 'PRESTART');
   return (
-    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-2.5">
+    <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col justify-evenly gap-3">
       {/* ------------------------------------------------------------ identity */}
       <section
         className="role-band"
@@ -1454,7 +1380,8 @@ function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, sta
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="gate-role">{ROLE_PERSON.GATE}</p>
           <p className="role-band-area">{ROLE_AREA.GATE}</p>
-          <p className="mt-0.5 text-[9.5px] leading-snug text-mute">{ROLE_DUTY.GATE}</p>
+          {/* V3.4.1: the duty line was the briefing checklist printed inside the card
+              below, and the checklist is the shorter, scannable form of it. */}
         </div>
         <p className="role-band-state" data-testid="event-state" data-broken={syncBroken ? '1' : '0'}>
           {syncBroken ? 'KHÔNG ĐỌC ĐƯỢC MÁY CHỦ' : PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}
@@ -1467,11 +1394,10 @@ function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, sta
         isNpc1
         label={teamLabel(round, snap.event.next_team_number)}
         durationLabel={limitLabel}
-        teamLine={teamLine}
       />
 
       {/* ---------------------------------------------------- operational route */}
-      <JourneyStepper journey={journey} onOpen={onOpenJourney} />
+      <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />
 
       {shownAlerts.map((a) => (
         <button
@@ -1500,8 +1426,6 @@ function GateStage({ store, snap, phase, primary, journey, teamLine, alerts, sta
 
       {/* --------------------------------------------------- the one START press */}
       <PrimaryZone store={store} primary={primary} pending={state.pending} verifying={state.verifying} draftName="" />
-
-      <div className="sc-spacer" />
     </div>
   );
 }
@@ -1569,6 +1493,17 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
   // workflow suite pins), but the screen stops repeating the same fact in three
   // more places under it.
   const npc2Sealed = role === 'ROOM305' && npc2Stage.finalized;
+  // V3.4.1 — the same rule for NPC 1's exit hand-off. The hand-off card names the
+  // team, the official instant and the fact the round is over, in one labelled
+  // block sitting directly above the press that acts on them; the hero was
+  // printing all three a second time above it. The hero keeps the number, because
+  // the countdown contract pins the digits to the stored instant, and stops
+  // repeating the words around it. A round still awaiting verification is NOT
+  // decided, and there the status line is the only place that says so.
+  const decided = countdown.result === 'WON' || countdown.result === 'TIME_UP' || countdown.result === 'ABORTED';
+  const handoffCard = role === 'GATE' && primary.action === 'CONFIRM_EXIT' && decided;
+  // Either phone now states team + outcome once, in the card beside the digits.
+  const outcomeInCard = npc2Sealed || handoffCard;
 
   return (
     <main
@@ -1610,12 +1545,12 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
             <span style={{ width: `${(remainingShare * 100).toFixed(2)}%` }} />
           </div>
         )}
-        {!npc2Sealed && (
+        {!outcomeInCard && (
           <p className="countdown-team" data-testid="countdown-team">
             {countdown.teamText.toUpperCase()}
           </p>
         )}
-        {!npc2Sealed && (
+        {!outcomeInCard && (
           <p
             className="countdown-status"
             style={{ color: tone }}
@@ -1624,11 +1559,9 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
             {countdown.statusLine}
           </p>
         )}
-        {countdown.officialMs !== null && countdown.result === 'WON' && !(role === 'ROOM305' && npc2Stage.finalized) ? (
-          <p className="mt-1 text-[11px] font-bold text-jade" data-testid="countdown-official">
-            KẾT QUẢ CHÍNH THỨC · {formatClockCs(countdown.officialMs)}
-          </p>
-        ) : null}
+        {/* V3.4.1: the line under the digits printed the official time a second time,
+            under a label the eyebrow already carries. The number is stated once,
+            in the largest type on the surface. */}
       </div>
 
       {/* §7: a broken read is named, not hidden — the digits keep running on
@@ -1666,10 +1599,18 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           <AlertIcon />
           <span>{error}</span>
         </p>
-      ) : notice && !npc2Sealed ? (
+      ) : notice && !outcomeInCard
+        /* V3.4.1: `notice` is this phone's own last server acknowledgement, and it
+           stays until the next press. On NPC 1's exit screen that is the START_GAME
+           receipt — "ĐÃ BẮT ĐẦU 05:00 — màn hình đã khoá" — still echoing a press
+           made a whole round ago, under a card that already says the round is
+           over. A receipt stops being information once the screen proves it. */
+        && !(role === 'GATE' && primary.action === 'CONFIRM_EXIT') ? (
         /* An error is never hidden. This is the success acknowledgement — and on
            the sealed NPC2 screen the card below already states the same server
-           sentence, in larger type, with the timestamp that counts. */
+           sentence, in larger type, with the timestamp that counts. That extends
+           to the pending claim: the verification card names the same attempt
+           at the same instant, one finger below. */
         <p role="status" className="notice-band w-full" data-tone="info" data-testid="notice">
           <span>{notice}</span>
         </p>
@@ -1706,7 +1647,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
               ) : null}
             </div>
             <p className="npc1-handoff-note">
-              Chỉ xác nhận khi bạn tận mắt thấy toàn bộ đội đã ra khỏi tầng 3. Thao tác không thay đổi thời gian hoàn thành và được ghi nhật ký.
+              Chỉ xác nhận khi bạn tận mắt thấy toàn bộ đội đã ra khỏi tầng 3. Thao tác được ghi nhật ký.
             </p>
           </section>
         )}

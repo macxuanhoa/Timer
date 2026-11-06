@@ -244,7 +244,7 @@ test.describe.serial('V3.4 §3–§4 — one countdown, one palette, four stages
     const official = (await snapshot()).active_round?.official_duration_ms ?? 0;
     expect(official).toBeGreaterThan(0);
     expect(official).toBeLessThanOrEqual(300_000);
-    await expect(gate.page.getByTestId('countdown-official')).toContainText('KẾT QUẢ CHÍNH THỨC');
+    await expect(gate.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
     await shot(gate.page, 'npc1-contract-frozen');
 
     for (const { context } of [lobby, corridor, gate, room, sup, viewer]) await context.close();

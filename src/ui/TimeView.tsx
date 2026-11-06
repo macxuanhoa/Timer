@@ -57,23 +57,33 @@ export function TimeDigits({ mm, ss, cs, stage, mode, variant }: TimeDigitsProps
  * finalised. It is deliberately not another dashboard card — the official
  * time wears the ivory-gold of the poster's lantern light, and the sentence
  * under it names exactly who owns the next step.
+ *
+ * `showTime` defaults to true. NPC 2's own phone passes false, because the
+ * countdown hero directly above it is already rendering that exact number at
+ * the largest size on the surface (V3.4.1): the same time twice in one viewport
+ * is the difference between a milestone and a wall of digits.
  */
-export function OfficialResultCard({ teamText, officialMs, waitingLine }: {
+export function OfficialResultCard({ teamText, officialMs, waitingLine, showTime = true }: {
   teamText: string;
   officialMs: number;
   /** Secondary status in the operator's own words, e.g. the NPC1 handoff. */
   waitingLine: string | null;
+  showTime?: boolean;
 }) {
   return (
-    <section className="official-result-card" data-testid="official-result">
+    <section className="official-result-card" data-testid="official-result" data-time={showTime ? '1' : '0'}>
       <p className="official-result-eyebrow" data-testid="official-result-title">
         <span className="ornament-dot" aria-hidden />
         ĐÃ CHỐT KẾT QUẢ
         <span className="ornament-dot" aria-hidden />
       </p>
       <p className="official-result-team" data-testid="official-result-team">{teamText.toUpperCase()}</p>
-      <p className="official-result-label">THỜI GIAN CHÍNH THỨC</p>
-      <p className="digital official-result-time" data-testid="official-result-time">{formatClockCs(officialMs)}</p>
+      {showTime ? (
+        <>
+          <p className="official-result-label">THỜI GIAN CHÍNH THỨC</p>
+          <p className="digital official-result-time" data-testid="official-result-time">{formatClockCs(officialMs)}</p>
+        </>
+      ) : null}
       {waitingLine ? (
         <p className="official-result-wait" data-testid="official-result-wait">
           <CheckIcon className="h-3.5 w-3.5 shrink-0" />

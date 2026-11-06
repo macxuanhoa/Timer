@@ -167,8 +167,10 @@ test('the picker shows four stations plus a separate viewer band, never the admi
   // hidden admin seats) and ten viewer seats.
   await expect(a.page.getByTestId('station-count')).toHaveText(/\d\/4/);
   await expect(a.page.getByTestId('observer-count')).toHaveText(/\d\/10/);
-  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực đã chiếm');
-  await expect(a.page.getByTestId('home-overview')).toContainText('Người đang quan sát');
+  // V3.4.1: the overview keeps its two figures and their labels; the explanatory
+  // note under each one restated the four cards and the viewer card below it.
+  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực');
+  await expect(a.page.getByTestId('home-overview')).toContainText('Người xem');
   // The viewer seat opens with no password and no challenge of any kind.
   await claim(a,'OBSERVER');
   await expect(a.page.getByTestId('observer')).toBeVisible();
@@ -455,16 +457,21 @@ test('stale occupancy becomes neutral and disabled, reconnect refetches; old lin
   await expect(a.page.getByTestId('station-GATE')).toHaveAttribute('data-state','unknown');
   await expect(a.page.getByTestId('station-GATE')).toBeDisabled();
   // An unreadable board is a named condition with a way out, not an infinite
-  // "đang đồng bộ": the card prints an em dash and the retry button is live.
+  // "đang đồng bộ": the card says so in words and the retry button is live.
+  // V3.4.1: a one-seat position no longer also prints "—/1" over "0/1" — the
+  // capacity figure restated the badge, so the badge word is what the operator
+  // reads and what this guard now holds.
   await expect(a.page.getByTestId('home-board-stalled')).toContainText('Không đọc được bảng vị trí');
   await expect(a.page.getByTestId('home-board-retry')).toBeEnabled();
-  await expect(a.page.getByTestId('station-GATE')).toContainText('—/1');
+  await expect(a.page.getByTestId('station-GATE')).toContainText('CHƯA XÁC MINH ĐƯỢC');
   await a.page.screenshot({path:'shots/v34-picker-unknown.png',fullPage:true});
   a.blockBoard(false);
   await a.page.getByTestId('home-board-retry').click();
   await expect(a.page.getByTestId('home-board-stalled')).toHaveCount(0);
   await expect(a.page.getByTestId('station-GATE')).toBeEnabled();
-  await expect(a.page.getByTestId('station-GATE')).toContainText('0/1');
+  // The seat is offered again only once the board has actually answered.
+  await expect(a.page.getByTestId('station-GATE')).toContainText('CÒN TRỐNG');
+  await expect(a.page.getByTestId('station-GATE')).not.toContainText('CHƯA XÁC MINH ĐƯỢC');
   await a.page.goto('/i/'+ 'x'.repeat(43));
   await expect(a.page.getByTestId('scream-home')).toBeVisible(); await expect(a.page).toHaveURL('http://127.0.0.1:5177/');
   await expect(a.page.getByTestId('station-GATE')).toBeEnabled();

@@ -186,7 +186,9 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
       if (role === 'GATE') {
         return live('START_GAME', `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}`, {
           tone: 'primary',
-          hint: 'Phổ biến luật và đưa gợi ý trước khi bấm. Chỉ NPC 1 mở đồng hồ.',
+          // V3.4 §2 kept the briefing steps inside NPC 1's own preparation card;
+          // the hint used to read those steps out a second time under the press.
+          hint: 'Chỉ NPC 1 mở đồng hồ.',
         });
       }
       // V3.4 Role 02: after the handoff is server-confirmed the confirmation
@@ -453,11 +455,14 @@ export function resolveCountdown(snap: Snapshot, nowMs: number): CountdownView {
       ? Math.max(0, (round?.deadline_at ?? 0) - (round?.aborted_at ?? round?.exit_confirmed_at ?? 0))
       : shown;
   const total = Math.floor(heroMs / 1000);
+  // V3.4.1: the WON line used to print the official time a second time, under digits
+  // that are already that exact number. The word is the fact; the number is said
+  // once, in the largest type on the surface.
   const statusLine =
     phase === 'TIME_EXPIRED_PENDING_VALIDATION'
       ? 'HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ'
       : result === 'WON'
-        ? `● THÀNH CÔNG ${formatClockSec(round?.official_duration_ms ?? 0)}`
+        ? '● THÀNH CÔNG'
         : result === 'TIME_UP'
           ? 'HẾT GIỜ — CHỜ ĐỘI RỜI TẦNG 3'
           : result === 'ABORTED'

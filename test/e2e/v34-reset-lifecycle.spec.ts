@@ -121,6 +121,15 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     await expect(gate.page.getByTestId('reset-row-hallway')).toHaveAttribute('data-owner', 'mine');
     await expect(gate.page.getByTestId('reset-row-hidden_objects')).toHaveAttribute('data-owner', 'other');
     await expect(gate.page.getByTestId('reset-row-room')).toHaveAttribute('data-owner', 'other');
+    // V3.4.1: the waiting badge is built from the owner's own station code, so a
+    // row may not introduce the same position twice — “Vật phẩm ẩn · NPC 2” under
+    // “CHỜ NPC 2” was one station introduced twice on one line.
+    for (const key of ['hidden_objects', 'room']) {
+      const rowText = (await gate.page.getByTestId(`reset-row-${key}`).textContent()) ?? '';
+      expect((rowText.match(/NPC 2/g) ?? []).length, `${key} names its owner once: ${rowText}`).toBe(1);
+    }
+    // And the row that is this phone's own still says whose job it is.
+    await expect(gate.page.getByTestId('reset-row-hallway')).toContainText('phần của bạn');
 
     // No countdown belongs on a reset screen — for any role.
     for (const p of [gate.page, lobby.page, corridor.page]) {

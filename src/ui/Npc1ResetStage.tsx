@@ -10,13 +10,13 @@ import type {
   ResetBoard,
   ResultSummary,
 } from '../client/selectors';
-import { PHASE_LABEL, ROLE_AREA, ROLE_DUTY, ROLE_PERSON, type Role } from '../shared/constants';
+import { PHASE_LABEL, ROLE_AREA, ROLE_PERSON, type Role } from '../shared/constants';
 import { formatClockSec } from '../shared/metrics';
 import type { CommandResult, Snapshot, SystemPhase } from '../shared/types';
 import { ACCENT_HEX, ROLE_ACCENT } from './accents';
 import { JourneyStepper } from './JourneyMap';
-import { AttemptLedger, NextTeamStatus, ResetActionNote, ResetChecklist, RoundResultCard } from './ResetStatus';
-import { AlertIcon, BarsIcon, CheckIcon, ChevronRightIcon, RunnerIcon } from './icons';
+import { AttemptLedger, NextTeamStatus, ResetChecklist, RoundResultCard } from './ResetStatus';
+import { AlertIcon, BarsIcon, CheckIcon, ChevronRightIcon } from './icons';
 import { alarms } from './sound';
 
 interface Props {
@@ -118,7 +118,8 @@ export function Npc1ResetStage({
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="npc1-role">{ROLE_PERSON.GATE}</p>
           <p className="role-band-area">{ROLE_AREA.GATE}</p>
-          <p className="role-band-duty">{ROLE_DUTY.GATE}</p>
+          {/* V3.4.1: the duty sentence is the checklist and the press below it, in
+              their scannable forms. The band keeps who and where. */}
         </div>
         <p className="role-band-state" data-testid="event-state" data-broken={syncBroken ? '1' : '0'}>
           {syncBroken ? 'KHÔNG ĐỌC ĐƯỢC MÁY CHỦ' : PHASE_LABEL[phase] ?? 'CHỜ ĐỒNG BỘ'}
@@ -133,10 +134,9 @@ export function Npc1ResetStage({
       />
 
       {/* ------------------------------------ 3-4. the physical reset work */}
-      {/* The section title used to sit here. It restated what the checklist's own
-          eyebrow ("RESET VẬT LÝ · TẦNG 3") and the readiness card already say, and
-          on a 320px phone every line above the press costs the operator a scroll,
-          so it is gone. */}
+      {/* Each row carries its own owner and state; the card's footnote repeated the
+          permission rule for every row that is not this station's, so it now only
+          appears when it adds something (see ResetChecklist). */}
       <ResetChecklist board={shownBoard} role={role} />
 
       {/* ------------------------------------------ 5. the one press here */}
@@ -185,20 +185,23 @@ export function Npc1ResetStage({
           });
         }}
       />
-      <ResetActionNote board={shownBoard} />
+      {/* V3.4.1: `ResetActionNote` is gone. Its sentence under the press repeated
+          the outstanding row's own note (“Kiểm tra thật tại khu vực này trước khi
+          xác nhận”), three lines above it and the row the operator is actually
+          looking at — and once every row was done it restated the checklist's
+          confirmed badge. The rule it carried still reads once, as the press's own
+          hint, and lives in the row note alone. */}
 
       {/* ------------------------------------ 6. the next team's eligibility */}
       <NextTeamStatus readiness={readiness} />
 
       {/* ----------------------------------------- 7. secondary, out of the way */}
+      {/* V3.4.1: the route rail above is already the map button, so the nav row keeps
+          only the destination nothing else on this screen offers. */}
       <AttemptLedger attempts={attempts} />
-      <JourneyStepper journey={journey} onOpen={onOpenJourney} />
+      <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />
 
       <div className="npc1-reset-nav">
-        <button type="button" onClick={onOpenJourney} className="nav-link" data-testid="npc1-open-map">
-          <RunnerIcon className="h-3.5 w-3.5" />
-          SƠ ĐỒ HÀNH TRÌNH
-        </button>
         <button type="button" onClick={onOpenReport} className="nav-link" data-testid="npc1-open-report">
           <BarsIcon className="h-3.5 w-3.5" />
           KẾT QUẢ & LỊCH SỬ

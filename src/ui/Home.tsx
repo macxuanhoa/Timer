@@ -4,7 +4,6 @@ import {
   OBSERVER_CAPACITY,
   RESET_BLOCK_LABEL,
   ROLE_AREA,
-  ROLE_DUTY,
   ROLE_PERSON,
   STATION_ROLES,
   type Role,
@@ -224,6 +223,20 @@ export function Home({ onEnter, canSelect = true, error }: {
   const seatEnabled = (state: SeatState) =>
     canSelect && (state === 'available' || state === 'self');
 
+  /** V3.4.1 declutter: the picker states each fact once. The card already shows the
+   *  seat count and the availability word, so the meters drop their explanatory
+   *  notes, the section headings drop (they restated the card titles), the duty
+   *  line drops (it is the first CTA on the station's own screen) and the tagline
+   *  drops with them. The `aria-label` keeps the full sentence for readers.
+   *
+   *  A duty seat prints no figure at all: its capacity is one, so "0/1" and
+   *  "CÒN TRỐNG" are the same answer twice on the same line, and the aggregate
+   *  above already totals the four. The viewer band keeps its n/10 — there the
+   *  number is the only way to see how many people are watching. */
+  const seatFigure = (role: Role, slot: { devices?: number } | undefined, known: boolean) =>
+    SEAT_CAPACITY[role] > 1
+      ? (known ? `${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : `—/${SEAT_CAPACITY[role]}`)
+      : null;
   return (
     <main className="home-shell safe-top safe-bottom" data-testid="scream-home" data-event={eventClosed ? 'closed' : 'open'}>
       <div className="home-content">
@@ -233,20 +246,17 @@ export function Home({ onEnter, canSelect = true, error }: {
             <span className="home-brand-room"><span className="home-signal" aria-hidden />ROOM 305</span>
           </div>
           <h1 className="home-title">CHỌN VỊ TRÍ TRỰC</h1>
-          <p className="home-instruction">Chạm vào vị trí còn trống để nhận ca trực của bạn.</p>
         </header>
 
         <section className="home-overview card" aria-label="Tổng quan bảng vị trí" data-testid="home-overview" data-fresh={fresh ? '1' : '0'}>
           <div className="home-meters">
             <div className="home-meter">
-              <span className="home-meter-label">Vị trí trực đã chiếm</span>
+              <span className="home-meter-label">Vị trí trực</span>
               <span className="home-meter-value digital" data-testid="station-count">{dutyDevices === null ? '—/4' : `${dutyDevices}/4`}</span>
-              <span className="home-meter-note">Bốn vị trí vận hành của ca</span>
             </div>
             <div className="home-meter">
-              <span className="home-meter-label">Người đang quan sát</span>
+              <span className="home-meter-label">Người xem</span>
               <span className="home-meter-value digital" data-testid="observer-count">{observerDevices === null ? `—/${OBSERVER_CAPACITY}` : `${observerDevices}/${OBSERVER_CAPACITY}`}</span>
-              <span className="home-meter-note">Giới hạn {OBSERVER_CAPACITY} thiết bị xem trực tiếp</span>
             </div>
           </div>
           {floorBusy ? (
@@ -257,7 +267,6 @@ export function Home({ onEnter, canSelect = true, error }: {
         </section>
 
         <section className="home-duty" aria-label="Bốn vị trí trực">
-          <h2 className="home-section-heading"><span>VỊ TRÍ TRỰC</span></h2>
           <div className="home-stations">
             {STATION_ROLES.map(role => {
               const state = seatState(role, 1);
@@ -271,16 +280,19 @@ export function Home({ onEnter, canSelect = true, error }: {
                   className="home-station"
                   style={{ '--role-accent': accent } as CSSProperties}
                   disabled={!seatEnabled(state)}
-                  aria-label={`${ROLE_PERSON[role]} — ${ROLE_AREA[role]}. ${SEAT_WORD[state]}${known ? `. ${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : ''}`}
+                  aria-label={`${ROLE_PERSON[role]} — ${ROLE_AREA[role]}. ${SEAT_WORD[state]}`}
                   onClick={() => openStation(role)}>
                   <span className="home-station-icon" aria-hidden><Icon className="h-5 w-5" /></span>
                   <span className="home-station-id">
                     <strong>{ROLE_PERSON[role]}</strong>
                     <span className="home-station-area"><PinIcon className="home-station-pin" />{ROLE_AREA[role]}</span>
-                    <small className="home-station-duty">{ROLE_DUTY[role]}</small>
                   </span>
                   <span className="home-station-state">
-                    <span className="home-station-seat digital">{known ? `${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : `—/${SEAT_CAPACITY[role]}`}</span>
+                    {seatFigure(role, slot, known) !== null ? (
+                      <span className="home-station-seat digital" data-testid={`station-seat-count-${role}`}>
+                        {seatFigure(role, slot, known)}
+                      </span>
+                    ) : null}
                     <span className="badge" data-tone={
                       state === 'available' ? 'live' : state === 'self' ? 'confirmed' : state === 'full' ? 'idle' : state === 'pending' ? 'live' : 'queued'
                     }>{SEAT_WORD[state]}</span>
@@ -292,7 +304,6 @@ export function Home({ onEnter, canSelect = true, error }: {
         </section>
 
         <section className="home-viewer" aria-label="Quan sát trực tiếp">
-          <h2 className="home-section-heading"><span>QUAN SÁT TRỰC TIẾP</span></h2>
           {(() => {
             const state = seatState('OBSERVER', OBSERVER_CAPACITY);
             const slot = seatSlot('OBSERVER');
@@ -307,7 +318,7 @@ export function Home({ onEnter, canSelect = true, error }: {
                 <span className="home-observer-icon" aria-hidden><EyeIcon className="h-5 w-5" /></span>
                 <span className="home-observer-id">
                   <strong>XEM TRỰC TIẾP</strong>
-                  <small>Chỉ đọc — theo dõi toàn bộ diễn biến, không thao tác vào lượt chơi. Không cần mật khẩu.</small>
+                  <small>Chỉ đọc · không cần mật khẩu</small>
                 </span>
                 <span className="home-observer-state">
                   <span className="digital" data-testid="observer-seat-count">{known ? `${slot?.devices ?? 0}/${OBSERVER_CAPACITY}` : `—/${OBSERVER_CAPACITY}`}</span>
@@ -348,7 +359,7 @@ export function Home({ onEnter, canSelect = true, error }: {
                 <p className="home-pin-note" data-testid="admin-guide">
                   {adminState === 'error'
                     ? 'CHƯA KIỂM TRA ĐƯỢC QUYỀN DO MẤT KẾT NỐI.'
-                    : 'VÀO KHU QUẢN TRỊ khi máy đã có trong danh sách cấp quyền. Cấp mới lần đầu? Mở mục Thiết lập nâng cao bên dưới rồi gửi mã máy cho người phụ trách.'}
+                    : 'Máy chưa nằm trong danh sách cấp quyền. Mở Thiết lập nâng cao để lấy mã máy gửi người phụ trách.'}
                 </p>
                 <div className="flex gap-2">
                   <button type="button" data-testid="home-admin-open" className="home-admin-primary flex-1"
@@ -362,11 +373,9 @@ export function Home({ onEnter, canSelect = true, error }: {
                   ) : null}
                 </div>
                 <details className="home-admin-advanced" data-testid="admin-advanced">
-                  <summary>THIẾT LẬP NÂNG CAO — LẤY MÃ MÁY & LỆNH CẤP QUYỀN</summary>
+                  <summary>THIẾT LẬP NÂNG CAO</summary>
                   <p className="home-pin-note">
-                    Mã máy này: <strong className="digital" data-testid="admin-device-id">{deviceId ?? '…'}</strong>.
-                    Người phụ trách chạy MỘT lần trong Supabase → SQL Editor (quyền luôn được
-                    kiểm tra lại phía máy chủ; trang này không tự cấp quyền):
+                    Mã máy: <strong className="digital" data-testid="admin-device-id">{deviceId ?? '…'}</strong>. Chạy MỘT lần trong Supabase → SQL Editor:
                   </p>
                   <pre className="home-admin-sql" data-testid="admin-bootstrap-sql">{`insert into sc.admin_devices (user_id, note)
   values ('${deviceId ?? '<uuid-máy-này>'}', 'máy quản trị');`}</pre>
@@ -410,20 +419,19 @@ export function Home({ onEnter, canSelect = true, error }: {
         {eventClosed ? (
           <p className="notice-band" data-tone="info" role="status" data-testid="home-event-closed">
             <span><strong className="home-closed-strong">SỰ KIỆN ĐÃ KẾT THÚC.</strong>{' '}
-            Ca trực trước đã đóng. Quản trị viên bấm <strong className="home-closed-key">MỞ SỰ KIỆN MỚI</strong> ở bảng quản trị
-            để bàn giao phòng cho ca tiếp theo — các máy khác sẽ tự chuyển sang sự kiện mới trong vài giây.</span>
+            Quản trị viên bấm <strong className="home-closed-key">MỞ SỰ KIỆN MỚI</strong> để bàn giao phòng cho ca tiếp theo.</span>
           </p>
         ) : null}
         {fresh && board && isClientStale(board.min_client_version) ? (
           <p className="notice-band" data-tone="danger" role="status" data-testid="home-bundle-stale">
-            <span>Máy này đang chạy bản ứng dụng cũ. Hãy đóng hẳn ứng dụng và mở lại để nhận bản mới.</span>
+            <span>Máy đang chạy bản ứng dụng cũ — đóng hẳn và mở lại để nhận bản mới.</span>
           </p>
         ) : null}
         <div aria-live="polite" className="home-feedback">
           {message || error ? <p role="alert" data-testid="home-error">{message ?? error}</p> :
             !fresh ? <p>Đang kết nối để kiểm tra vị trí…</p> : null}
         </div>
-        <footer className="home-footer"><span>SCREAM CONTROL</span><span>MỘT KHÔNG GIAN. MỘT NHỊP CHƠI.</span></footer>
+        <footer className="home-footer"><span>SCREAM CONTROL</span></footer>
       </div>
     </main>
   );

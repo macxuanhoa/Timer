@@ -337,7 +337,14 @@ export function Dashboard({ store, account, onLogout }: Props) {
               VỊ TRÍ
             </button>
           )}
-          {!locked && (
+          {/* V3.4 §1 (UI-08): the station settings entry stays available for the
+              organiser while a countdown is locked. The lock exists to stop a
+              station phone reading its way into the game — it has no such purpose
+              for the supervisor, and hiding it meant ĐIỀU HÀNH, the one screen
+              that answers "what is happening right now", could not be opened
+              while the clock was running. The VỊ TRÍ button above is unchanged:
+              a stuck seat is still one tap away, on its own tab. */}
+          {!locked || account.role === 'SUPERVISOR' ? (
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
@@ -347,7 +354,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
             >
               <GearIcon className="h-4 w-4" />
             </button>
-          )}
+          ) : null}
         </div>
       </header>
 

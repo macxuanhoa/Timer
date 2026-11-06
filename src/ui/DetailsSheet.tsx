@@ -31,7 +31,6 @@ import { USING_SUPABASE } from '../client/gateway';
 import { disputedRounds, reviewPendingRounds } from '../shared/metrics';
 import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, roundCounts, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD, type OpsCommand, type OpsRoleStatus } from '../client/selectors';
 import { alarms } from './sound';
-import { StationStrip } from './StationStrip';
 import { SeatManagement } from './SeatManagement';
 import { ACCENT_HEX, ROLE_ACCENT } from './accents';
 import {
@@ -223,12 +222,14 @@ function OpsTab({
   return (
     <div className="flex flex-col gap-3">
       <section className="card p-3" data-testid="ops-command">
-        <p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-mute">Trạng thái sự kiện</p>
-        <p className="mt-1 text-[1rem] font-black leading-tight text-snow" data-testid="ops-command-state">
-          {cmd.stateWord}
-        </p>
-        <p className="mt-0.5 truncate text-[0.7rem] text-mute">{cmd.eventName}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+        {/* V3.4 §1 (UI-08): the card no longer opens by restating the sheet
+            header. "SỰ KIỆN ĐANG DIỄN RA" was printed twice within 150px — once
+            as the dialog title, once as the card's headline — and the second one
+            bought nothing. The event verdict is answered by the header, which
+            sits outside the scroll box and so stays on screen at every scroll
+            position; the card starts with what the header does not say: the
+            workflow stage, the team, and where that team physically is. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="badge" data-tone={cmd.state === 'LIVE' ? 'live' : cmd.state === 'ENDED' ? 'idle' : 'queued'} data-testid="ops-stage">
             {cmd.stageWord}
           </span>
@@ -289,7 +290,12 @@ function OpsTab({
       </div>
 
       <Section title="Bốn vị trí trực" testid="section-ops-seats">
-        <StationStrip snap={snap} now={now} self={account.role} className="mb-2" />
+        {/* V3.4 §1 (UI-08): the five-chip station strip used to sit here. On a
+            station screen it earns its place by marking which chip is this phone;
+            inside this tab it duplicated four cards that were already stacked
+            directly below it, and at 320px its labels truncated to "02 · TẦN…".
+            The one fact worth keeping — "this machine is that position" — is now
+            marked on the card itself, in words. */}
         <div className="flex flex-col gap-1.5">
           {seats.map((r) => {
             const Icon = OPS_SEAT_ICON[r.role] ?? PinIcon;
@@ -301,12 +307,16 @@ function OpsTab({
                 style={{ borderLeft: `3px solid ${ACCENT_HEX[ROLE_ACCENT[r.role]]}` } as CSSProperties}
                 data-testid={`ops-seat-${r.role.toLowerCase()}`}
                 data-state={r.stateWord}
+                data-self={account.role === r.role ? '1' : '0'}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-start gap-2">
                     <Icon className="mt-0.5 h-4 w-4 shrink-0 text-mute" />
                     <div className="min-w-0">
-                      <p className="text-[0.74rem] font-bold leading-tight text-snow">{r.person}</p>
+                      <p className="text-[0.74rem] font-bold leading-tight text-snow">
+                        {r.person}
+                        {account.role === r.role ? <span className="ops-seat-self" data-testid="ops-seat-self">· máy này</span> : null}
+                      </p>
                       <p className="text-[0.58rem] font-semibold uppercase tracking-[0.1em] text-mute">{r.area}</p>
                     </div>
                   </div>

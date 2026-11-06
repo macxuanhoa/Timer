@@ -126,11 +126,12 @@ test.describe.serial('V3.4 §11 — every redesigned screen at the 320px floor',
     // hierarchy — both are measured with the round cards OPEN, because a folded
     // card hides exactly the lines that would overflow at 320px.
     //
-    // The round is RUNNING here, and a locked countdown hides the station gear
-    // and the footer. The organiser's own entry, VỊ TRÍ, deliberately stays
-    // available — a live round is exactly when QUẢN TRỊ is needed — so that is
-    // the affordance under test, and the tab bar reaches BÁO CÁO from there.
-    await expect(sup.getByTestId('open-settings')).toHaveCount(0);
+    // The round is RUNNING here, so the countdown is locked and the station
+    // footer is gone. The organiser keeps BOTH entries — VỊ TRÍ for a stuck seat
+    // and the sheet entry for ĐIỀU HÀNH — because a live round is exactly when
+    // they are needed; a station phone loses the sheet entry (v34-lobby-states).
+    await expect(sup.getByTestId('open-settings')).toBeVisible();
+    await expect(sup.getByTestId('open-seat-management')).toBeVisible();
     await sup.getByTestId('open-seat-management').click();
     await expect(sup.getByTestId('management')).toBeVisible();
     await sup.getByTestId('sheet-tab-report').click();

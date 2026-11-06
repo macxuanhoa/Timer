@@ -126,7 +126,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await expect(summary).toBeVisible();
     await expect(summary).toContainText('2 lượt đã ghi nhận · 1 đã đóng · 1 đang diễn ra · 1 lượt bị hủy có kiểm toán');
     await expect(summary).toContainText('Đội có kết quả chính thức');
-    // V3.5: the withheld-decision count is stated once, in the performance block
+    // V3.4.1: the withheld-decision count is stated once, in the performance block
     // that explains which population it measures.
     await expect(sup.getByTestId('performance')).toContainText('Vòng đang chờ Quản trị viên quyết');
 
@@ -154,7 +154,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     expect(labels).toContain('Mốc hết giờ theo lịch');
     await expect(card1.getByTestId('round-detail-rows-1')).toContainText('đội hoàn thành trước mốc');
     // The official instant the report prints is the engine's own number, and it
-    // is on the card's headline — not repeated as a row inside it (V3.5).
+    // is on the card's headline — not repeated as a row inside it (V3.4.1).
     await expect(card1.getByTestId('round-score-1')).not.toHaveText('—');
 
     // Issue 1 — the cancellation is described by the kind the server recorded,

@@ -152,7 +152,7 @@ export function SeatManagement({ store, now }: Props) {
   return (
     <div className="flex flex-col gap-2" data-testid="seat-management">
       <div className="flex items-start justify-end gap-2">
-        {/* V3.5: the heading inside this panel spelled “QUẢN LÝ VỊ TRÍ” a second
+        {/* V3.4.1: the heading inside this panel spelled “QUẢN LÝ VỊ TRÍ” a second
             time, one row under the group heading of the same name. The refresh
             keeps its place at the right edge. */}
         <button
@@ -224,7 +224,7 @@ export function SeatManagement({ store, now }: Props) {
                 );
               })}
 
-              {/* V3.5: “Chưa có thiết bị nào nhận ghế này.” restated the CÒN TRỐNG
+              {/* V3.4.1: “Chưa có thiết bị nào nhận ghế này.” restated the CÒN TRỐNG
                   word on the same line of the same row. */}
 
               {seat.role !== 'SUPERVISOR' && (

@@ -455,7 +455,7 @@ export function resolveCountdown(snap: Snapshot, nowMs: number): CountdownView {
       ? Math.max(0, (round?.deadline_at ?? 0) - (round?.aborted_at ?? round?.exit_confirmed_at ?? 0))
       : shown;
   const total = Math.floor(heroMs / 1000);
-  // V3.5: the WON line used to print the official time a second time, under digits
+  // V3.4.1: the WON line used to print the official time a second time, under digits
   // that are already that exact number. The word is the fact; the number is said
   // once, in the largest type on the surface.
   const statusLine =

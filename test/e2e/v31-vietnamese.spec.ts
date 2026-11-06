@@ -182,7 +182,7 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
     // Verify with the wrong decision: label reads `CHƯA ĐÚNG`, never `INVALID`.
     // After the reject the attempt closes, so its decision buttons disappear and the
     // row falls back to its caption — the verdict is the status word and the note
-    // says what happened to the reported mark (V3.5), so the pair is what a real
+    // says what happened to the reported mark (V3.4.1), so the pair is what a real
     // operator reads and what this sweep must guard.
     await room.page.getByTestId('attempt-invalid-1').click();
     await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');

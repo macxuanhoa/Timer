@@ -66,16 +66,22 @@ function RowMark({ row }: { row: ResetRow }) {
  * change one of them lives in the station's own action control, and only for the
  * rows that belong to that station.
  *
- * V3.5 — a note line is only printed where it carries a fact the badge cannot:
+ * V3.4.1 — a note line is only printed where it carries a fact the badge cannot:
  * the server timestamp, or this phone's own write outcome. “Phần việc của NPC 2 ·
  * máy này không xác nhận thay được” under a row already badged “CHỜ NPC 2” said the
  * same thing twice, three times down one card, and the card footnote then said it
  * a fourth time. The “check the area first” rule is the press's own hint, which
  * names the area the button is about to mark — so the row stays quiet.
+ *
+ * The owner gets named once too. `resolveResetBoard` builds the waiting badge from
+ * the owner's own short code, so “NPC 2” next to “CHỜ NPC 2” was one station
+ * introduced twice in the same line; the label keeps its owner only where the
+ * badge does not already carry it.
  */
 export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role }) {
   const noteWorthReading = (row: ResetRow) =>
     row.state === 'done' || row.state === 'failed' || row.state === 'submitting';
+  const badgeNamesOwner = (row: ResetRow) => row.owner !== '' && row.status.includes(row.owner);
   return (
     <section className="reset-card" data-testid="reset-checklist" data-done={board.done} data-total={board.total}>
       <header className="reset-head">
@@ -103,7 +109,11 @@ export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role 
               <span className="reset-row-top">
                 <span className="reset-area">
                   {row.label}
-                  {row.mine ? <span className="reset-mine">· phần của bạn</span> : <span className="reset-owner">{row.owner}</span>}
+                  {row.mine ? (
+                    <span className="reset-mine">· phần của bạn</span>
+                  ) : !badgeNamesOwner(row) ? (
+                    <span className="reset-owner">{row.owner}</span>
+                  ) : null}
                 </span>
                 <span className="badge" data-tone={ROW_TONE[row.state]} data-testid={`reset-state-${row.key}`}>
                   {row.status}
@@ -193,7 +203,7 @@ export function NextTeamStatus({ readiness }: { readiness: ReadinessView }) {
         {readiness.key === 'ready' ? <CheckIcon className="h-4 w-4" /> : <HourglassIcon className="h-4 w-4" />}
         {readiness.title}
       </p>
-      {/* V3.5: the sentence naming the outstanding areas was the checklist directly
+      {/* V3.4.1: the sentence naming the outstanding areas was the checklist directly
           above it, row for row. Who is still owed a confirmation is the badge. */}
       {readiness.waitingOn.length > 0 ? (
         <p className="readiness-owners">
@@ -204,7 +214,7 @@ export function NextTeamStatus({ readiness }: { readiness: ReadinessView }) {
       ) : (
         <p className="readiness-detail" data-testid="next-team-detail">{readiness.detail}</p>
       )}
-      {/* V3.5: what a reset confirmation does and does not touch is stated once, in
+      {/* V3.4.1: what a reset confirmation does and does not touch is stated once, in
           the sheet's Quản trị group, next to the controls it describes. */}
     </section>
   );
@@ -255,10 +265,3 @@ export function AttemptLedger({ attempts }: { attempts: AttemptRow[] }) {
     </section>
   );
 }
-
-/**
- * V3.5 removed `ResetActionNote`. Its sentence under the press was the outstanding
- * row's own note three lines above it, and when every row was done it restated the
- * checklist's confirmed badge. The rule it carried — press only when the area has
- * really been reset — now lives in the row note alone.
- */

@@ -118,7 +118,7 @@ export function Npc1ResetStage({
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="npc1-role">{ROLE_PERSON.GATE}</p>
           <p className="role-band-area">{ROLE_AREA.GATE}</p>
-          {/* V3.5: the duty sentence is the checklist and the press below it, in
+          {/* V3.4.1: the duty sentence is the checklist and the press below it, in
               their scannable forms. The band keeps who and where. */}
         </div>
         <p className="role-band-state" data-testid="event-state" data-broken={syncBroken ? '1' : '0'}>
@@ -185,15 +185,18 @@ export function Npc1ResetStage({
           });
         }}
       />
-      {/* V3.5: the sentence under the press repeated the checklist row's own note
-          (“Kiểm tra thật tại khu vực này trước khi xác nhận”), which sits three
-          lines above it and is the row the operator is actually looking at. */}
+      {/* V3.4.1: `ResetActionNote` is gone. Its sentence under the press repeated
+          the outstanding row's own note (“Kiểm tra thật tại khu vực này trước khi
+          xác nhận”), three lines above it and the row the operator is actually
+          looking at — and once every row was done it restated the checklist's
+          confirmed badge. The rule it carried still reads once, as the press's own
+          hint, and lives in the row note alone. */}
 
       {/* ------------------------------------ 6. the next team's eligibility */}
       <NextTeamStatus readiness={readiness} />
 
       {/* ----------------------------------------- 7. secondary, out of the way */}
-      {/* V3.5: the route rail above is already the map button, so the nav row keeps
+      {/* V3.4.1: the route rail above is already the map button, so the nav row keeps
           only the destination nothing else on this screen offers. */}
       <AttemptLedger attempts={attempts} />
       <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />

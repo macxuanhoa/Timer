@@ -60,7 +60,7 @@ export function TimeDigits({ mm, ss, cs, stage, mode, variant }: TimeDigitsProps
  *
  * `showTime` defaults to true. NPC 2's own phone passes false, because the
  * countdown hero directly above it is already rendering that exact number at
- * the largest size on the surface (V3.5): the same time twice in one viewport
+ * the largest size on the surface (V3.4.1): the same time twice in one viewport
  * is the difference between a milestone and a wall of digits.
  */
 export function OfficialResultCard({ teamText, officialMs, waitingLine, showTime = true }: {

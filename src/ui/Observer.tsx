@@ -86,6 +86,12 @@ export function Observer({ store, token, onLogout }: Props) {
   // jade — one instant, three surfaces, two answers. There is now one answer.
   const stage = countdownStageOf(countdown);
   const tone = countdownToneOf(countdown);
+  // V3.4.1 — the hero prints the round's own status line whenever there is a
+  // round to time. The team card's phase word was that same sentence again, in
+  // grey, one block above: “LƯỢT CHƠI ĐANG CHẠY” over “● ĐANG CHẠY 05:00”. The
+  // card keeps it only for the waiting state, where the hero shows no status line
+  // at all and the phase is the one fact the card carries.
+  const heroCarriesClock = running || wall !== null;
 
   return (
     <div className="flex h-[100dvh] flex-col bg-ink" data-testid="observer" data-phase={phase}>
@@ -120,18 +126,21 @@ export function Observer({ store, token, onLogout }: Props) {
       <main className="flex min-h-0 flex-1 flex-col justify-evenly gap-3 overflow-y-auto px-3 pb-2">
         <section className="card tm-card" data-testid="observer-team">
           <h1 className="digital team-digits font-bold text-snow">ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}</h1>
-          {/* V3.5: the line under the number spelled the same team number out a
+          {/* V3.4.1: the line under the number spelled the same team number out a
               second time (“Đội #001 · Ma Tro”). The viewer now reads the label, or
-              nothing at all, and the phase word below is the machine's own. */}
+              nothing at all, and the phase word is said once — by the hero when it
+              has a clock, by the card when it does not. */}
           {round?.team_name ? (
             <p className="mt-2 flex items-center gap-1.5 text-[13px] font-semibold leading-none text-snow/85">
               <UsersIcon className="h-4 w-4" />
               {round.team_name}
             </p>
           ) : null}
-          <p className="mt-1.5 text-[11px] leading-snug text-mute" data-testid="observer-phase">
-            {PHASE_LABEL[phase] ?? phase}
-          </p>
+          {!heroCarriesClock ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-mute" data-testid="observer-phase">
+              {PHASE_LABEL[phase] ?? phase}
+            </p>
+          ) : null}
         </section>
 
         <section className="flex flex-1 flex-col items-center justify-center" data-testid="observer-hero">
@@ -149,7 +158,7 @@ export function Observer({ store, token, onLogout }: Props) {
               <p className="mt-2 text-[13px] font-bold tracking-[0.1em] text-snow" data-testid="observer-waiting">
                 {teamLine.text}
               </p>
-              {/* V3.5: the phase word under it was the team card's third line. */}
+              {/* V3.4.1: the phase word under it was the team card's third line. */}
             </>
           )}
         </section>
@@ -160,7 +169,7 @@ export function Observer({ store, token, onLogout }: Props) {
           {journey && <JourneyStepper journey={journey} caption={false} />}
         </section>
 
-        {/* V3.5: the result band and the “đã rời khu vực” line both restated what
+        {/* V3.4.1: the result band and the “đã rời khu vực” line both restated what
             the hero's own status line says, in the same colour, on the same screen.
             The official number stays on the board below. */}
         {rows.length > 0 && (

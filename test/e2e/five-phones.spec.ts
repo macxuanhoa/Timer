@@ -139,7 +139,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(corridor.page.getByTestId('waiting-state')).toHaveCount(0);
     await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
     await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
-    // V3.5: the summary states the confirmed arrival and the server instant; who
+    // V3.4.1: the summary states the confirmed arrival and the server instant; who
     // owns the next step is the card's hand line, stated once for the whole screen.
     await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NPC 1');
     await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
@@ -205,7 +205,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // screen is read-only for completion reporting, exactly like the RPC.
     await expect(room.page.getByTestId('official-result')).toBeVisible();
     await expect(room.page.getByTestId('official-result-title')).toContainText('ĐÃ CHỐT KẾT QUẢ');
-    // V3.5: the claim's own instant to hundredths is stated once — as the hero
+    // V3.4.1: the claim's own instant to hundredths is stated once — as the hero
     // digits, which the board ranks and the card no longer prints a second time.
     await expect(room.page.getByTestId('hero-clock')).toHaveText(formatClockCsLocal(second.elapsed_ms).slice(0, 5));
     await expect(room.page.getByTestId('hero-fraction')).toHaveText(`.${formatClockCsLocal(second.elapsed_ms).slice(6, 8)}`);
@@ -214,7 +214,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // The rejected first attempt keeps its row and its own timestamp (§4).
     await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');
     // NPC1 still names the result on its own screen — in the eyebrow over the
-    // digits, which are that exact instant (V3.5: the number is printed once).
+    // digits, which are that exact instant (V3.4.1: the number is printed once).
     await expect(gate.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
     // §10 step B: the countdown display stops the moment the round is decided, and the
     // number it keeps is the official one rather than a timer running to nothing.
@@ -435,6 +435,12 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // V3.1 §IV: viewer status reads the same Vietnamese string as the operator screen.
     await expect(viewer.page.getByTestId('observer-status')).toContainText('ĐANG CHẠY');
     await expect(viewer.page.getByTestId('observer-team')).toBeVisible();
+    // V3.4.1: while the hero is timing the round, its own status line is the one
+    // place the viewer reads what the floor is doing. The team card used to print
+    // the phase word again in grey directly above it — “LƯỢT CHƠI ĐANG CHẠY” over
+    // “● ĐANG CHẠY 05:00”. In the waiting state the card still says it, because
+    // there the hero shows no status line at all.
+    await expect(viewer.page.getByTestId('observer-phase')).toHaveCount(0);
     // No control at all: not a primary button, not a lock, not a settings entry.
     await expect(viewer.page.getByTestId('primary-action')).toHaveCount(0);
     await expect(viewer.page.getByTestId('record-claim')).toHaveCount(0);

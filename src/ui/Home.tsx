@@ -223,11 +223,20 @@ export function Home({ onEnter, canSelect = true, error }: {
   const seatEnabled = (state: SeatState) =>
     canSelect && (state === 'available' || state === 'self');
 
-  /** V3.5 declutter: the picker states each fact once. The card already shows the
+  /** V3.4.1 declutter: the picker states each fact once. The card already shows the
    *  seat count and the availability word, so the meters drop their explanatory
    *  notes, the section headings drop (they restated the card titles), the duty
    *  line drops (it is the first CTA on the station's own screen) and the tagline
-   *  drops with them. The `aria-label` keeps the full sentence for readers. */
+   *  drops with them. The `aria-label` keeps the full sentence for readers.
+   *
+   *  A duty seat prints no figure at all: its capacity is one, so "0/1" and
+   *  "CÒN TRỐNG" are the same answer twice on the same line, and the aggregate
+   *  above already totals the four. The viewer band keeps its n/10 — there the
+   *  number is the only way to see how many people are watching. */
+  const seatFigure = (role: Role, slot: { devices?: number } | undefined, known: boolean) =>
+    SEAT_CAPACITY[role] > 1
+      ? (known ? `${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : `—/${SEAT_CAPACITY[role]}`)
+      : null;
   return (
     <main className="home-shell safe-top safe-bottom" data-testid="scream-home" data-event={eventClosed ? 'closed' : 'open'}>
       <div className="home-content">
@@ -271,7 +280,7 @@ export function Home({ onEnter, canSelect = true, error }: {
                   className="home-station"
                   style={{ '--role-accent': accent } as CSSProperties}
                   disabled={!seatEnabled(state)}
-                  aria-label={`${ROLE_PERSON[role]} — ${ROLE_AREA[role]}. ${SEAT_WORD[state]}${known ? `. ${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : ''}`}
+                  aria-label={`${ROLE_PERSON[role]} — ${ROLE_AREA[role]}. ${SEAT_WORD[state]}`}
                   onClick={() => openStation(role)}>
                   <span className="home-station-icon" aria-hidden><Icon className="h-5 w-5" /></span>
                   <span className="home-station-id">
@@ -279,7 +288,11 @@ export function Home({ onEnter, canSelect = true, error }: {
                     <span className="home-station-area"><PinIcon className="home-station-pin" />{ROLE_AREA[role]}</span>
                   </span>
                   <span className="home-station-state">
-                    <span className="home-station-seat digital">{known ? `${slot?.devices ?? 0}/${SEAT_CAPACITY[role]}` : `—/${SEAT_CAPACITY[role]}`}</span>
+                    {seatFigure(role, slot, known) !== null ? (
+                      <span className="home-station-seat digital" data-testid={`station-seat-count-${role}`}>
+                        {seatFigure(role, slot, known)}
+                      </span>
+                    ) : null}
                     <span className="badge" data-tone={
                       state === 'available' ? 'live' : state === 'self' ? 'confirmed' : state === 'full' ? 'idle' : state === 'pending' ? 'live' : 'queued'
                     }>{SEAT_WORD[state]}</span>

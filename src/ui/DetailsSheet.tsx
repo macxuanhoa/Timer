@@ -474,10 +474,10 @@ function AdminEventStatus({ snap, now }: { snap: NonNullable<ReturnType<LiveStor
           the verdict stays stated explicitly as a labelled row so nothing an
           organiser needed got dropped. */}
       <p className="admin-status-word" data-testid="admin-event-stage-word">{cmd.stageWord}</p>
-      {/* V3.5: the event name sat here in the same weight the sheet header prints it
+      {/* V3.4.1: the event name sat here in the same weight the sheet header prints it
           in, one row below. The header is the one place that names the night. */}
       <div className="admin-status-rows">
-        {/* V3.5: the two rows that used to open this block printed the event's name
+        {/* V3.4.1: the two rows that used to open this block printed the event's name
             and its verdict — the exact words the sheet header carries, outside the
             scroll box, at the same size. What the header does not say is the
             schedule, so the rows that remain are the timestamps. */}
@@ -628,7 +628,7 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
               ) : null}
               <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
               <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
-              {/* V3.5: the official score and the outcome word are the round card's
+              {/* V3.4.1: the official score and the outcome word are the round card's
                   own headline, visible without opening it. Repeating them as rows
                   inside the body was the same two facts twice per team, and eleven
                   rows per team made the report a wall. */}
@@ -761,7 +761,7 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
           cancellation also sets. A night with one cancelled round therefore read
           "0" beside a card that said "awaiting review". Each count now names the
           set it measures, and both come straight from the stored flags.
-          V3.5 kept both here and dropped the duplicate from the summary block:
+          V3.4.1 kept both here and dropped the duplicate from the summary block:
           this is the section that explains what is being withheld. */}
       <Row
         k="Vòng đang chờ Quản trị viên quyết"
@@ -880,14 +880,24 @@ function History({ snap }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot
               </div>
               <p className="text-snow">
                 {/* The engine already writes a Vietnamese sentence for every press; the
-                    action type is only a fallback for rows older than that habit. */}
+                    action type is only a fallback for rows older than that habit.
+                    V3.4.1: that sentence names the team itself (“Đội #001 đã đến tầng
+                    2”), so the trailing “· #001” was the same team introduced twice
+                    in one line. It stays only on the old rows, where the fallback
+                    label names no team at all. The search index still reads both. */}
                 {l.metadata?.detail_text ? String(l.metadata.detail_text) : ACTION_LABEL[l.action] ?? 'Thao tác không rõ'}
-                {l.team_number !== null ? <span className="text-mute"> · #{pad(l.team_number)}</span> : null}
+                {l.metadata?.detail_text || l.team_number === null ? null : (
+                  <span className="text-mute"> · #{pad(l.team_number)}</span>
+                )}
               </p>
               <p className="text-[0.62rem] text-mute">
                 {ROLE_SHORT[l.actor_role as Role] ?? l.actor_role}
                 {l.actor_id === 'system.clock' ? ' (tự động)' : ''}
-                {l.from_state && l.to_state
+                {/* V3.4.1: a press that left the workflow where it was printed its
+                    own state twice as a move — “Đội sắp bắt đầu → Đội sắp bắt đầu”
+                    reads as a transition that happened when the server recorded
+                    none. Only a real change of state is worth an arrow. */}
+                {l.from_state && l.to_state && STATUS_LABEL[l.from_state] !== STATUS_LABEL[l.to_state]
                   ? ` · ${STATUS_LABEL[l.from_state] ?? l.from_state} → ${STATUS_LABEL[l.to_state] ?? l.to_state}`
                   : ''}
                 {l.metadata?.reason ? ` · lý do: ${String(l.metadata.reason)}` : ''}
@@ -940,7 +950,7 @@ function ReportTab({ store, snap, now, rows, stats }: {
       {/* ------------------------------------------------------- 1. summary */}
       <Section title="Tổng quan sự kiện" testid="section-summary">
         <div data-testid="report-summary">
-          {/* V3.5: the event's name and its verdict are the sheet header, which is
+          {/* V3.4.1: the event's name and its verdict are the sheet header, which is
               pinned above the tabs and never scrolls away. What the header does not
               answer is how many rounds and how many results, so that is what this
               block now starts with. */}
@@ -1138,7 +1148,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
       <section className="admin-group" data-testid="admin-group-seats" aria-label="Quản lý vị trí">
         <h4 className="admin-group-title">QUẢN LÝ VỊ TRÍ</h4>
         <SeatManagement store={store} now={snap.server_now_ms} />
-        {/* V3.5: the “VỊ TRÍ ĐANG BIND” list under the table was the same five rows
+        {/* V3.4.1: the “VỊ TRÍ ĐANG BIND” list under the table was the same five rows
             the table above already prints — role, holder, last action — with less
             detail and a different vocabulary. One list now says who holds what. */}
       </section>

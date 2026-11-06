@@ -20,7 +20,7 @@ interface StripProps {
   /** Tapping the rail opens the floor-by-floor map — it is the only entry on the dashboard. */
   onOpen?(): void;
   /**
-   * V3.5 — the sentence under the rail is the machine's summary of the route. On a
+   * V3.4.1 — the sentence under the rail is the machine's summary of the route. On a
    * station screen the team card above already carries that sentence (the badge and
    * the status line are the same fact in the server's own words), so those screens
    * pass `caption={false}` and keep the rail as pure shape plus one tap affordance.

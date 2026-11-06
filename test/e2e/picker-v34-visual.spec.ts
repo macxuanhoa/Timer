@@ -30,6 +30,12 @@ for (const width of WIDTHS) {
     // The redesign removed the repeated numbering and the decorative arrows:
     // neither may come back on any width.
     await expect(page.locator('.home-station-number, .home-station-arrow')).toHaveCount(0);
+    // V3.4.1: a one-seat position is described by its badge alone. "0/1" was the
+    // same answer as "CÒN TRỐNG" twice on one line, and the overview above already
+    // totals the four. The viewer band keeps its n/10 — there the figure is the
+    // only way to see how many people are watching.
+    await expect(page.locator('.home-station .home-station-seat')).toHaveCount(0);
+    await expect(page.getByTestId('observer-seat-count')).toHaveText(/\d\/10/);
     // Each card carries its full Vietnamese identity, not a truncated label.
     await expect(page.getByTestId('station-LOBBY')).toContainText('NHÂN SỰ 01');
     await expect(page.getByTestId('station-LOBBY')).toContainText('SẢNH TẦNG 1');

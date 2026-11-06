@@ -29,7 +29,7 @@
 /* ---------------------------------------------------------------- header */
 
 /* Premium but quiet: the poster wordmark and the ROOM 305 plate carry the
-   brand and the title says what this screen is for. V3.5 removed the sentence
+   brand and the title says what this screen is for. V3.4.1 removed the sentence
    under the title — the cards already read as a picker — and nothing else
    competes. The signal dot is the live-event pulse, not a status colour. */
 .home-brand {
@@ -85,7 +85,7 @@
 
 /* -------------------------------------------------------------- overview */
 
-/* The two honest numbers of the night, one label each. V3.5 dropped the note
+/* The two honest numbers of the night, one label each. V3.4.1 dropped the note
    under each figure: the four duty cards and the viewer card below already
    show the same capacity seat by seat. The aggregate device counter that also
    included the hidden admin seats is no longer printed here: crew capacity is
@@ -149,7 +149,7 @@
 
 /* The two groups of the picker: the four duty seats and the open viewer band.
    They are layout wrappers only — a seat's identity belongs to its own card,
-   and the overview bar above already names the capacity — so V3.5 removed the
+   and the overview bar above already names the capacity — so V3.4.1 removed the
    headings that restated the card titles. Each group is one column that can
    shrink inside 320px. */
 .home-duty,
@@ -167,7 +167,7 @@
 /* ------------------------------------------------------------------ cards */
 
 /* One card, one reading order: glyph → who → where → is it taken → tap the
-   card. The duty sentence is gone (V3.5): it was the first CTA on the
+   card. The duty sentence is gone (V3.4.1): it was the first CTA on the
    station's own screen, so the picker was quoting a button nobody had pressed
    yet. The left rail is the station's own accent (the same rail the role band
    wears on the operator screens), so the four positions are distinguishable
@@ -865,7 +865,7 @@
   color: color-mix(in srgb, var(--role-accent, var(--color-ember)) 78%, var(--color-snow));
 }
 
-/* What this position does is no longer printed here (V3.5): on every station
+/* What this position does is no longer printed here (V3.4.1): on every station
    screen the same sentence is the label of the button at the bottom of the
    screen, or the briefing checklist inside the card below it. The band keeps
    who and where, which nothing else states at this size. */
@@ -984,7 +984,7 @@
 }
 
 /* The optional label sits under the number as its own line, so the status row
-   below can stay the one sentence about where the team is (V3.5). */
+   below can stay the one sentence about where the team is (V3.4.1). */
 .team-name {
   font-size: var(--sc-t-body);
   font-weight: 700;
@@ -1005,7 +1005,7 @@
 /* ------------------------------------------------------ idle / live clock */
 
 /* Before NPC1 starts there is no round to time, so the clock is a compact meter
-   strip rather than a stage. V3.5 took the sentence off it: why the number is
+   strip rather than a stage. V3.4.1 took the sentence off it: why the number is
    not moving is what the badge, the route and the disabled press all say. The
    freed space belongs to the team and the action. */
 .hero-block {
@@ -1442,7 +1442,7 @@
   color: var(--color-mute);
 }
 
-/* Rail-only form (V3.5): no summary sentence, just the tap affordance, so it
+/* Rail-only form (V3.4.1): no summary sentence, just the tap affordance, so it
    keeps its own corner instead of sitting where the sentence used to start. */
 .stepper-caption.is-affordance {
   justify-content: flex-end;

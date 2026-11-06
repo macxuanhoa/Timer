@@ -46,7 +46,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
   // and calling that "Đã từ chối" would invent a decision the database never
   // recorded.
   //
-  // V3.5: the verdict itself is the row's status word (CHÍNH XÁC / CHƯA ĐÚNG /
+  // V3.4.1: the verdict itself is the row's status word (CHÍNH XÁC / CHƯA ĐÚNG /
   // CHƯA QUYẾT ĐỊNH), so the note underneath now carries only what that word
   // cannot — what happened to the timestamp the team reported.
   const noteFor = (a: AttemptRow) => {
@@ -113,7 +113,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
               <span>LẦN {a.seq} · {formatClockCs(a.elapsedMs)}</span>
               <span className="npc2-verify-state" data-testid={`verify-state-${a.seq}`}>ĐANG CHỜ XÁC MINH</span>
             </p>
-            {/* V3.5: the timestamp line under the head repeated the two decision
+            {/* V3.4.1: the timestamp line under the head repeated the two decision
                 consequences below the buttons — “the time is the team's own mark,
                 it does not move when you close it” is what the confirm note says in
                 the sentence that also names what closing it does. */}

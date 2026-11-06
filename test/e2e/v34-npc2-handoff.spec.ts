@@ -196,7 +196,7 @@ test.describe.serial('V3.4 §5–§7 — NPC2 verification, sealed result, NPC1 
     // 6. Authoritative precision: the stored claim instant, to the hundredth.
     const official = afterRefusals.active_round?.official_duration_ms!;
     expect(official).toBe(claimTwo.elapsed_ms);
-    // V3.5: the sealed card no longer prints the official instant a second time —
+    // V3.4.1: the sealed card no longer prints the official instant a second time —
     // the hero digits are that exact number, at the largest size on the surface.
     // The hero keeps MM:SS in the digits and the hundredths as its own fraction.
     await expect(room.page.getByTestId('hero-clock')).toHaveText(formatCs(official).slice(0, 5));
@@ -217,6 +217,17 @@ test.describe.serial('V3.4 §5–§7 — NPC2 verification, sealed result, NPC1 
     // 8. Cross-phone synchronisation: NPC 1 gets the authorised exit action.
     await expect(gate.page.getByTestId('npc1-handoff')).toBeVisible({ timeout: 20_000 });
     await expect(gate.page.getByTestId('npc1-handoff-official')).toContainText(formatCs(official));
+    // 8b. NPC 1's screen states each fact once, exactly like NPC 2's sealed one.
+    // The hand-off card beside the press owns the team, the official instant and
+    // the verdict; the hero keeps the digits and stops saying them again above it.
+    await expect(gate.page.getByTestId('countdown-team')).toHaveCount(0);
+    await expect(gate.page.getByTestId('countdown-status')).toHaveCount(0);
+    await expect(gate.page.getByTestId('hero-clock')).toHaveText(formatCs(official).slice(0, 5));
+    await expect(gate.page.getByTestId('npc1-handoff-team')).toContainText('#001');
+    // The START_GAME receipt from a press made a whole round ago is not still
+    // hanging under the card that says the round is over.
+    await expect(gate.page.getByTestId('notice')).toHaveCount(0);
+    await shot(gate.page, 'npc1-handoff-once');
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
     // Nobody else is offered a press at all: the exit belongs to NPC 1 alone,
     // and on the other phones the lock renders no control to mis-tap.

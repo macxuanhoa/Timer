@@ -92,7 +92,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     /* ------------------------------------ 2. team handed off by the lobby */
     await lobby.page.getByTestId('primary-action').click();
     await expect.poll(async () => (await snapshot()).active_round?.status, { timeout: 20_000 }).toBe('WAITING_FLOOR2_CONFIRMATION');
-    // V3.5: the heading names the team and the badge is the state — the old screen
+    // V3.4.1: the heading names the team and the badge is the state — the old screen
     // said "đang lên tầng 2" in the heading, the badge, the status line and the
     // requirement sentence, four times inside one viewport.
     await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI #001');

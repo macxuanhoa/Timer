@@ -311,7 +311,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
                 {ROLE_SHORT[account.role]}
               </span>
             </div>
-            {/* V3.5: the caption under the pill spelled out the same identity the
+            {/* V3.4.1: the caption under the pill spelled out the same identity the
                 role band prints one block below, at a readable size. The pill is a
                 readout, not a menu, so it now carries the code and nothing else. */}
           </div>
@@ -544,7 +544,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
               <p className="digital hero-digits mt-1 font-bold text-snow/70" data-testid="hero-clock" data-mode="IDLE">
                 {formatClockSec(snap.event.config.game_limit_ms)}
               </p>
-              {/* V3.5: the sentence under the number said the clock waits for NPC 1 —
+              {/* V3.4.1: the sentence under the number said the clock waits for NPC 1 —
                   already in the status line above and the press below. */}
             </section>
           )}
@@ -588,7 +588,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
       {!locked && (
         <footer className="safe-bottom nav-row">
           {account.role === 'CORRIDOR' ? (
-            /* V3.5: the route rail at the top of this screen is already the map
+            /* V3.4.1: the route rail at the top of this screen is already the map
                button, so the footer keeps the one destination nothing else
                offers — the report — and names it in two words. */
             <button
@@ -607,8 +607,15 @@ export function Dashboard({ store, account, onLogout }: Props) {
                   record, the ranking and the round history live in the sheet's
                   BÁO CÁO group now, so the strip names where it goes instead of
                   saying "Xem thêm" about nothing. */}
+              {/* V3.4.1 §3: the strip used to read “LƯỢT #002 · ĐÃ CHƠI 0”. The first
+                  half is `next_team_number` — the number the team card is already
+                  printing one screen above as “ĐỘI #001”, so one phone showed two
+                  different “#00N” figures for two different things and invited the
+                  operator to read them as one. The second half counted leaderboard
+                  entries, which are closed official results, not rounds played.
+                  Both facts now say what they actually are. */}
               <p className="r01-progress" data-testid="summary-line">
-                LƯỢT #{pad(snap.event.next_team_number)} · ĐÃ CHƠI {rows.length}
+                KẾT QUẢ ĐÃ CHỐT {rows.length}
               </p>
               <button
                 type="button"
@@ -695,7 +702,7 @@ function EventEndedCard({ rounds, successful, endedAt, onOpenReport, isSuperviso
       >
         XEM BÁO CÁO
       </button>
-      {/* V3.5: the note under the two buttons explained what the buttons already
+      {/* V3.4.1: the note under the two buttons explained what the buttons already
           say. The handover wording lives in the sheet, next to the control. */}
     </section>
   );
@@ -754,7 +761,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
     : received
       ? { text: 'ĐÃ NHẬN ĐỘI', tone: 'confirmed' as const }
       : { text: 'CHỜ NHẬN ĐỘI', tone: 'queued' as const };
-  // V3.5 — one fact, one place. The heading used to carry a fourth wording of the
+  // V3.4.1 — one fact, one place. The heading used to carry a fourth wording of the
   // same stage (“ĐỘI VỪA NHẬN” over “ĐÃ NHẬN ĐỘI” over “Đang lên tầng 2”), so the
   // card now names the team and the badge alone says what has happened to it.
   // The idle clock never repeats what the card already says: one label, one duration.
@@ -791,7 +798,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="r01-role">{ROLE_PERSON.LOBBY}</p>
           <p className="role-band-area">{ROLE_AREA.LOBBY}</p>
-          {/* V3.5: the duty sentence was the label of the button at the bottom of
+          {/* V3.4.1: the duty sentence was the label of the button at the bottom of
               this same screen. The band says who and where; the press says what. */}
         </div>
         {/* The band answers "am I holding this seat" — the one of the four states
@@ -849,7 +856,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
           </span>
         </p>
 
-        {/* V3.5: the identity caption printed the team label a second time and the
+        {/* V3.4.1: the identity caption printed the team label a second time and the
             reception timestamp, which the route strip and the sheet's history both
             already carry. Whose hand the round is in stays, because nothing else
             on this screen says it. */}
@@ -881,7 +888,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
               {limitLabel}
             </p>
           </div>
-          {/* V3.5: the sentence under the number explained that the clock waits for
+          {/* V3.4.1: the sentence under the number explained that the clock waits for
               NPC 1 — the same fact the badge, the route caption and the disabled
               press already state. Only a read failure still earns a line here. */}
           {idleCaption ? (
@@ -972,7 +979,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
           ? { tone: 'live' as const, Icon: AlertIcon, text: handoff.badge }
           : { tone: 'queued' as const, Icon: ClockIcon, text: handoff.badge };
   const BadgeIcon = badge.Icon;
-  // V3.5 — this screen used to say “đội đang lên tầng 2” four times over: in the
+  // V3.4.1 — this screen used to say “đội đang lên tầng 2” four times over: in the
   // heading, the badge, the status line and the instruction block. The badge is
   // the server-derived state and it stays; the instruction block is the one place
   // that says what the operator must actually do, so it stays too, and the rest
@@ -991,7 +998,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
           ? 'Đang chờ bước tiếp theo từ máy chủ.'
           : 'Chưa có đội bàn giao. Khi Nhân sự 01 gửi đội lên, nút xác nhận sẽ hiện ở đây.';
   return (
-    // V3.5: the spare height belongs between the blocks, not under the last one.
+    // V3.4.1: the spare height belongs between the blocks, not under the last one.
     // With the duplicated sentences gone this column is shorter than the phone, and
     // the trailing spacer parked all of that space as one dead band below the
     // clock — the same distribution the lobby screen already uses.
@@ -1006,7 +1013,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="r02-role">{ROLE_PERSON.CORRIDOR}</p>
           <p className="role-band-area">{ROLE_AREA.CORRIDOR}</p>
-          {/* V3.5: the duty line was the button label below it. */}
+          {/* V3.4.1: the duty line was the button label below it. */}
         </div>
         <span className="badge" data-tone="confirmed" data-testid="r02-binding-state">
           <CheckIcon />
@@ -1038,7 +1045,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
           </span>
         </div>
 
-        {/* V3.5: the status line and the requirement sentence both restated the
+        {/* V3.4.1: the status line and the requirement sentence both restated the
             badge and the instruction block. Whose hand the round is in is the one
             fact nothing else on this screen carries, so that is what stays. */}
         {turn ? (
@@ -1052,7 +1059,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
       </section>
 
       {/* ----------------------------------------------------- instruction */}
-      {/* V3.5: when the arrival press is on screen, its own hint is the rule —
+      {/* V3.4.1: when the arrival press is on screen, its own hint is the rule —
           “Chỉ xác nhận khi đội đã có mặt tại tầng 2.” A second block saying it again
           one finger-length below the button was the old duplication. The
           instruction stays for every state where there is nothing to press, and
@@ -1101,7 +1108,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
         <section className="state-block" data-tone="confirmed" role="status" data-testid="r02-handoff-summary">
           <span className="state-block-icon" aria-hidden><CheckIcon /></span>
           <p className="state-block-title" data-testid="r02-confirmed">ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2</p>
-          {/* V3.5: the team number and its label are the card above; what is left
+          {/* V3.4.1: the team number and its label are the card above; what is left
               to say is the timestamp the server holds, and who owns the next step. */}
           <p className="text-[0.62rem] leading-snug text-mute" data-testid="r02-confirmed-at">
             Máy chủ ghi nhận lúc {formatWallTime(round?.floor2_confirmed_at ?? snap.server_now_ms)}
@@ -1145,7 +1152,7 @@ function ReturnHome({ onLogout }: { onLogout(): Promise<void> }) {
       {/* V3.4 §7: leaving a seat is a real destination, so it stays one tap away on
           every screen — but it is a text link now, not a second filled button
           competing with the action above it. The hit area is still 44 px.
-          V3.5 shortened it to what the press does: this phone lets go of its seat. */}
+          V3.4.1 shortened it to what the press does: this phone lets go of its seat. */}
       <button
         type="button"
         onClick={() => void leave()}
@@ -1274,7 +1281,7 @@ function PreStartAlert({ round, isNpc1, label, durationLabel }: { round: Round |
       <p className="prestart-hint" data-testid="prestart-hint">
         {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'NPC 1 đang phổ biến luật ở cửa vào tầng 3'}
       </p>
-      {/* V3.5: the duration already sits at the top of the band, and “chờ NPC 1 bấm
+      {/* V3.4.1: the duration already sits at the top of the band, and “chờ NPC 1 bấm
           BẮT ĐẦU” is what the badge, the route and the disabled press all say. */}
       {round?.floor2_bypassed_at !== null && round?.floor2_bypassed_at !== undefined ? (
         <p className="prestart-hint" data-testid="prestart-bypassed">
@@ -1304,7 +1311,7 @@ function PreStartCard({ round, isNpc1, label, durationLabel }: {
 }) {
   return (
     <section className="prestart-block px-4 py-3.5" data-testid="prestart-alert">
-      {/* V3.5: the area belongs to the role band above, so the eyebrow only names
+      {/* V3.4.1: the area belongs to the role band above, so the eyebrow only names
           the stage. The status line under the team number repeated it a second
           time (“Sắp bắt đầu ở tầng 3” under “CHUẨN BỊ BẮT ĐẦU”), so it is gone. */}
       <p className="prestart-eyebrow text-amber">CHUẨN BỊ BẮT ĐẦU</p>
@@ -1373,7 +1380,7 @@ function GateStage({ store, snap, phase, primary, journey, alerts, state, syncBr
         <div className="min-w-0 flex-1">
           <p className="role-band-name" data-testid="gate-role">{ROLE_PERSON.GATE}</p>
           <p className="role-band-area">{ROLE_AREA.GATE}</p>
-          {/* V3.5: the duty line was the briefing checklist printed inside the card
+          {/* V3.4.1: the duty line was the briefing checklist printed inside the card
               below, and the checklist is the shorter, scannable form of it. */}
         </div>
         <p className="role-band-state" data-testid="event-state" data-broken={syncBroken ? '1' : '0'}>
@@ -1486,6 +1493,17 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
   // workflow suite pins), but the screen stops repeating the same fact in three
   // more places under it.
   const npc2Sealed = role === 'ROOM305' && npc2Stage.finalized;
+  // V3.4.1 — the same rule for NPC 1's exit hand-off. The hand-off card names the
+  // team, the official instant and the fact the round is over, in one labelled
+  // block sitting directly above the press that acts on them; the hero was
+  // printing all three a second time above it. The hero keeps the number, because
+  // the countdown contract pins the digits to the stored instant, and stops
+  // repeating the words around it. A round still awaiting verification is NOT
+  // decided, and there the status line is the only place that says so.
+  const decided = countdown.result === 'WON' || countdown.result === 'TIME_UP' || countdown.result === 'ABORTED';
+  const handoffCard = role === 'GATE' && primary.action === 'CONFIRM_EXIT' && decided;
+  // Either phone now states team + outcome once, in the card beside the digits.
+  const outcomeInCard = npc2Sealed || handoffCard;
 
   return (
     <main
@@ -1527,12 +1545,12 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
             <span style={{ width: `${(remainingShare * 100).toFixed(2)}%` }} />
           </div>
         )}
-        {!npc2Sealed && (
+        {!outcomeInCard && (
           <p className="countdown-team" data-testid="countdown-team">
             {countdown.teamText.toUpperCase()}
           </p>
         )}
-        {!npc2Sealed && (
+        {!outcomeInCard && (
           <p
             className="countdown-status"
             style={{ color: tone }}
@@ -1541,7 +1559,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
             {countdown.statusLine}
           </p>
         )}
-        {/* V3.5: the line under the digits printed the official time a second time,
+        {/* V3.4.1: the line under the digits printed the official time a second time,
             under a label the eyebrow already carries. The number is stated once,
             in the largest type on the surface. */}
       </div>
@@ -1581,11 +1599,17 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           <AlertIcon />
           <span>{error}</span>
         </p>
-      ) : notice && !npc2Sealed && !(role === 'ROOM305' && attempts.some((a) => a.open)) ? (
+      ) : notice && !outcomeInCard
+        /* V3.4.1: `notice` is this phone's own last server acknowledgement, and it
+           stays until the next press. On NPC 1's exit screen that is the START_GAME
+           receipt — "ĐÃ BẮT ĐẦU 05:00 — màn hình đã khoá" — still echoing a press
+           made a whole round ago, under a card that already says the round is
+           over. A receipt stops being information once the screen proves it. */
+        && !(role === 'GATE' && primary.action === 'CONFIRM_EXIT') ? (
         /* An error is never hidden. This is the success acknowledgement — and on
            the sealed NPC2 screen the card below already states the same server
-           sentence, in larger type, with the timestamp that counts. V3.5 extends
-           that to the pending claim: the verification card names the same attempt
+           sentence, in larger type, with the timestamp that counts. That extends
+           to the pending claim: the verification card names the same attempt
            at the same instant, one finger below. */
         <p role="status" className="notice-band w-full" data-tone="info" data-testid="notice">
           <span>{notice}</span>

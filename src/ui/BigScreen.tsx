@@ -130,7 +130,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const stageInput = countdownStageOf(hero);
   const tone = countdownToneHex(countdownStage(stageInput));
   const stateLabel = countdownStateLabel(stageInput);
-  // V3.5: the header already prints “ĐỘI #001 · 05:00”, so the line under the
+  // V3.4.1: the header already prints “ĐỘI #001 · 05:00”, so the line under the
   // digits carries only what the header does not — the team's own label. The wall
   // keeps no second copy of the official time either: the digits ARE that time.
   const roundName = snap?.active_round?.team_name ? snap.active_round.team_name : null;

@@ -67,7 +67,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #001');
     await expect(lobby.page.getByTestId('r01-team-badge')).toContainText('CHỜ NHẬN ĐỘI');
     await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
-    // V3.5: the idle duration is one compact row. Why it is not moving is the
+    // V3.4.1: the idle duration is one compact row. Why it is not moving is the
     // badge and the press's own hint, so no sentence is repeated under the number.
     await expect(lobby.page.getByTestId('hero-clock')).toHaveText(/^0\d:\d\d$/);
     await expect(lobby.page.getByTestId('hero-label')).toContainText('CHƯA TÍNH GIỜ');
@@ -84,7 +84,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await lobby.page.getByTestId('team-name').fill('Ma Tro');
     await lobby.page.getByTestId('primary-action').click();
     await expect(lobby.page.getByTestId('active-team')).toHaveAttribute('data-received', '1');
-    // V3.5: the heading names the team; the badge alone says what happened to it,
+    // V3.4.1: the heading names the team; the badge alone says what happened to it,
     // so "accepted" is never also claimed as "vừa nhận" in the line above.
     await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #001');
     await expect(lobby.page.getByTestId('r01-team-badge')).toContainText('ĐÃ NHẬN ĐỘI');
@@ -97,7 +97,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
     await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
     await expect(lobby.page.getByTestId('r01-hand')).toHaveText('CHỜ 02');
-    // V3.5: the phase sentence lives once, under the press that cannot fire yet.
+    // V3.4.1: the phase sentence lives once, under the press that cannot fire yet.
     await expect(lobby.page.getByTestId('waiting-reason')).toContainText('Chờ Nhân sự 02 xác nhận');
 
     /* ------------------------------- 4b. offline while the handoff is pending */

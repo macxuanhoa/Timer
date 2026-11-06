@@ -79,7 +79,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     /* ------------------------------------------------ 1. no incoming team */
     await expect(corridor.page.getByTestId('r02-identity')).toBeVisible();
     await expect(corridor.page.getByTestId('r02-role')).toHaveText('NHÂN SỰ 02');
-    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI KẾ TIẾP');
+    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI #001');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toContainText('CHƯA CÓ ĐỘI ĐƯỢC BÀN GIAO');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toHaveAttribute('data-state', 'none');
     // Nothing to press: the lock names who owns the step, and no arrival CTA exists.
@@ -92,14 +92,17 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     /* ------------------------------------ 2. team handed off by the lobby */
     await lobby.page.getByTestId('primary-action').click();
     await expect.poll(async () => (await snapshot()).active_round?.status, { timeout: 20_000 }).toBe('WAITING_FLOOR2_CONFIRMATION');
-    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI ĐANG BÀN GIAO QUA TẦNG 2');
+    // V3.5: the heading names the team and the badge is the state — the old screen
+    // said "đang lên tầng 2" in the heading, the badge, the status line and the
+    // requirement sentence, four times inside one viewport.
+    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI #001');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toHaveAttribute('data-state', 'incoming');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toContainText('ĐỘI ĐANG LÊN TẦNG 2');
-    // The identity of the arriving team, and the physical precondition, in words.
-    await expect(corridor.page.getByTestId('team-status')).toContainText('Đang lên tầng 2');
-    await expect(corridor.page.getByTestId('r02-requirement')).toHaveText('Xác nhận khi đội đã có mặt tại tầng 2');
     await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
+    // The physical precondition is stated once, as the press's own hint.
     await expect(corridor.page.getByTestId('primary-hint')).toHaveText('Chỉ xác nhận khi đội đã có mặt tại tầng 2.');
+    // …and no second instruction block repeats it while the press is available.
+    await expect(corridor.page.getByTestId('r02-instruction')).toHaveCount(0);
     // Compact duration only: this role never owns a running clock.
     await expect(corridor.page.getByTestId('r02-timer-label')).toHaveText('CHƯA TÍNH GIỜ');
     await expect(corridor.page.getByTestId('r02-timer-value')).toHaveText('05:00');
@@ -134,15 +137,13 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     expect((await snapshot()).active_round?.floor2_confirmed_by_role).toBe('CORRIDOR');
     await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
     await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
-    await expect(corridor.page.getByTestId('r02-waiting-npc1')).toHaveText('ĐANG CHỜ NPC 1 BẮT ĐẦU');
+    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NPC 1');
     await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
-    // Compact: the card no longer restates what the summary has just settled.
-    await expect(corridor.page.getByTestId('r02-requirement')).toHaveCount(0);
     // The arrival CTA is gone, not greyed: there is nothing left to press here.
     await expect(corridor.page.getByTestId('primary-action')).toHaveCount(0);
     await expect(corridor.page.getByTestId('waiting-state')).toHaveCount(0);
     await expect(corridor.page.getByTestId('r02-instruction')).toHaveCount(0);
-    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI ĐÃ GỬI LÊN TẦNG 3');
+    await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI #001');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toHaveAttribute('data-state', 'confirmed');
     // The route moves from the authoritative stamps, not from this phone's press.
     await expect(corridor.page.getByTestId('journey-strip')).toHaveAttribute('data-focus', '2');

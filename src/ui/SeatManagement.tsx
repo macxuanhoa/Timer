@@ -151,8 +151,10 @@ export function SeatManagement({ store, now }: Props) {
 
   return (
     <div className="flex flex-col gap-2" data-testid="seat-management">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-[0.7rem] tracking-[0.1em] text-mute">QUẢN LÝ VỊ TRÍ</p>
+      <div className="flex items-start justify-end gap-2">
+        {/* V3.5: the heading inside this panel spelled “QUẢN LÝ VỊ TRÍ” a second
+            time, one row under the group heading of the same name. The refresh
+            keeps its place at the right edge. */}
         <button
           type="button"
           onClick={() => void load()}
@@ -165,9 +167,7 @@ export function SeatManagement({ store, now }: Props) {
       </div>
 
       <p className="text-[0.66rem] leading-snug text-mute">
-        Ai đang giữ từng vị trí, giữ bao lâu, và có thể giải phóng ngay không. Giải phóng chỉ
-        thu hồi ghế của đúng vị trí đó — không mở sự kiện mới, không tất toán lượt chơi, không
-        đổi checklist. Chạm hai lần để xác nhận.
+        Ai đang giữ từng vị trí và có giải phóng được không. Chạm hai lần để xác nhận.
       </p>
 
       {knowsFloor && blockReason !== null && (
@@ -224,9 +224,8 @@ export function SeatManagement({ store, now }: Props) {
                 );
               })}
 
-              {!held && seat.role !== 'SUPERVISOR' && (
-                <p className="pl-1 text-[0.62rem] text-mute">Chưa có thiết bị nào nhận ghế này.</p>
-              )}
+              {/* V3.5: “Chưa có thiết bị nào nhận ghế này.” restated the CÒN TRỐNG
+                  word on the same line of the same row. */}
 
               {seat.role !== 'SUPERVISOR' && (
                 <button
@@ -267,8 +266,7 @@ export function SeatManagement({ store, now }: Props) {
       )}
       {failed && !loading && (
         <p className="text-[0.64rem] leading-snug text-mute" data-testid="seat-mgmt-degraded">
-          Không đọc được danh sách thiết bị giữ ghế (máy chủ chưa có hàm này hoặc mất kết nối).
-          Vẫn bấm được nút ở trên — PostgreSQL sẽ trả lời rõ có giải phóng được hay không.
+          Không đọc được danh sách thiết bị giữ ghế. Vẫn bấm được nút ở trên — máy chủ sẽ trả lời rõ có giải phóng được hay không.
         </p>
       )}
     </div>

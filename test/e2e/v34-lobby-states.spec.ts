@@ -64,12 +64,14 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('r01-identity')).toBeVisible();
     await expect(lobby.page.getByTestId('r01-role')).toHaveText('NHÂN SỰ 01');
     await expect(lobby.page.getByTestId('binding-state')).toContainText('ĐÃ GẮN VỊ TRÍ');
-    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI KẾ TIẾP');
+    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #001');
     await expect(lobby.page.getByTestId('r01-team-badge')).toContainText('CHỜ NHẬN ĐỘI');
     await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
-    // The idle duration is one compact row, and it says why it is not moving.
+    // V3.5: the idle duration is one compact row. Why it is not moving is the
+    // badge and the press's own hint, so no sentence is repeated under the number.
     await expect(lobby.page.getByTestId('hero-clock')).toHaveText(/^0\d:\d\d$/);
-    await expect(lobby.page.getByTestId('hero-note')).toContainText('BẮT ĐẦU');
+    await expect(lobby.page.getByTestId('hero-label')).toContainText('CHƯA TÍNH GIỜ');
+    await expect(lobby.page.getByTestId('hero-note')).toHaveCount(0);
     // Five stops, none reached.
     await expect(lobby.page.getByTestId('journey-strip')).toBeVisible();
     await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '0');
@@ -82,11 +84,12 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await lobby.page.getByTestId('team-name').fill('Ma Tro');
     await lobby.page.getByTestId('primary-action').click();
     await expect(lobby.page.getByTestId('active-team')).toHaveAttribute('data-received', '1');
-    // Accepted is not playing: the headline must not claim a running round.
-    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI VỪA NHẬN');
+    // V3.5: the heading names the team; the badge alone says what happened to it,
+    // so "accepted" is never also claimed as "vừa nhận" in the line above.
+    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #001');
     await expect(lobby.page.getByTestId('r01-team-badge')).toContainText('ĐÃ NHẬN ĐỘI');
     await expect(lobby.page.getByTestId('team-status')).toContainText('Ma Tro');
-    await expect(lobby.page.getByTestId('team-identity')).toContainText('đã nhận lúc');
+    await expect(lobby.page.getByTestId('team-status')).toContainText('Đang lên tầng 2');
     await assertReadable(lobby.page, 'lobby: team accepted');
     await shot(lobby.page, 'r01-2-accepted');
 
@@ -94,7 +97,8 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
     await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
     await expect(lobby.page.getByTestId('r01-hand')).toHaveText('CHỜ 02');
-    await expect(lobby.page.getByTestId('event-state')).toContainText('Chờ Nhân sự 02 xác nhận tầng 2');
+    // V3.5: the phase sentence lives once, under the press that cannot fire yet.
+    await expect(lobby.page.getByTestId('waiting-reason')).toContainText('Chờ Nhân sự 02 xác nhận');
 
     /* ------------------------------- 4b. offline while the handoff is pending */
     // Measured here, with a live workflow on screen, because this is the state
@@ -128,7 +132,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('prestart-hint')).toContainText('NPC 1 đang phổ biến luật');
     // The pre-start banner is the phase statement, so the card's state line keeps
     // only whose hand the round is in, and the warning strip drops its duplicate.
-    await expect(lobby.page.getByTestId('event-state')).toHaveText('CHỜ NPC 1');
+    await expect(lobby.page.getByTestId('r01-hand-who')).toHaveText('CHỜ NPC 1');
     await expect(lobby.page.getByTestId('alert-PRESTART')).toHaveCount(0);
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
     await assertReadable(lobby.page, 'lobby: handoff complete');
@@ -159,7 +163,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await gate.page.getByTestId('primary-action').click();
     // Between teams the lobby owns its press again, with the next number queued.
     await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 20_000 });
-    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI KẾ TIẾP');
+    await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #002');
 
     /* ------------------------------------- 8. event ended */
     await sup.page.getByTestId('open-details').click();

@@ -167,8 +167,10 @@ test('the picker shows four stations plus a separate viewer band, never the admi
   // hidden admin seats) and ten viewer seats.
   await expect(a.page.getByTestId('station-count')).toHaveText(/\d\/4/);
   await expect(a.page.getByTestId('observer-count')).toHaveText(/\d\/10/);
-  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực đã chiếm');
-  await expect(a.page.getByTestId('home-overview')).toContainText('Người đang quan sát');
+  // V3.5: the overview keeps its two figures and their labels; the explanatory
+  // note under each one restated the four cards and the viewer card below it.
+  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực');
+  await expect(a.page.getByTestId('home-overview')).toContainText('Người xem');
   // The viewer seat opens with no password and no challenge of any kind.
   await claim(a,'OBSERVER');
   await expect(a.page.getByTestId('observer')).toBeVisible();

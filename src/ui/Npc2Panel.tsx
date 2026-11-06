@@ -45,13 +45,17 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
   // sealed the list still shows every claim — including one NPC 2 never judged —
   // and calling that "Đã từ chối" would invent a decision the database never
   // recorded.
+  //
+  // V3.5: the verdict itself is the row's status word (CHÍNH XÁC / CHƯA ĐÚNG /
+  // CHƯA QUYẾT ĐỊNH), so the note underneath now carries only what that word
+  // cannot — what happened to the timestamp the team reported.
   const noteFor = (a: AttemptRow) => {
-    if (a.status === 'VALID') return `Đã chốt · ${a.inTime ? 'thời gian tính theo mốc báo' : 'ngoài giờ'}`;
-    if (a.status === 'INVALID') return 'Đã từ chối · giữ nguyên mốc báo để đối chiếu';
-    if (a.status === 'LATE') return 'Ghi nhận sau hết giờ — không tạo kết quả thắng';
+    if (a.status === 'VALID') return a.inTime ? 'Thời gian tính theo mốc báo' : 'Ghi nhận ngoài giờ';
+    if (a.status === 'INVALID') return 'Giữ nguyên mốc báo để đối chiếu';
+    if (a.status === 'LATE') return 'Không tạo kết quả thắng';
     return a.open
       ? 'Đang chờ NPC 2 kiểm tra trận đồ'
-      : 'Lượt chơi đã chốt trước khi lần báo này được quyết định — mốc báo giữ nguyên';
+      : 'Mốc báo giữ nguyên — lần báo này chưa được quyết định';
   };
 
   const claimPending = pending === 'CLAIM_COMPLETE' || verifying === 'CLAIM_COMPLETE';
@@ -65,6 +69,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
           teamText={countdown.teamText}
           officialMs={stage.officialMs ?? countdown.officialMs ?? 0}
           waitingLine="Đang chờ NPC 1 xác nhận đội rời tầng 3."
+          showTime={false}
         />
       ) : stage.canClaim ? (
         <button
@@ -108,7 +113,10 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
               <span>LẦN {a.seq} · {formatClockCs(a.elapsedMs)}</span>
               <span className="npc2-verify-state" data-testid={`verify-state-${a.seq}`}>ĐANG CHỜ XÁC MINH</span>
             </p>
-            <p className="npc2-verify-time">Thời gian ghi theo mốc báo của đội — không đổi theo lúc bạn chốt.</p>
+            {/* V3.5: the timestamp line under the head repeated the two decision
+                consequences below the buttons — “the time is the team's own mark,
+                it does not move when you close it” is what the confirm note says in
+                the sentence that also names what closing it does. */}
             <div className="npc2-decisions">
               <button
                 type="button"
@@ -145,7 +153,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
             </div>
             {!a.inTime ? (
               <p className="npc2-late-inline" data-testid={`verify-late-${a.seq}`}>
-                Mốc báo ngoài giờ — không thể chốt thành kết quả thắng.
+                Mốc báo ngoài giờ.
               </p>
             ) : null}
           </div>
@@ -175,7 +183,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
       {open.length > 0 && (
         <p className="npc2-pending-hint" data-testid="attempt-hint">
           {countdown.running
-            ? `Đang chờ quyết định cho ${open.length} lần báo — đồng hồ vẫn chạy`
+            ? `Còn ${open.length} lần báo chờ quyết định — đồng hồ vẫn chạy`
             : `Hết giờ — còn ${open.length} lần báo chờ quyết định`}
         </p>
       )}

@@ -196,7 +196,8 @@ test.describe.serial('V3.4 §5–§7 — NPC2 verification, sealed result, NPC1 
     // 6. Authoritative precision: the stored claim instant, to the hundredth.
     const official = afterRefusals.active_round?.official_duration_ms!;
     expect(official).toBe(claimTwo.elapsed_ms);
-    await expect(room.page.getByTestId('official-result-time')).toHaveText(formatCs(official));
+    // V3.5: the sealed card no longer prints the official instant a second time —
+    // the hero digits are that exact number, at the largest size on the surface.
     // The hero keeps MM:SS in the digits and the hundredths as its own fraction.
     await expect(room.page.getByTestId('hero-clock')).toHaveText(formatCs(official).slice(0, 5));
     await expect(room.page.getByTestId('hero-fraction')).toHaveText(`.${formatCs(official).slice(6, 8)}`);

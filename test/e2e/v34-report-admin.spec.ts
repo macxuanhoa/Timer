@@ -126,11 +126,13 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await expect(summary).toBeVisible();
     await expect(summary).toContainText('2 lượt đã ghi nhận · 1 đã đóng · 1 đang diễn ra · 1 lượt bị hủy có kiểm toán');
     await expect(summary).toContainText('Đội có kết quả chính thức');
-    await expect(summary).toContainText('Vòng chờ Quản trị viên quyết');
+    // V3.5: the withheld-decision count is stated once, in the performance block
+    // that explains which population it measures.
+    await expect(sup.getByTestId('performance')).toContainText('Vòng đang chờ Quản trị viên quyết');
 
     // 2 — the best official result is the stored instant, with its eligibility
     // rule stated next to it.
-    await expect(sup.getByTestId('report-best')).toContainText('Chỉ tính đội có lần báo hoàn thành được NPC 2 chốt');
+    await expect(sup.getByTestId('report-best')).toContainText('Chỉ tính đội được NPC 2 chốt');
     await expect(sup.getByTestId('report-best-team')).toContainText('#001');
 
     // 3 — the disqualified team never enters the ranking.
@@ -151,8 +153,9 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     expect(labels, `row labels: ${labels.join(' | ')}`).not.toContain('Hết giờ');
     expect(labels).toContain('Mốc hết giờ theo lịch');
     await expect(card1.getByTestId('round-detail-rows-1')).toContainText('đội hoàn thành trước mốc');
-    // The official instant the report prints is the engine's own number.
-    await expect(card1.getByTestId('round-detail-rows-1')).toContainText('Điểm chính thức');
+    // The official instant the report prints is the engine's own number, and it
+    // is on the card's headline — not repeated as a row inside it (V3.5).
+    await expect(card1.getByTestId('round-score-1')).not.toHaveText('—');
 
     // Issue 1 — the cancellation is described by the kind the server recorded,
     // on the card and in the audit trail, and the two cannot disagree.
@@ -241,7 +244,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     expect(order.config, JSON.stringify(order)).toBeGreaterThan(order.lifecycle);
     expect(order.risk, JSON.stringify(order)).toBeGreaterThan(order.config);
 
-    await expect(sup.getByTestId('admin-event-state-word')).not.toHaveText('');
+    await expect(sup.getByTestId('sheet-event-state')).not.toHaveText('');
     // §3A: the block's large headline is the workflow stage, not a second copy
     // of the sheet header's verdict. The verdict is still stated, as a row.
     await expect(sup.getByTestId('admin-event-stage-word')).not.toHaveText('');
@@ -292,10 +295,10 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     // the station footer — the ended state is asserted from the sheet the
     // organiser was already reading.
     await expect(sup.getByTestId('admin-open-new')).toBeVisible({ timeout: 20_000 });
-    await expect(sup.getByTestId('admin-event-state-word')).toContainText('KẾT THÚC');
+    await expect(sup.getByTestId('sheet-event-state')).toContainText('KẾT THÚC');
     await sup.getByTestId('sheet-tab-report').click();
     await expect(sup.getByTestId('report-summary')).toContainText('2 lượt đã ghi nhận · 2 đã đóng');
-    await expect(sup.getByTestId('report-summary')).toContainText('SỰ KIỆN ĐÃ KẾT THÚC');
+    await expect(sup.getByTestId('sheet-event-state')).toContainText('SỰ KIỆN ĐÃ KẾT THÚC');
     await sup.screenshot({ path: 'shots/v34-report-ended.png', fullPage: true });
 
     // The closed event's record stays readable, with the same stored instant.

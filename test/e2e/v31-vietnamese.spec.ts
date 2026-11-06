@@ -181,11 +181,13 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
 
     // Verify with the wrong decision: label reads `CHƯA ĐÚNG`, never `INVALID`.
     // After the reject the attempt closes, so its decision buttons disappear and the
-    // row falls back to the "Đã từ chối" caption — that caption is what a real
-    // operator reads, so it is what the sweep must guard.
+    // row falls back to its caption — the verdict is the status word and the note
+    // says what happened to the reported mark (V3.5), so the pair is what a real
+    // operator reads and what this sweep must guard.
     await room.page.getByTestId('attempt-invalid-1').click();
     await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');
-    await expect(room.page.getByTestId('attempt-closed')).toContainText('Đã từ chối');
+    await expect(room.page.getByTestId('attempt-1')).toContainText('CHƯA ĐÚNG');
+    await expect(room.page.getByTestId('attempt-closed')).toContainText('Giữ nguyên mốc báo');
     await expect(room.page.getByTestId('attempt-closed')).not.toContainText('INVALID');
     await expectVietnamese(room.page, 'RUNNING: room (rejected attempt)');
 

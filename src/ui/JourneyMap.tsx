@@ -19,6 +19,14 @@ interface StripProps {
   journey: JourneyInfo;
   /** Tapping the rail opens the floor-by-floor map — it is the only entry on the dashboard. */
   onOpen?(): void;
+  /**
+   * V3.5 — the sentence under the rail is the machine's summary of the route. On a
+   * station screen the team card above already carries that sentence (the badge and
+   * the status line are the same fact in the server's own words), so those screens
+   * pass `caption={false}` and keep the rail as pure shape plus one tap affordance.
+   * Screens without a team card — the reset checkpoint, the viewer — keep it.
+   */
+  caption?: boolean;
 }
 
 const STOP_ICON: Record<JourneyStop['key'], (props: { className?: string }) => ReactElement> = {
@@ -67,7 +75,7 @@ function StateIcon({ state, Icon }: { state: string; Icon: (props: { className?:
  * state as a word, and the caption underneath is the machine's own one-line
  * summary — the same sentence on every device.
  */
-export function JourneyStepper({ journey, onOpen }: StripProps) {
+export function JourneyStepper({ journey, onOpen, caption = true }: StripProps) {
   const { stops, focus } = journey;
   const hasRound = journey.team_number !== null;
   const reached = Math.max(0, Math.min(stops.length - 1, focus));
@@ -128,12 +136,15 @@ export function JourneyStepper({ journey, onOpen }: StripProps) {
           );
         })}
       </div>
-      {/* The machine's own one-line summary of the route — the same sentence on
-          every device, so nobody has to infer it from five small circles. */}
-      <p className="stepper-caption" data-testid="journey-caption">
-        {journey.caption}
-        {onOpen ? <span className="stepper-more">Sơ đồ từng tầng</span> : null}
-      </p>
+      {/* The machine's own one-line summary of the route, where nothing else on the
+          screen carries it. The tap affordance is the same on every phone: three
+          words in the corner of the rail, never a second sentence. */}
+      {(caption || onOpen) && (
+        <p className={`stepper-caption${caption ? '' : ' is-affordance'}`} data-testid={caption ? 'journey-caption' : undefined}>
+          {caption ? journey.caption : null}
+          {onOpen ? <span className="stepper-more">SƠ ĐỒ ›</span> : null}
+        </p>
+      )}
     </div>
   );
 }

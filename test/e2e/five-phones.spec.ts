@@ -139,7 +139,9 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(corridor.page.getByTestId('waiting-state')).toHaveCount(0);
     await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
     await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
-    await expect(corridor.page.getByTestId('r02-waiting-npc1')).toHaveText('ĐANG CHỜ NPC 1 BẮT ĐẦU');
+    // V3.5: the summary states the confirmed arrival and the server instant; who
+    // owns the next step is the card's hand line, stated once for the whole screen.
+    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NPC 1');
     await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
 
     // §8 Pre-start: the same loud alert on every phone, one START permission.
@@ -203,15 +205,17 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // screen is read-only for completion reporting, exactly like the RPC.
     await expect(room.page.getByTestId('official-result')).toBeVisible();
     await expect(room.page.getByTestId('official-result-title')).toContainText('ĐÃ CHỐT KẾT QUẢ');
-    // The card carries the claim's own instant to hundredths — the same value
-    // the board ranks, never a rounded UI artefact.
-    await expect(room.page.getByTestId('official-result-time')).toHaveText(formatClockCsLocal(second.elapsed_ms));
+    // V3.5: the claim's own instant to hundredths is stated once — as the hero
+    // digits, which the board ranks and the card no longer prints a second time.
+    await expect(room.page.getByTestId('hero-clock')).toHaveText(formatClockCsLocal(second.elapsed_ms).slice(0, 5));
+    await expect(room.page.getByTestId('hero-fraction')).toHaveText(`.${formatClockCsLocal(second.elapsed_ms).slice(6, 8)}`);
     await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ NPC 1 xác nhận đội rời tầng 3.');
     await expect(room.page.getByTestId('record-claim')).toHaveCount(0);
     // The rejected first attempt keeps its row and its own timestamp (§4).
     await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');
-    // NPC1 still sees the official result line on its own screen.
-    await expect(gate.page.getByTestId('countdown-official')).toContainText('KẾT QUẢ CHÍNH THỨC');
+    // NPC1 still names the result on its own screen — in the eyebrow over the
+    // digits, which are that exact instant (V3.5: the number is printed once).
+    await expect(gate.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
     // §10 step B: the countdown display stops the moment the round is decided, and the
     // number it keeps is the official one rather than a timer running to nothing.
     await expect(room.page.getByTestId('countdown-label')).toHaveText('THỜI GIAN HOÀN THÀNH');
@@ -256,7 +260,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // V3.2 IA: the report tab shows rounds, ranking and audit flat — no accordions.
     await lobby.page.getByTestId('sheet-tab-report').click();
     await expect(lobby.page.getByTestId('leaderboard-table')).toContainText('#001');
-    await expect(lobby.page.getByTestId('round-detail-1')).toContainText('Điểm chính thức');
+    await expect(lobby.page.getByTestId('round-score-1')).not.toHaveText('—');
     await expect(lobby.page.getByTestId('claims-1')).toContainText('Lần 1');
     // V3.1 §IV: the attempt decision reads `CHƯA ĐÚNG` (from ATTEMPT_LABEL.INVALID),
     // never the raw `INVALID` key. The uppercase is the deliberate visual weight of

@@ -13,8 +13,6 @@ import {
   RESET_TASKS,
   RESET_TASK_LABEL,
   REVIEW_REASON_LABEL,
-  ROLE_AREA,
-  ROLE_LABEL,
   ROLE_PERSON,
   ROLE_SHORT,
   ROUND_DURATION_MAX_MS,
@@ -419,7 +417,7 @@ function OpsTab({
           </div>
           <p className="mt-1.5 text-[0.66rem] leading-snug text-mute" data-testid="ops-sync-note">
             {sync.key === 'connected' || sync.key === 'current'
-              ? 'Các số đang hiển thị lấy từ máy chủ, đồng hồ làm theo máy chủ.'
+              ? null
               : 'Số liệu có thể đang cũ. Kiểm tra mạng và đọc lại; điểm chính thức luôn lấy từ máy chủ.'}
           </p>
           {sync.showRetry && (
@@ -476,9 +474,13 @@ function AdminEventStatus({ snap, now }: { snap: NonNullable<ReturnType<LiveStor
           the verdict stays stated explicitly as a labelled row so nothing an
           organiser needed got dropped. */}
       <p className="admin-status-word" data-testid="admin-event-stage-word">{cmd.stageWord}</p>
-      <p className="admin-status-name" data-testid="admin-event-name">{cmd.eventName}</p>
+      {/* V3.5: the event name sat here in the same weight the sheet header prints it
+          in, one row below. The header is the one place that names the night. */}
       <div className="admin-status-rows">
-        <Row k="Trạng thái sự kiện" v={cmd.stateWord} tone={ended ? 'text-mute' : 'text-jade'} testid="admin-event-state-word" />
+        {/* V3.5: the two rows that used to open this block printed the event's name
+            and its verdict — the exact words the sheet header carries, outside the
+            scroll box, at the same size. What the header does not say is the
+            schedule, so the rows that remain are the timestamps. */}
         <Row k="Bắt đầu sự kiện" v={snap.event.event_started_at !== null ? formatWallTime(snap.event.event_started_at) : 'chưa mở'} />
         <Row k="Kết thúc sự kiện" v={ended ? formatWallTime(snap.event.event_ended_at ?? now) : 'đang mở'} tone={ended ? 'text-mute' : 'text-jade'} />
         {/* The row that used to sit here printed `#${team} · ${stageWord}` — the
@@ -608,11 +610,6 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
               <Row k="Bắt đầu lượt chơi" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
               <Row k="Thời lượng lượt" v={r.game_started_at !== null ? formatClockSec(limit) : '—'} />
               <Row k="Mốc hết giờ theo lịch" v={deadlineText} />
-              <Row
-                k="Điểm chính thức"
-                v={m.game_ms === null ? '—' : formatClockMs(m.game_ms)}
-                tone={m.game_ms !== null && m.game_ms > limit ? 'text-blood' : 'text-snow'}
-              />
               <Row k="Chuẩn bị" v={formatSeconds(m.prep_ms)} />
               <Row k="Rời tầng 3" v={r.exit_confirmed_at ? formatWallTime(r.exit_confirmed_at) : '—'} />
               <Row k="Hủy lượt" v={r.aborted_at ? `${formatWallTime(r.aborted_at)} · ${abortKindWord(r.abort_kind)}` : '—'} tone={r.aborted_at !== null ? 'text-blood' : 'text-snow'} />
@@ -631,7 +628,10 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
               ) : null}
               <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
               <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
-              <Row k="Kết quả" v={OUTCOME_LABEL[m.result] ?? 'Không rõ'} tone={m.result === 'WON' ? 'text-jade' : m.result === 'TIME_UP' || m.result === 'ABORTED' ? 'text-blood' : 'text-mute'} />
+              {/* V3.5: the official score and the outcome word are the round card's
+                  own headline, visible without opening it. Repeating them as rows
+                  inside the body was the same two facts twice per team, and eleven
+                  rows per team made the report a wall. */}
               {claims.length > 0 && (
                 <ul className="mt-1 flex flex-col gap-0.5" data-testid={`claims-${r.team_number}`}>
                   {claims.map((a) => (
@@ -760,7 +760,9 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
           every round card printed `CHỜ XÉT` from `needs_review`, which a
           cancellation also sets. A night with one cancelled round therefore read
           "0" beside a card that said "awaiting review". Each count now names the
-          set it measures, and both come straight from the stored flags. */}
+          set it measures, and both come straight from the stored flags.
+          V3.5 kept both here and dropped the duplicate from the summary block:
+          this is the section that explains what is being withheld. */}
       <Row
         k="Vòng đang chờ Quản trị viên quyết"
         v={String(stats.reviewPending)}
@@ -789,8 +791,7 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
       <Row k="Reset đồng hồ (toàn sự kiện)" v={String(stats.clock_resets)} tone={stats.clock_resets > 0 ? 'text-ember' : 'text-snow'} />
       <Row k="Tạm dừng đồng hồ (toàn sự kiện)" v={String(stats.clock_pauses)} tone={stats.clock_pauses > 0 ? 'text-ember' : 'text-snow'} />
       <div className="mt-3 rounded-panel border border-hair px-3 py-2 text-[0.66rem] leading-relaxed text-mute" data-testid="sync-quality">
-        Đồng bộ hiển thị: offset máy khách đã hiệu chỉnh bằng RTT. RTT trung vị {state.maxDisplayErrorMs === null ? '—' : 'đã đo'}, sai số
-        tối đa ước tính {state.maxDisplayErrorMs === null ? 'chưa đồng bộ' : `${state.maxDisplayErrorMs} ms`} · now = {formatWallTime(now)}
+        Sai số hiển thị ước tính {state.maxDisplayErrorMs === null ? 'chưa đồng bộ' : `${state.maxDisplayErrorMs} ms`} · now = {formatWallTime(now)}
       </div>
     </div>
   );
@@ -939,14 +940,12 @@ function ReportTab({ store, snap, now, rows, stats }: {
       {/* ------------------------------------------------------- 1. summary */}
       <Section title="Tổng quan sự kiện" testid="section-summary">
         <div data-testid="report-summary">
-          <Row k="Sự kiện" v={snap.event.config.event_name} />
-          <Row k="Trạng thái" v={OPS_EVENT_STATE_WORD[statusOf(snap, now)]} tone={snap.event.event_ended_at !== null ? 'text-mute' : 'text-jade'} />
-          {/* The same sentence the operations tab prints, from the same selector:
-              recorded / closed / open / cancelled, spelled out rather than one
-              ambiguous total. */}
+          {/* V3.5: the event's name and its verdict are the sheet header, which is
+              pinned above the tabs and never scrolls away. What the header does not
+              answer is how many rounds and how many results, so that is what this
+              block now starts with. */}
           <Row k="Lượt" v={counts.sentence} tone={counts.aborted > 0 ? 'text-ember' : 'text-snow'} />
           <Row k="Đội có kết quả chính thức" v={String(stats.teams_successful)} tone="text-jade" />
-          <Row k="Vòng chờ Quản trị viên quyết" v={String(stats.reviewPending)} tone={stats.reviewPending > 0 ? 'text-ember' : 'text-snow'} />
         </div>
       </Section>
 
@@ -963,8 +962,7 @@ function ReportTab({ store, snap, now, rows, stats }: {
               ĐỘI #{pad(best.team_number)}{best.team_name ? ` · ${best.team_name}` : ''}
             </p>
             <p className="report-best-rule">
-              Chỉ tính đội có lần báo hoàn thành được NPC 2 chốt trong thời lượng lượt chơi; kết quả đã bị loại
-              hoặc còn chờ xét không đứng bảng này.
+              Chỉ tính đội được NPC 2 chốt trong thời lượng lượt chơi.
             </p>
           </div>
         )}
@@ -1140,21 +1138,9 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
       <section className="admin-group" data-testid="admin-group-seats" aria-label="Quản lý vị trí">
         <h4 className="admin-group-title">QUẢN LÝ VỊ TRÍ</h4>
         <SeatManagement store={store} now={snap.server_now_ms} />
-
-        <div className="flex flex-col gap-1" data-testid="admin-bindings">
-          <p className="text-[0.7rem] tracking-[0.1em] text-mute">VỊ TRÍ ĐANG BIND</p>
-          {snap.operators.length === 0 ? (
-            <p className="text-[0.7rem] text-mute" data-testid="admin-bindings-empty">Chưa có thiết bị nào đang giữ vị trí.</p>
-          ) : snap.operators.map((op) => (
-            <p key={op.role} className="flex items-center justify-between gap-2 border-b border-hair/40 py-1.5 text-[0.7rem] last:border-0">
-              <span className="font-semibold text-snow">{ROLE_LABEL[op.role]}</span>
-              <span className="truncate text-[0.64rem] text-mute">
-                {op.last_action ? ACTION_LABEL[op.last_action] ?? 'Thao tác không rõ' : 'chưa thao tác'}
-                {op.last_action_at ? ` · ${formatWallTime(op.last_action_at)}` : ''}
-              </span>
-            </p>
-          ))}
-        </div>
+        {/* V3.5: the “VỊ TRÍ ĐANG BIND” list under the table was the same five rows
+            the table above already prints — role, holder, last action — with less
+            detail and a different vocabulary. One list now says who holds what. */}
       </section>
 
       {/* ------------------------------- 4. release the whole board (bulk, risky) */}
@@ -1162,9 +1148,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <div className="flex flex-col gap-2" data-testid="release-panel">
           <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
           <p className="text-[0.66rem] leading-snug text-mute">
-            Thu hồi mọi máy đang giữ chỗ trực, trả về CÒN TRỐNG để ca mới chọn lại vị trí. Đồng hồ,
-            kết quả, lần báo hoàn thành và checklist vẫn còn nguyên. Chỉ máy đang giữ ghế Quản trị
-            mới làm được việc này.
+            Thu hồi mọi máy đang giữ chỗ trực để ca mới chọn lại vị trí. Đồng hồ, kết quả và lịch sử giữ nguyên.
           </p>
           {/* Normal path: two taps, and PostgreSQL still refuses if the floor is busy. */}
           <button
@@ -1198,8 +1182,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
              nothing on the closed event is deleted or rewritten. */
           <div className="flex flex-col gap-2">
             <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-open-hint">
-              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội. Lịch sử, lượt chơi,
-              lần báo hoàn thành, checklist reset và nhật ký của sự kiện vừa rồi giữ nguyên.
+              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội — lịch sử và kết quả vừa rồi giữ nguyên.
             </p>
             <input
               value={newEventName}
@@ -1328,8 +1311,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
       <section className="admin-risk-group" data-testid="admin-group-risk" aria-label="Khôi phục rủi ro cao">
         <h4 className="admin-risk-title">KHÔI PHỤC RỦI RO CAO</h4>
         <p className="admin-risk-note">
-          Các thao tác dưới đây thay đổi trạng thái của cả ca trực và đều vào nhật ký. Máy chủ vẫn
-          kiểm tra quyền của máy này trước khi thực hiện; không thao tác nào xoá điểm, lần báo hay lịch sử.
+          Mọi thao tác dưới đây đều vào nhật ký và được máy chủ kiểm tra quyền trước khi thực hiện.
         </p>
 
         {/* Emergency board release, moved out of the release panel because it is the
@@ -1340,8 +1322,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
               Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
             </summary>
             <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
-              Dùng khi ca trực đổi người gấp: lượt đang mở sẽ bị HỦY có ghi nhật ký
-              (lý do “Emergency reset”), toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
+              Lượt đang mở sẽ bị HỦY có ghi nhật ký và toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
             </p>
             <button
               type="button"

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type { LiveStore } from '../client/liveStore';
 import { pad, resolveBigScreen, resolveCountdown } from '../client/selectors';
 import { BIG_SCREEN_WARN_MS, type Role } from '../shared/constants';
-import { formatClockCs, formatClockSec } from '../shared/metrics';
+import { formatClockSec } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
 import { countdownStage, countdownStateLabel, countdownStageOf, countdownToneHex } from './countdown';
@@ -130,6 +130,10 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
   const stageInput = countdownStageOf(hero);
   const tone = countdownToneHex(countdownStage(stageInput));
   const stateLabel = countdownStateLabel(stageInput);
+  // V3.5: the header already prints “ĐỘI #001 · 05:00”, so the line under the
+  // digits carries only what the header does not — the team's own label. The wall
+  // keeps no second copy of the official time either: the digits ARE that time.
+  const roundName = snap?.active_round?.team_name ? snap.active_round.team_name : null;
   // In digits-only mode the whole surface is the gesture that brings the buttons back.
   const tap = digitsOnly ? () => setDigitsOnly(false) : undefined;
   const fsLabel = fullscreen === 'on' ? 'BỎ TOÀN MÀN HÌNH' : 'TOÀN MÀN HÌNH';
@@ -170,25 +174,16 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-3">
         <TimeDigits mm={hero.mm} ss={hero.ss} cs={hero.cs} stage={stageInput} mode={hero.mode} variant="wall" />
 
-        {!digitsOnly && (
+        {!digitsOnly && roundName !== null ? (
           <p className="mt-1 text-[clamp(0.9rem,3vw,1.6rem)] font-bold tracking-[0.1em] text-snow" data-testid="big-label">
-            {hero.teamText.toUpperCase()}
+            {roundName.toUpperCase()}
           </p>
-        )}
+        ) : null}
 
         {clock.pendingValidation && (
           <p className="digital mt-2 text-[clamp(0.8rem,3vw,1.6rem)] font-bold tracking-[0.16em] text-ember" data-testid="big-pending">
             HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ
           </p>
-        )}
-
-        {clock.result === 'WON' && clock.officialMs !== null && (
-          <div className="mt-2 flex flex-col items-center gap-1" data-testid="big-result">
-            <p className="text-[clamp(0.75rem,2.6vw,1.3rem)] font-bold tracking-[0.18em] text-jade/80">ĐÃ CHỐT KẾT QUẢ</p>
-            <p className="digital text-[clamp(0.9rem,3.4vw,1.8rem)] font-bold tracking-[0.08em] text-jade">
-              THỜI GIAN CHÍNH THỨC: {formatClockCs(clock.officialMs)}
-            </p>
-          </div>
         )}
 
         {clock.result === 'ABORTED' && (
@@ -241,8 +236,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
           <p className="max-w-[60ch] text-[0.65rem] leading-snug text-mute" data-testid="big-note">
             {role === 'GATE'
               ? 'Màn hình này không điều khiển được đồng hồ. NPC 1 bấm trên điện thoại của mình.'
-              : 'Chỉ hiển thị. Đồng hồ lượt chơi chỉ do NPC 1 mở và chỉ kết thúc theo mốc do NPC 2 chốt.'}
-            {autoOpened ? ' Tự đóng khi lượt chơi chốt.' : ''}
+              : 'Chỉ hiển thị. Đồng hồ do NPC 1 mở và kết thúc theo mốc NPC 2 chốt.'}
           </p>
         </footer>
       ) : (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { LiveStore } from '../client/liveStore';
 import type { StoredSession } from './session';
-import { isLockedPhase, pad, phaseOf, resolveBigScreen, resolveCountdown, resolveJourney, resolveTeamLine, teamLabel } from '../client/selectors';
+import { isLockedPhase, pad, phaseOf, resolveBigScreen, resolveCountdown, resolveJourney, resolveTeamLine } from '../client/selectors';
 import { PHASE_LABEL, OBSERVER_CAPACITY } from '../shared/constants';
 import { formatClockSec, leaderboard } from '../shared/metrics';
 import { useNow, useWakeLock } from './hooks';
@@ -9,7 +9,7 @@ import { watchPresence, observerLeave, type PresenceResult } from '../client/obs
 import { JourneyStepper } from './JourneyMap';
 import { countdownStageOf, countdownToneOf } from './countdown';
 import { TimeDigits } from './TimeView';
-import { DoorIcon, RunnerIcon, TrophyIcon, UsersIcon } from './icons';
+import { RunnerIcon, TrophyIcon, UsersIcon } from './icons';
 
 interface Props {
   store: LiveStore;
@@ -120,10 +120,15 @@ export function Observer({ store, token, onLogout }: Props) {
       <main className="flex min-h-0 flex-1 flex-col justify-evenly gap-3 overflow-y-auto px-3 pb-2">
         <section className="card tm-card" data-testid="observer-team">
           <h1 className="digital team-digits font-bold text-snow">ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}</h1>
-          <p className="mt-2 flex items-center gap-1.5 text-[13px] font-semibold leading-none text-snow/85">
-            <UsersIcon className="h-4 w-4" />
-            {teamLabel(round, snap.event.next_team_number)}
-          </p>
+          {/* V3.5: the line under the number spelled the same team number out a
+              second time (“Đội #001 · Ma Tro”). The viewer now reads the label, or
+              nothing at all, and the phase word below is the machine's own. */}
+          {round?.team_name ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[13px] font-semibold leading-none text-snow/85">
+              <UsersIcon className="h-4 w-4" />
+              {round.team_name}
+            </p>
+          ) : null}
           <p className="mt-1.5 text-[11px] leading-snug text-mute" data-testid="observer-phase">
             {PHASE_LABEL[phase] ?? phase}
           </p>
@@ -144,28 +149,20 @@ export function Observer({ store, token, onLogout }: Props) {
               <p className="mt-2 text-[13px] font-bold tracking-[0.1em] text-snow" data-testid="observer-waiting">
                 {teamLine.text}
               </p>
-              <p className="mt-1 text-[11px] text-mute">{PHASE_LABEL[phase] ?? ''}</p>
+              {/* V3.5: the phase word under it was the team card's third line. */}
             </>
           )}
         </section>
 
         <section className="flex flex-col gap-1" data-testid="observer-journey">
-          {/* No onOpen: a viewer gets the status rail, never the interactive map. */}
-          {journey && <JourneyStepper journey={journey} />}
+          {/* No onOpen: a viewer gets the status rail, never the interactive map.
+              The card above already says which stage the floor is in. */}
+          {journey && <JourneyStepper journey={journey} caption={false} />}
         </section>
 
-        {countdown.result === 'WON' && countdown.officialMs !== null && (
-          <p className="rounded-[10px] border border-jade/50 bg-jade/10 px-3 py-2 text-center text-[12px] font-bold text-jade" data-testid="observer-result">
-            THÀNH CÔNG · {formatClockSec(countdown.officialMs)}
-          </p>
-        )}
-        {round?.exit_confirmed_at !== null && round?.exit_confirmed_at !== undefined && (
-          <p className="flex items-center justify-center gap-2 text-[11px] text-mute" data-testid="observer-exited">
-            <DoorIcon className="h-4 w-4" />
-            Đội đã rời khu vực
-          </p>
-        )}
-
+        {/* V3.5: the result band and the “đã rời khu vực” line both restated what
+            the hero's own status line says, in the same colour, on the same screen.
+            The official number stays on the board below. */}
         {rows.length > 0 && (
           <section className="rounded-[12px] border border-hair bg-panel px-3 py-2" data-testid="observer-board">
             <p className="flex items-center gap-2 text-[8.5px] font-semibold tracking-[0.12em] text-mute">

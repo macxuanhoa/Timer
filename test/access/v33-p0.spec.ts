@@ -235,7 +235,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     expect(Number(snap.event.id)).not.toBe(Number(closedId));
     expect(snap.event.event_ended_at).toBeNull();
     expect(snap.event.next_team_number).toBe(1);
-    await expect(p.page.getByTestId('team-identity')).toBeVisible();
+    await expect(p.page.getByTestId('r01-team-stage')).toBeVisible();
   });
 
   test('release_station frees exactly one stuck seat and leaves the others bound', async () => {

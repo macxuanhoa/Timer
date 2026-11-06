@@ -932,6 +932,32 @@ export class ScreamEngine {
    * evacuated. This press IS the confirmation that the players are out — NPC1 stands
    * at the door — so it writes the exit stamp and no second press is asked for.
    * It never invents a successful completion time.
+   *
+   * V3.4 final integration §3B — the recorded semantics, documented rather than
+   * changed, because the reported "cancelled for An toàn · y tế while a transition
+   * describes vi phạm" traces to exactly this rule:
+   *
+   *   • Who: GATE only (`authorize`, and the hosted table row `('EARLY_EXIT','GATE')`
+   *     in migration 0016 line 247). When: p_live in RUNNING /
+   *     TIME_EXPIRED_PENDING_VALIDATION / WAITING_FOR_EXIT (0016 line 594).
+   *   • What it writes: `exit_confirmed_at` + `exit_by_role` + `exit_by` (the press
+   *     is the departure), `game_stopped_at`, `aborted_at`, `exit_reason` = the text
+   *     the operator typed, and `abort_kind = abort_kind ?? 'safety'`.
+   *   • The kind is therefore assigned BY THE PATH and is never read from the reason
+   *     text. A reason that describes a rule breach is stored verbatim and still
+   *     classifies as a safety cancellation. The hosted twin is 0017 lines 899-918,
+   *     which hardcodes `abort_kind = 'safety'` and the sentence
+   *     'KẾT THÚC SỚM đội #NNN · An toàn · y tế'.
+   *   • What the result becomes: `resultOf(round, attempts, limit, now)` — a claim
+   *     already validated before the deadline still wins, and an in-time pending
+   *     claim stays judgable (§4.4). Nothing is decertified here, and no history row
+   *     is removed.
+   *
+   * Letting the typed reason carry a `misconduct` classification would change
+   * decertification and `attemptsJudgable`, i.e. a scoring rule, and would need the
+   * hosted RPC changed in step with it. That is a business decision outside a UI
+   * workstream; the report surfaces both stored facts side by side instead
+   * (DetailsSheet §9, "Hủy lượt" + "Lý do ghi nhận").
    */
   private onEarlyExit(req: CommandRequest, now: number): CommandResult {
     const round = this.requireActive(req, now);

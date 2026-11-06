@@ -242,6 +242,11 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     expect(order.risk, JSON.stringify(order)).toBeGreaterThan(order.config);
 
     await expect(sup.getByTestId('admin-event-state-word')).not.toHaveText('');
+    // §3A: the block's large headline is the workflow stage, not a second copy
+    // of the sheet header's verdict. The verdict is still stated, as a row.
+    await expect(sup.getByTestId('admin-event-stage-word')).not.toHaveText('');
+    await expect(sup.getByTestId('admin-event-stage-word')).not.toHaveText(
+      await sup.getByTestId('sheet-event-state').innerText());
     await expect(sup.getByTestId('admin-next-next')).toContainText('TIẾP THEO');
 
     // The review control now lists the round that only a review can close.

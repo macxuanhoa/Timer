@@ -127,6 +127,43 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
       await expect(p.getByTestId('countdown-screen')).toHaveCount(0);
     }
 
+    /* ------------------------- what NPC 2 sees while the floor is being reset */
+    // §3D of the final integration: the sealed milestone card belongs to the
+    // verification surface (WAITING_FOR_EXIT) and is deliberately not carried
+    // into this phase — the room phone's job is now the physical reset, and a
+    // second large result block would compete with the press it owes. What must
+    // NOT happen is the number disappearing from NPC 2's reach, so both routes
+    // are pinned: the decided attempt on the screen, and the same stored
+    // instant in the report.
+    await expect(room.page.getByTestId('official-result')).toHaveCount(0);
+    await expect(room.page.getByTestId('primary-action')).toContainText('RESET');
+    await expect(room.page.getByTestId('attempt-history')).toBeVisible();
+    await expect(room.page.getByTestId('attempt-history')).toContainText('CHÍNH XÁC');
+    // Two precisions are in play and both are checked against the stored instant:
+    // the attempt list prints MM:SS.hh (the running-clock format) while the
+    // report prints MM:SS.mmm. These are written out here rather than imported
+    // from metrics.ts, so a change in the shared formatter has to be wrong in
+    // two places to pass.
+    const hundredths = (v: number) => {
+      const t = Math.max(0, Math.floor(v / 10) * 10);
+      const m = String(Math.floor(t / 60_000)).padStart(2, '0');
+      const s = String(Math.floor((t % 60_000) / 1000)).padStart(2, '0');
+      const c = String(Math.floor((t % 1000) / 10)).padStart(2, '0');
+      return `${m}:${s}.${c}`;
+    };
+    const millis = (v: number) => {
+      const m = String(Math.floor(v / 60_000)).padStart(2, '0');
+      const s = String(Math.floor((v % 60_000) / 1000)).padStart(2, '0');
+      const ms = String(v % 1000).padStart(3, '0');
+      return `${m}:${s}.${ms}`;
+    };
+    await expect(room.page.getByTestId('attempt-history')).toContainText(hundredths(officialMs!));
+    await room.page.getByTestId('open-details').click();
+    await room.page.getByTestId('sheet-tab-report').click();
+    await expect(room.page.getByTestId('round-score-1')).toContainText('THÀNH CÔNG');
+    await expect(room.page.getByTestId('round-score-1')).toContainText(millis(officialMs!));
+    await room.page.getByTestId('close-details').click();
+
     // §11: the reset screen is the widest new surface in the app (three checklist
     // rows, a result card and a readiness sentence), so every width is measured
     // for clipping on both axes before anything is pressed.

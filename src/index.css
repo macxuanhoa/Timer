@@ -2648,55 +2648,29 @@
 
 /* ------------------------------------------------------------------ layout */
 
-/* The column rhythm of an operator screen: fixed chrome, a scrollable middle,
-   and the action inside the thumb zone. `min-h-0` on the middle is what keeps a
-   640 px phone from pushing the button off the bottom. */
-.sc-flow {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sc-space-2);
-  min-height: 0;
-  flex: 1;
-  padding: 0 var(--sc-space-3) var(--sc-space-2);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
+/* The column rhythm of an operator screen lives in the stage roots' own
+   utilities (flex column, gap, the scrollable middle), so there is no `.sc-flow`
+   wrapper to style — the interrupted V3.4 sessions left that rule, plus
+   `.sc-header` and `.sc-two-col`, defined and referenced by nothing. They are
+   removed here rather than kept as a parallel layout vocabulary: no markup in
+   the repository has ever carried those class names. */
 
 /* Spare height is shared by the column rather than pooled in one empty band:
    the idle screen used to spend half a viewport around a clock that is not
    running. Here it sits between the route and the press, so the action lands in
    the thumb zone and the reading order stays top-down. */
-.sc-flow > .sc-spacer,
 .sc-spacer {
   flex: 1 1 auto;
   min-height: var(--sc-space-2);
 }
 
 @media (min-width: 700px) {
-  .sc-flow {
-    gap: var(--sc-space-3);
-    padding-inline: var(--sc-space-5);
-  }
-
-  .sc-header {
-    padding-inline: var(--sc-space-5);
-  }
-
   .role-band {
     margin-inline: var(--sc-space-5);
   }
 
   .nav-row {
     padding-inline: var(--sc-space-5);
-  }
-
-  /* On a tablet the single column reads as a stretched phone; two columns let the
-     team card and the clock sit side by side without inventing new components. */
-  .sc-two-col {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-    align-items: start;
-    gap: var(--sc-space-3);
   }
 }
 

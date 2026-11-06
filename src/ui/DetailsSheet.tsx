@@ -466,20 +466,24 @@ function OpsTab({
 function AdminEventStatus({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['getSnapshot']>['snapshot']>; now: number }) {
   const cmd = resolveOpsCommand(snap, now, { isSupervisor: true });
   const ended = snap.event.event_ended_at !== null;
-  const round = snap.active_round;
   return (
     <section className="admin-status" data-testid="admin-event-status" data-state={cmd.state}>
       <p className="admin-status-eyebrow">TRẠNG THÁI SỰ KIỆN HIỆN TẠI</p>
-      <p className="admin-status-word" data-testid="admin-event-state-word">{cmd.stateWord}</p>
+      {/* V3.4 final integration §3A: the headline used to be the event verdict,
+          which the sheet header already prints in the same size two rows above —
+          the same duplication removed from the command card in UI-08. The large
+          type now carries what the header does not say, the workflow stage, and
+          the verdict stays stated explicitly as a labelled row so nothing an
+          organiser needed got dropped. */}
+      <p className="admin-status-word" data-testid="admin-event-stage-word">{cmd.stageWord}</p>
       <p className="admin-status-name" data-testid="admin-event-name">{cmd.eventName}</p>
       <div className="admin-status-rows">
+        <Row k="Trạng thái sự kiện" v={cmd.stateWord} tone={ended ? 'text-mute' : 'text-jade'} testid="admin-event-state-word" />
         <Row k="Bắt đầu sự kiện" v={snap.event.event_started_at !== null ? formatWallTime(snap.event.event_started_at) : 'chưa mở'} />
         <Row k="Kết thúc sự kiện" v={ended ? formatWallTime(snap.event.event_ended_at ?? now) : 'đang mở'} tone={ended ? 'text-mute' : 'text-jade'} />
-        <Row
-          k="Đang mở"
-          v={round ? `#${pad(round.team_number)} · ${cmd.stageWord}` : 'không có'}
-          tone={round !== null ? 'text-ember' : 'text-mute'}
-        />
+        {/* The row that used to sit here printed `#${team} · ${stageWord}` — the
+            stage word again, one line under the headline that now carries it.
+            The team and its position are stated once, in the row below. */}
         <Row k="Lượt" v={cmd.counts.sentence} />
         {cmd.whereText !== null ? <Row k="Đội đang ở" v={`${cmd.teamText} · ${cmd.whereText}`} tone="text-ember" /> : null}
       </div>
@@ -527,11 +531,11 @@ function Section({ title, testid, children }: { title: string; testid: string; c
   );
 }
 
-function Row({ k, v, tone = 'text-snow' }: { k: string; v: string; tone?: string }) {
+function Row({ k, v, tone = 'text-snow', testid }: { k: string; v: string; tone?: string; testid?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-hair/40 py-1.5 last:border-0">
       <span className="text-[0.72rem] text-mute">{k}</span>
-      <span className={`digital text-[0.75rem] ${tone}`}>{v}</span>
+      <span className={`digital text-[0.75rem] ${tone}`} data-testid={testid}>{v}</span>
     </div>
   );
 }

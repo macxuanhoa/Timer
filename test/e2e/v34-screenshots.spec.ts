@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
@@ -14,6 +15,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, phone: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${phone}`);
+  if (phone === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[phone]);
   return page;
@@ -96,7 +98,7 @@ test.describe.serial('V3.4 §11 — rendered mobile states for visual QA', () =>
 
     // 6. NPC1 awaiting the exit confirmation: hand-off card + guarded CTA.
     await expect(gate.page.getByTestId('npc1-handoff')).toBeVisible();
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ RỜI TẦNG 3');
     await shot(gate.page, 'npc1-awaiting-exit');
 
     // §11 width sweep — while the round is still in the exit-waiting lock, the

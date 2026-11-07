@@ -13,7 +13,6 @@ import {
   RESET_TASKS,
   RESET_TASK_LABEL,
   REVIEW_REASON_LABEL,
-  ROLE_PERSON,
   ROLE_SHORT,
   ROUND_DURATION_MAX_MS,
   ROUND_DURATION_MIN_MS,
@@ -27,9 +26,10 @@ import {
 import { flowStatus, liveStatus, roundLimitMs } from '../shared/machine';
 import { USING_SUPABASE } from '../client/gateway';
 import { disputedRounds, reviewPendingRounds } from '../shared/metrics';
-import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, roundCounts, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD, type OpsCommand, type OpsRoleStatus } from '../client/selectors';
+import { pad, resolveOpsCommand, resolveOpsLayout, resolveOpsRoles, resolveResetBoard, resolveSyncState, roundCounts, statusOf, OPS_EVENT_STATE_WORD, OPS_SEAT_WORD } from '../client/selectors';
 import { alarms } from './sound';
 import { SeatManagement } from './SeatManagement';
+import { HelpDetails } from './HelpDetails';
 import { ACCENT_HEX, ROLE_ACCENT } from './accents';
 import {
   AlertIcon, CheckIcon, ChevronDownIcon, DoorIcon, GearIcon, LockIcon,
@@ -137,9 +137,7 @@ export function DetailsSheet({ open, onClose, store, account, now, onOpenBigScre
               />
             ) : activeTab === 'admin' ? (
               <div className="flex flex-col gap-2">
-                <Section title="Quản lý" testid="section-admin">
-                  <Management store={store} snap={snap} />
-                </Section>
+                <div data-testid="section-admin"><Management store={store} snap={snap} /></div>
               </div>
             ) : stats === null ? (
               <p className="py-10 text-center text-[0.8rem] text-mute">Đang đọc số liệu…</p>
@@ -235,7 +233,7 @@ function OpsTab({
         </div>
         {cmd.whereText !== null && (
           <p className="mt-1 text-[0.68rem] leading-snug text-mute" data-testid="ops-where">
-            Đội đang ở: <span className="text-snow">{cmd.whereText}</span>
+            Vị trí: <span className="text-snow">{cmd.whereText}</span>
           </p>
         )}
         <p className="mt-2 border-t border-hair/60 pt-2 text-[0.64rem] leading-snug text-mute" data-testid="ops-round-counts">
@@ -243,11 +241,11 @@ function OpsTab({
         </p>
         {cmd.next === null ? (
           <p className="mt-2 text-[0.7rem] text-mute" data-testid="ops-next-action">
-            Chưa có vị trí nào cần bấm ngay.
+            Chưa có thao tác cần làm.
           </p>
         ) : (
           <div className="mt-2 rounded-panel border border-ember/50 bg-ember/10 px-3 py-2" data-testid="ops-next-action">
-            <p className="text-[0.58rem] font-bold uppercase tracking-[0.14em] text-ember">Việc cần làm ngay</p>
+            <p className="text-[0.58rem] font-bold uppercase tracking-[0.14em] text-ember">Tiếp theo</p>
             <p className="mt-0.5 text-[0.78rem] font-bold leading-snug text-snow">{cmd.next.who}</p>
             <p className="text-[0.72rem] leading-snug text-ember">{cmd.next.what}</p>
           </div>
@@ -415,11 +413,11 @@ function OpsTab({
             </span>
             <span className="digital text-[0.62rem] text-mute">bản {state.revision}</span>
           </div>
-          <p className="mt-1.5 text-[0.66rem] leading-snug text-mute" data-testid="ops-sync-note">
+          <HelpDetails label="Về kết nối"><p className="mt-1.5 text-[0.66rem] leading-snug text-mute" data-testid="ops-sync-note">
             {sync.key === 'connected' || sync.key === 'current'
               ? null
               : 'Số liệu có thể đang cũ. Kiểm tra mạng và đọc lại; điểm chính thức luôn lấy từ máy chủ.'}
-          </p>
+          </p></HelpDetails>
           {sync.showRetry && (
             <button
               type="button"
@@ -507,7 +505,7 @@ function AdminNextAction({ snap, now }: { snap: NonNullable<ReturnType<LiveStore
       <p className="admin-status-eyebrow">VIỆC CẦN QUAN TÂM</p>
       {cmd.attention.length === 0 ? (
         <p className="admin-next-clear" data-testid="admin-attention-clear">
-          Không có vấn đề vận hành nào đang chờ Quản trị viên.
+          Không có việc chờ xử lý.
         </p>
       ) : (
         <ul className="admin-next-issues" data-testid="admin-attention">
@@ -516,7 +514,7 @@ function AdminNextAction({ snap, now }: { snap: NonNullable<ReturnType<LiveStore
       )}
       <p className="admin-next-next" data-testid="admin-next-next">
         <span className="admin-next-label">TIẾP THEO</span>
-        {cmd.next ? `${cmd.next.who} · ${cmd.next.what}` : 'Không có bước tiếp theo cho tới khi sự kiện mở lại.'}
+        {cmd.next ? `${cmd.next.who} · ${cmd.next.what}` : 'Chờ mở sự kiện.'}
       </p>
     </section>
   );
@@ -764,12 +762,12 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
           V3.4.1 kept both here and dropped the duplicate from the summary block:
           this is the section that explains what is being withheld. */}
       <Row
-        k="Vòng đang chờ Quản trị viên quyết"
+        k="Vòng chờ quyết định"
         v={String(stats.reviewPending)}
         tone={stats.reviewPending > 0 ? 'text-ember' : 'text-snow'}
       />
       <Row
-        k="Kết quả chờ xét (có điểm chính thức)"
+        k="Điểm chờ xét"
         v={String(stats.disputed)}
         tone={stats.disputed > 0 ? 'text-ember' : 'text-snow'}
       />
@@ -778,7 +776,7 @@ function Performance({ stats, store, now }: { stats: ReturnType<typeof analytics
           cancellations reported them nowhere in the summary — the one number
           that tells an organiser a round was stopped rather than run out. */}
       <Row k="Lượt bị hủy" v={String(stats.aborted)} tone={stats.aborted > 0 ? 'text-blood' : 'text-snow'} />
-      <Row k="TB thời gian chơi (thành công)" v={formatSeconds(stats.avg_game_ms, 2)} />
+      <Row k="TB hoàn thành" v={formatSeconds(stats.avg_game_ms, 2)} />
       <Row k="TB chuẩn bị" v={formatSeconds(stats.avg_prep_ms)} />
       <Row k="TB reset" v={formatSeconds(stats.avg_reset_ms)} />
       <Row k="TB chu kỳ start→start" v={formatDuration(stats.avg_cycle_ms)} />
@@ -1157,9 +1155,9 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
       {USING_SUPABASE && (
         <div className="flex flex-col gap-2" data-testid="release-panel">
           <p className="text-[0.7rem] tracking-[0.1em] text-mute">GIẢI PHÓNG BẢNG VỊ TRÍ</p>
-          <p className="text-[0.66rem] leading-snug text-mute">
+          <HelpDetails label="Giải phóng bảng là gì?"><p className="text-[0.66rem] leading-snug text-mute">
             Thu hồi mọi máy đang giữ chỗ trực để ca mới chọn lại vị trí. Đồng hồ, kết quả và lịch sử giữ nguyên.
-          </p>
+          </p></HelpDetails>
           {/* Normal path: two taps, and PostgreSQL still refuses if the floor is busy. */}
           <button
             type="button"
@@ -1172,8 +1170,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </button>
           {armed ? (
             <p className="text-[0.64rem] leading-snug text-ember" data-testid="release-armed">
-              Lần bấm này sẽ đuổi toàn bộ thiết bị đang trực. Bảng chỉ được giải phóng khi
-              không còn đội trong khu vực.
+              Nhấn tiếp để thu hồi mọi vị trí trực. Chỉ thực hiện khi khu vực trống.
             </p>
           ) : null}
           {released !== null && (
@@ -1192,12 +1189,12 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
              nothing on the closed event is deleted or rewritten. */
           <div className="flex flex-col gap-2">
             <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-open-hint">
-              Sự kiện đã đóng. Mở sự kiện mới để ca tiếp theo nhận đội — lịch sử và kết quả vừa rồi giữ nguyên.
+              Mở ca mới để nhận đội. Lịch sử được giữ lại.
             </p>
             <input
               value={newEventName}
               onChange={(e) => setNewEventName(e.target.value)}
-              placeholder="Tên sự kiện mới (bỏ trống = giữ tên cũ)"
+              placeholder="Tên ca mới (tuỳ chọn)"
               className="rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow"
               data-testid="new-event-name"
             />
@@ -1217,7 +1214,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </div>
         ) : !started ? (
           <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
-            Nhân sự 01 nhận đội đầu tiên ở sảnh. NPC 1 bấm BẮT ĐẦU để mở đồng hồ lượt chơi.
+            Chờ Nhân sự 01 nhận đội, NPC 1 bắt đầu lượt.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -1238,7 +1235,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
               className="rounded-panel border border-hair px-3 py-4 text-[0.78rem] font-semibold text-snow disabled:opacity-50"
               data-testid="admin-end"
             >
-              ĐÓNG SỰ KIỆN CÓ KIỂM SOÁT
+              ĐÓNG SỰ KIỆN
             </button>
           </div>
         )}
@@ -1249,8 +1246,8 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <h4 className="admin-group-title">CẤU HÌNH LƯỢT CHƠI</h4>
         <div className="flex flex-col gap-2">
         <p className="text-[0.7rem] text-mute" data-testid="cfg-duration-current">
-          Thời lượng lượt chơi hiện hành: <span className="text-snow">{formatClockSec(snap.event.config.game_limit_ms)}</span>.
-          {round && round.game_started_at !== null ? ' Thời lượng mới sẽ áp dụng từ lượt tiếp theo.' : ''}
+          Thời lượng: <span className="text-snow">{formatClockSec(snap.event.config.game_limit_ms)}</span>.
+          {round && round.game_started_at !== null ? ' Đổi từ lượt sau.' : ''}
         </p>
         <div className="grid grid-cols-2 gap-2">
           <label className="text-[0.68rem] text-mute">
@@ -1318,10 +1315,10 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           confirmation it already had — the two-tap release, the mandatory reason
           fields, the server-side permission check — and none of them deletes a
           score, a claim or a history row. */}
-      <section className="admin-risk-group" data-testid="admin-group-risk" aria-label="Khôi phục rủi ro cao">
-        <h4 className="admin-risk-title">KHÔI PHỤC RỦI RO CAO</h4>
+      <details className="admin-risk-group" data-testid="admin-group-risk" aria-label="Khôi phục rủi ro cao">
+        <summary className="admin-risk-title">CAN THIỆP & KHÔI PHỤC</summary>
         <p className="admin-risk-note">
-          Mọi thao tác dưới đây đều vào nhật ký và được máy chủ kiểm tra quyền trước khi thực hiện.
+          Can thiệp có ghi nhật ký.
         </p>
 
         {/* Emergency board release, moved out of the release panel because it is the
@@ -1329,7 +1326,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         {USING_SUPABASE && (
           <details className="rounded-panel border border-blood/40 bg-blood/5" data-testid="release-emergency-details">
             <summary className="cursor-pointer px-3 py-2 text-[0.68rem] font-semibold text-blood marker:hidden">
-              Khẩn cấp: đuổi máy khi vẫn còn đội chưa đóng lượt
+              Giải phóng khẩn cấp
             </summary>
             <p className="px-3 pb-2 text-[0.64rem] leading-snug text-mute">
               Lượt đang mở sẽ bị HỦY có ghi nhật ký và toàn bộ máy bị thu hồi. Điểm và lịch sử không mất.
@@ -1547,11 +1544,11 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
             className="rounded-panel border border-ember/50 bg-ember/10 px-3 py-3 text-[0.75rem] font-semibold text-ember disabled:opacity-50"
             data-testid="reopen-apply"
           >
-            MỞ LẠI · YÊU CẦU XÁC NHẬN LẠI CẢ BA BƯỚC
+            MỞ LẠI RESET · XÁC NHẬN LẠI 3 BƯỚC
           </button>
         </div>
       )}
-      </section>
+      </details>
     </div>
   );
 }

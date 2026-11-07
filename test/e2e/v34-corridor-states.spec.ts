@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { assertActionReachable, assertReadable, countSentences, shot } from './lib/visual';
 
@@ -36,6 +37,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -85,7 +87,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     // Nothing to press: the lock names who owns the step, and no arrival CTA exists.
     await expect(corridor.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
     await expect(corridor.page.getByTestId('primary-action')).toHaveCount(0);
-    await expect(corridor.page.getByTestId('r02-instruction')).toContainText('Chưa có đội bàn giao');
+    await expect(corridor.page.getByTestId('r02-instruction')).toHaveCount(0);
     await assertReadable(corridor.page, 'corridor: no team');
     await shot(corridor.page, 'r02-1-no-team');
 
@@ -98,7 +100,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     await expect(corridor.page.getByTestId('r02-team-stage')).toHaveText('ĐỘI #001');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toHaveAttribute('data-state', 'incoming');
     await expect(corridor.page.getByTestId('r02-handoff-badge')).toContainText('ĐỘI ĐANG LÊN TẦNG 2');
-    await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
+    await expect(corridor.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 2');
     // The physical precondition is stated once, as the press's own hint.
     await expect(corridor.page.getByTestId('primary-hint')).toHaveText('Chỉ xác nhận khi đội đã có mặt tại tầng 2.');
     // …and no second instruction block repeats it while the press is available.
@@ -248,7 +250,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
       const corridor = await signIn(context, 'corridor');
       await assertReadable(corridor, `corridor idle at ${width}px`);
       await lobby.getByTestId('primary-action').click();
-      await expect(corridor.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2', { timeout: 20_000 });
+      await expect(corridor.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 2', { timeout: 20_000 });
       await assertReadable(corridor, `corridor incoming at ${width}px`);
       await assertActionReachable(corridor, `corridor incoming at ${width}px`);
       // The one thing this role must not do: run its own clock.

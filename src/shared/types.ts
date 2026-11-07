@@ -67,7 +67,7 @@ export function isSteppable(clock: Clock): clock is SteppableClock {
 
 /* ------------------------------------------------------------------ event */
 
-export type EventStatus = 'NOT_STARTED' | 'LIVE' | 'ENDED';
+type EventStatus = 'NOT_STARTED' | 'LIVE' | 'ENDED';
 
 export interface EventConfig {
   event_name: string;
@@ -393,7 +393,7 @@ export interface Snapshot {
 /* ------------------------------------------------------------- station board */
 
 /** Public occupancy for one role; no operator identity is disclosed. */
-export interface StationSlot {
+interface StationSlot {
   role: Role;
   /** All slots for this role are full. */
   occupied: boolean;

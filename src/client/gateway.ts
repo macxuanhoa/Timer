@@ -12,12 +12,6 @@ import type {
  */
 export type ConnectionStatus = 'CONNECTED' | 'SYNCING' | 'DEGRADED' | 'OFFLINE';
 
-export interface SessionAccount {
-  id: string;
-  role: Snapshot['operators'][number]['role'];
-  display_name: string;
-}
-
 export interface RevisionHint {
   revision: number;
   server_now_ms: number;
@@ -84,7 +78,7 @@ export interface Gateway {
   }): () => void;
 }
 
-export interface GatewayConfig {
+interface GatewayConfig {
   token: string;
   baseUrl?: string;
 }

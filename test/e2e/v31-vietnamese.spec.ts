@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 /**
@@ -64,6 +65,7 @@ const RAW_TOKENS = [
 async function signIn(context: BrowserContext, phone: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${phone}`);
+  if (phone === 'supervisor') await unlockAdmin(page);
   if (phone === 'observer') {
     await expect(page.getByTestId('observer')).toBeVisible();
     return page;
@@ -164,7 +166,7 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
     await expectVietnamese(corridor.page, 'WAITING_FLOOR2_CONFIRMATION: corridor');
 
     await corridor.page.getByTestId('primary-action').click();
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 02:00');
+    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
     await expectVietnamese(gate.page, 'READY_AT_FLOOR3: gate');
 
     await primary(gate.page).click();

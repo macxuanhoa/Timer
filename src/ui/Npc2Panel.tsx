@@ -1,3 +1,4 @@
+import { HelpDetails } from './HelpDetails';
 import { useEffect, useState } from 'react';
 import type { LiveStore } from '../client/liveStore';
 import type { AttemptRow, CountdownView, Npc2Stage } from '../client/selectors';
@@ -82,7 +83,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
           data-pending={claimPending ? '1' : '0'}
         >
           <UsersIcon className="h-5 w-5" />
-          {claimPending ? 'ĐANG GHI…' : 'GHI NHẬN BÁO HOÀN THÀNH'}
+          {claimPending ? 'ĐANG GHI…' : 'BÁO HOÀN THÀNH'}
         </button>
       ) : (
         /* Read-only hand-off: the phase no longer accepts reports, and the
@@ -95,7 +96,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
       {/* ------------------------------------------------ late-window honesty band */}
       {stage.canClaim && stage.lateOnly && !stage.finalized && (
         <p className="npc2-late-band" data-testid="npc2-late-note">
-          Hết giờ — lần báo mới chỉ được lưu để đối chiếu, không thể thành kết quả thắng.
+          Lần báo sau giờ chỉ lưu đối chiếu.
         </p>
       )}
 
@@ -111,7 +112,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
           >
             <p className="npc2-verify-head" data-testid={`verify-head-${a.seq}`}>
               <span>LẦN {a.seq} · {formatClockCs(a.elapsedMs)}</span>
-              <span className="npc2-verify-state" data-testid={`verify-state-${a.seq}`}>ĐANG CHỜ XÁC MINH</span>
+              <span className="npc2-verify-state" data-testid={`verify-state-${a.seq}`}>CHỜ XÁC MINH</span>
             </p>
             {/* V3.4.1: the timestamp line under the head repeated the two decision
                 consequences below the buttons — “the time is the team's own mark,
@@ -126,7 +127,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
                 data-testid={`attempt-invalid-${a.seq}`}
               >
                 <CrossIcon className="h-4 w-4" />
-                <span>CHƯA ĐÚNG — TIẾP TỤC</span>
+                <span>CHƯA ĐÚNG</span>
               </button>
               <button
                 type="button"
@@ -144,13 +145,14 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
                 data-armed={armed ? '1' : '0'}
               >
                 <CheckIcon className="h-4 w-4" />
-                <span>{verifyPending && armed ? 'ĐANG CHỐT…' : armed ? 'XÁC NHẬN CHỐT KẾT QUẢ' : 'CHÍNH XÁC — CHỐT THỜI GIAN'}</span>
+                <span>{verifyPending && armed ? 'ĐANG CHỐT…' : armed ? 'XÁC NHẬN CHỐT KẾT QUẢ' : 'CHÍNH XÁC'}</span>
               </button>
             </div>
-            <div className="npc2-decision-notes">
-              <p>Trận đồ chưa khớp: từ chối lần này, đội tiếp tục chơi.</p>
-              <p>Trận đồ khớp: {formatClockCs(a.elapsedMs)} thành KẾT QUẢ CHÍNH THỨC, không thể hoàn tác.</p>
-            </div>
+            {armed ? <p className="npc2-late-inline">Chốt {formatClockCs(a.elapsedMs)} thành kết quả chính thức. Không thể hoàn tác.</p> : (
+              <HelpDetails label="Cách xác minh"><div className="npc2-decision-notes">
+                <p>Chưa đúng: đội tiếp tục chơi. Chính xác: chốt thời gian theo mốc báo.</p>
+              </div></HelpDetails>
+            )}
             {!a.inTime ? (
               <p className="npc2-late-inline" data-testid={`verify-late-${a.seq}`}>
                 Mốc báo ngoài giờ.
@@ -180,7 +182,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
         </ul>
       )}
 
-      {open.length > 0 && (
+      {open.length > 1 && (
         <p className="npc2-pending-hint" data-testid="attempt-hint">
           {countdown.running
             ? `Còn ${open.length} lần báo chờ quyết định — đồng hồ vẫn chạy`

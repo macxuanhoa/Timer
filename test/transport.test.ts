@@ -24,7 +24,7 @@ let clock: FakeClock;
 const stores = new Map<Role, LiveStore>();
 const tokens = new Map<Role, string>();
 /** Filled by the convergence test; reported, never invented. */
-export const measured = { p50: 0, p95: 0, p99: 0, max: 0, samples: 0 };
+const measured = { p50: 0, p95: 0, p99: 0, max: 0, samples: 0 };
 
 async function loginAs(accountId: string, passcode: string): Promise<StoredSession> {
   const res = await fetch(`${baseUrl}/api/login`, {

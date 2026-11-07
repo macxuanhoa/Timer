@@ -23,7 +23,7 @@ export default defineConfig({
     react(),
     // The authoritative engine runs in-process during development so the full
     // five-operator workflow is testable with zero external credentials.
-    ...(useSupabase ? [] : [screamLocalServer({ dataFile: '.scream-data/event.json' })]),
+    ...(useSupabase ? [] : [screamLocalServer({ dataFile: process.env.SC_LOCAL_DATA_FILE ?? '.scream-data/event.json' })]),
     VitePWA({
       // V3.3: autoUpdate replaces the old "prompt" flow. Together with
       // skipWaiting + clientsClaim below, a phone that has the app open when

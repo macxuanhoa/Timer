@@ -3,7 +3,7 @@ import { gameElapsedMs, resultOf, roundLimitMs } from './machine.ts';
 import { DEFAULT_ROUND_DURATION_MS } from './constants.ts';
 
 /** Per-round operational measurements, derived only from persisted timestamps. */
-export interface RoundMetrics {
+interface RoundMetrics {
   team_number: number;
   round_number: number;
   /** Official score: the validated claim's elapsed time. Null until NPC2 finalises. */
@@ -132,7 +132,7 @@ function elapsed(round: Round, from: number | null | undefined, to: number | nul
 }
 
 /** Cross-round metrics that require the previous round's timestamps. */
-export interface CycleMetrics {
+interface CycleMetrics {
   team_number: number;
   prev_team_number: number;
   inter_team_ms: number | null;
@@ -169,7 +169,7 @@ export function qualifiesForLeaderboard(r: Round, gameLimitMs: number): boolean 
   return r.official_duration_ms <= roundLimitMs(r, gameLimitMs);
 }
 
-export interface LeaderRow {
+interface LeaderRow {
   rank: number;
   team_number: number;
   team_name: string | null;
@@ -218,7 +218,7 @@ export function reviewPendingRounds(rounds: Round[]): Round[] {
 
 /* --------------------------------------------------------------- analytics */
 
-export interface Analytics {
+interface Analytics {
   teams_completed: number;
   teams_successful: number;
   timeouts: number;
@@ -343,10 +343,4 @@ export function formatDuration(ms: number | null): string {
 export function formatWallTime(ms: number): string {
   const d = new Date(ms);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-export function formatTenths(ms: number): string {
-  const sign = ms < 0 ? '-' : '';
-  const abs = Math.abs(ms);
-  return `${sign}${pad(abs / 60_000)}:${pad((abs % 60_000) / 1000)}.${Math.floor((abs % 1000) / 100)}`;
 }

@@ -17,6 +17,7 @@ async function allowAdmin(uid: string) {
   await pool.query('insert into sc.admin_devices(user_id, note) values($1,$2) on conflict (user_id) do nothing', [uid, 'access-test']);
 }
 const queries: Record<string,string> = {
+  station_admin: 'select public.station_admin() as result',
   station_board: 'select public.station_board() as result', whoami: 'select public.whoami() as result',
   claim_station: 'select public.claim_station($1) as result', release_device: 'select public.release_device() as result',
   snapshot: 'select public.snapshot() as result', state_revision: 'select public.state_revision() as result',
@@ -30,7 +31,7 @@ const queries: Record<string,string> = {
 };
 async function rpc(uid: string | null, name: string, body: Record<string,unknown> = {}) {
   if (!queries[name]) throw new Error('Unknown RPC');
-  const args = name === 'claim_station' ? [body.p_role] : name === 'handle_command' ?
+  const args = name === 'claim_station' ? ('p_pin' in body ? [body.p_role, body.p_pin] : [body.p_role]) : name === 'handle_command' ?
     [body.p_action,body.p_meta,body.p_expected_revision,body.p_idempotency_key] : name === 'operation_status' ?
     [body.p_idempotency_key] : name === 'redeem_invitation' ? [body.p_token,body.p_device_id] :
     name === 'reset_all_stations' ? [body.p_force ?? false] :
@@ -41,7 +42,7 @@ async function rpc(uid: string | null, name: string, body: Record<string,unknown
     await client.query("select set_config('request.jwt.claim.sub',$1,true), set_config('request.jwt.claims',$2,true)",
       [uid ?? '', JSON.stringify({sub:uid,is_anonymous:true})]);
     await client.query(uid ? 'set local role authenticated' : 'set local role anon');
-    const { rows } = await client.query(queries[name], args);
+    const { rows } = await client.query(name === 'claim_station' && 'p_pin' in body ? 'select public.claim_station($1,$2) as result' : queries[name], args);
     await client.query('commit'); return rows[0].result;
   } catch (err) { await client.query('rollback'); throw err; }
   finally { client.release(); }
@@ -100,18 +101,9 @@ async function waitBound(p: Awaited<ReturnType<typeof phone>>, role: string) {
 
 async function claim(p: Awaited<ReturnType<typeof phone>>, role: string) {
   if (role === 'SUPERVISOR') {
-    // The admin panel only exists on /admin. V3.2 UX: the uuid now lives inside a
-    // deliberately-opened "advanced setup" disclosure, because a state-aware page
-    // must not shout raw SQL at an operator whose device is already granted.
-    await p.page.goto('/admin');
-    await expect(p.page.getByTestId('admin-panel')).toBeVisible();
-    const advanced = p.page.getByTestId('admin-advanced');
-    await expect(advanced).toBeVisible({ timeout: 10_000 });
-    await advanced.locator('> summary').click();
-    const shown = p.page.getByTestId('admin-device-id');
-    await expect(shown).not.toHaveText('…', { timeout: 10_000 });
-    await allowAdmin((await shown.innerText()).trim());
-    await p.page.getByTestId('home-admin-open').click();
+    await p.page.getByTestId('admin-toggle').click();
+    await p.page.getByTestId('admin-pin').fill('211105');
+    await p.page.getByTestId('admin-unlock').click();
     await expect(p.page.getByTestId('dashboard')).toBeVisible();
     return;
   }
@@ -133,6 +125,7 @@ test.beforeEach(async () => {
   await pool.query('update sc.operators set revoked_at=now() where revoked_at is null');
   await pool.query('delete from sc.observer_seats');
   await pool.query('delete from sc.admin_devices');
+    await pool.query('delete from sc.access_rate_limits');
   // Each case owns the event pointer, so a previous case can leave a round closed
   // rather than still occupying the floor.
   await pool.query("update sc.rounds set status='CLOSED' where status <> 'CLOSED'");
@@ -154,7 +147,7 @@ for (const role of STATIONS) test(role+': root → claim → dashboard; occupied
   await claim(b,role);
 });
 
-test('the picker shows four stations plus a separate viewer band, never the admin',async({browser})=>{
+test('the picker shows four stations plus a separate viewer band and no admin station tile',async({browser})=>{
   const a=await phone(browser);
   // V3.4: four duty cards in their own grid; the viewer seat is a separate band,
   // never a fifth duty tile, and the hidden admin seat never appears at all.
@@ -166,11 +159,11 @@ test('the picker shows four stations plus a separate viewer band, never the admi
   // server board: four duty seats (never the aggregate that also carries the
   // hidden admin seats) and ten viewer seats.
   await expect(a.page.getByTestId('station-count')).toHaveText(/\d\/4/);
-  await expect(a.page.getByTestId('observer-count')).toHaveText(/\d\/10/);
+  await expect(a.page.getByTestId('observer-seat-count')).toHaveText(/\d\/10/);
   // V3.4.1: the overview keeps its two figures and their labels; the explanatory
   // note under each one restated the four cards and the viewer card below it.
-  await expect(a.page.getByTestId('home-overview')).toContainText('Vị trí trực');
-  await expect(a.page.getByTestId('home-overview')).toContainText('Người xem');
+  await expect(a.page.getByTestId('home-overview')).toContainText('Đang trực');
+  await expect(a.page.getByTestId('home-overview')).not.toContainText('Người xem');
   // The viewer seat opens with no password and no challenge of any kind.
   await claim(a,'OBSERVER');
   await expect(a.page.getByTestId('observer')).toBeVisible();
@@ -183,28 +176,25 @@ test('the picker shows four stations plus a separate viewer band, never the admi
   expect((await rpc(a.uid(),'observer_beat',{p_viewer_id:'probe'})).ok).toBe(true);
 });
 
-test('the admin seat binds only for an allow-listed device, two phones max',async({browser})=>{
-  // The /admin UI first, on a clean board: a stranger is refused in operator words
-  // and stays on the picker; seeding its uuid opens the seat with no further challenge.
-  const a=await phone(browser,'/admin');
-  await expect(a.page.getByTestId('admin-panel')).toBeVisible();
-  await a.page.getByTestId('home-admin-open').click();
-  await expect(a.page.getByTestId('home-error')).toContainText('CHƯA ĐƯỢC CẤP QUYỀN QUẢN TRỊ');
+test('the admin circle checks the PIN on the server and keeps two devices max', async ({ browser }) => {
+  const a = await phone(browser);
+  await a.page.getByTestId('admin-toggle').click();
+  await a.page.getByTestId('admin-pin').fill('000000');
+  await a.page.getByTestId('admin-unlock').click();
+  await expect(a.page.getByRole('alert')).toContainText('Mật mã chưa đúng.');
   await expect(a.page.getByTestId('dashboard')).toHaveCount(0);
-  await allowAdmin(a.uid()!);
-  await a.page.getByTestId('home-admin-open').click();
+  await a.page.getByTestId('admin-pin').fill('211105');
+  await a.page.getByTestId('admin-unlock').click();
   await expect(a.page.getByTestId('dashboard')).toBeVisible();
-  await expect(a.page.getByTestId('role-tag')).toHaveText('TRỊ');
-  // A stranger without the allow-list cannot take the admin seat at all — the
-  // refusal precedes the seat search, so it never consumes capacity.
-  const stranger=await identity();
-  expect((await rpc(stranger,'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ADMIN_NOT_ALLOWED');
-  // Capacity holds: the second allowed device takes slot 2, a third is told the
-  // position is full — never a credential challenge.
-  const second=await identity(); await allowAdmin(second);
-  expect((await rpc(second,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
-  const third=await identity(); await allowAdmin(third);
-  expect((await rpc(third,'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ROLE_TAKEN');
+  const stranger = await identity();
+  expect((await rpc(stranger, 'claim_station', {p_role:'SUPERVISOR'})).code).toBe('PIN_REQUIRED');
+  const second = await identity();
+  expect((await rpc(second, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
+  const third = await identity();
+  expect((await rpc(third, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).code).toBe('ROLE_TAKEN');
+  await a.page.getByTestId('admin-toggle').click();
+  await expect(a.page.getByTestId('scream-home')).toBeVisible();
+  expect((await rpc(a.uid(), 'station_admin')).ok).toBe(false);
 });
 
 test('a viewer is read-only in the database, whatever it sends',async({browser})=>{
@@ -247,7 +237,7 @@ test('ten viewers fit, the eleventh is refused, and a seat survives a refresh',a
   // V3.4: the picker's separate viewer band states the real occupancy and
   // refuses the tap while all ten seats are held — never a phantom "còn trống".
   const packed = await phone(browser);
-  await expect(packed.page.getByTestId('observer-count')).toHaveText('10/10');
+  await expect(packed.page.getByTestId('observer-seat-count')).toHaveText('10/10');
   await expect(packed.page.getByTestId('station-OBSERVER')).toHaveAttribute('data-state','full');
   await expect(packed.page.getByTestId('station-OBSERVER')).toBeDisabled();
   // The eleventh is a refusal, not an error, and it states the capacity.
@@ -301,7 +291,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
   const room=await phone(browser); await claim(room,'ROOM305');
   const sup=await phone(browser); await claim(sup,'SUPERVISOR');
   const spare=await identity(); await allowAdmin(spare);
-  expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  expect((await rpc(spare,'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
   const picker=await phone(browser);
   // V3.4: the public overview counts the four duty seats only — the two hidden
   // admin seats never enter the crew's capacity arithmetic.
@@ -389,7 +379,7 @@ test("the release is authorised by the caller's own admin binding, not a secret"
   const gate=await identity();
   expect((await rpc(gate,'claim_station',{p_role:'GATE'})).ok).toBe(true);
   const sup=await identity(); await allowAdmin(sup);
-  expect((await rpc(sup,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  expect((await rpc(sup,'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
   // A duty phone is refused before any floor question: the answer is the role.
   expect((await rpc(gate,'reset_all_stations',{p_force:false})).code).toBe('RESET_NOT_AUTHORIZED');
   expect((await rpc(sup,'whoami'))?.role).toBe('SUPERVISOR');
@@ -399,10 +389,10 @@ test("the release is authorised by the caller's own admin binding, not a secret"
   // A repeat release on an empty board still unbinds every live operator row,
   // including the caller itself (§5.3 "Không dùng reset làm thay đổi thời gian").
   const sup2=await identity(); await allowAdmin(sup2);
-  expect((await rpc(sup2,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  expect((await rpc(sup2,'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
   expect((await rpc(sup2,'reset_all_stations',{p_force:false})).freed).toBe(1);
   // A stranger without the allow-list cannot even bind admin to attempt a release.
-  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR'})).code).toBe('ADMIN_NOT_ALLOWED');
+  expect((await rpc(await identity(),'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})).code).toBe('ADMIN_NOT_ALLOWED');
 });
 
 test('seats bind with one tap; only the admin seat is gated, and the allow-list is unreadable', async ({browser}) => {
@@ -488,7 +478,7 @@ test('real parallel PostgreSQL transactions enforce last NPC slot, supervisor sl
   // limit, not the gate.
   const adminIds=await Promise.all(Array.from({length:9},()=>identity()));
   for (const uid of adminIds) await allowAdmin(uid);
-  results=await Promise.all(adminIds.map(uid=>rpc(uid,'claim_station',{p_role:'SUPERVISOR'})));
+  results=await Promise.all(adminIds.map(uid=>rpc(uid,'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})));
   expect(results.filter(r=>r.ok)).toHaveLength(2);
   const same=await identity(); results=await Promise.all(['CORRIDOR','ROOM305'].map(p_role=>rpc(same,'claim_station',{p_role})));
   expect(results.filter(r=>r.ok)).toHaveLength(1); expect(results.filter(r=>r.code==='ALREADY_BOUND_OTHER_ROLE')).toHaveLength(1);
@@ -668,7 +658,7 @@ test('UI-07 §9 — the cancellation kind is validated by the authority, never d
     expect((await rpc(ids[role],'claim_station',{p_role:role})).ok).toBe(true);
   }
   ids.SUPERVISOR=await identity(); await allowAdmin(ids.SUPERVISOR);
-  expect((await rpc(ids.SUPERVISOR,'claim_station',{p_role:'SUPERVISOR'})).ok).toBe(true);
+  expect((await rpc(ids.SUPERVISOR,'claim_station',{p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
 
   expect((await act(ids.LOBBY,'CALL_TEAM')).ok).toBe(true);
   expect((await act(ids.CORRIDOR,'CONFIRM_FLOOR2')).ok).toBe(true);

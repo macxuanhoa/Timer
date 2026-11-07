@@ -47,14 +47,16 @@ export function readStationParam(): Role | null {
 export function isAdminRoute(): boolean {
   return window.location.pathname.replace(/\/+$/, '').toLowerCase() === '/admin';
 }
-export async function localStationLogin(station: Role): Promise<StoredSession> {
-  // V3.2: the self-hosted dev engine binds a seat with no passcode at all, exactly
-  // like the hosted path. The body carries only the chosen account.
+export async function localStationLogin(station: Role, pin?: string): Promise<StoredSession> {
+  // Duty positions are open; only SUPERVISOR sends a PIN for server validation.
   const res = await fetch('/api/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ account: ACCOUNT_BY_ROLE[station] }),
+    body: JSON.stringify({ account: ACCOUNT_BY_ROLE[station], ...(station === 'SUPERVISOR' ? { passcode: pin } : {}) }),
   });
-  if (!res.ok) throw new Error('KHÔNG VÀO ĐƯỢC VỊ TRÍ NÀY');
+  if (!res.ok) {
+    const failure = await res.json() as { error?: string };
+    throw new AccessError(failure.error ?? 'Chưa vào được vị trí.', 'HTTP_' + res.status);
+  }
   const session = await res.json() as StoredSession;
   saveSession(session);
   return session;
@@ -76,14 +78,23 @@ export async function enterStation(): Promise<StoredSession | null> {
   clearInviteFromUrl();
   if (!USING_SUPABASE) {
     const station = readStationParam();
-    return station ? localStationLogin(station) : loadSession();
+    if (station && station !== 'SUPERVISOR') return localStationLogin(station);
+    const cached = loadSession();
+    if (cached?.account.role !== 'SUPERVISOR') return cached;
+    const res = await fetch('/api/account', { headers: { authorization: 'Bearer ' + cached.token }, signal: AbortSignal.timeout(8_000) });
+    if (res.status === 401) { saveSession(null); return null; }
+    if (!res.ok) throw new Error('Chưa xác minh được quyền quản trị.');
+    const account = await res.json() as StoredSession['account'];
+    const current = { token: cached.token, account };
+    saveSession(current); return current;
   }
   return refreshSession();
 }
-export async function selectStation(role: Role): Promise<StoredSession> {
-  if (!USING_SUPABASE) return localStationLogin(role);
+export async function selectStation(role: Role, pin?: string): Promise<StoredSession> {
+  if (!USING_SUPABASE) return localStationLogin(role, pin);
   const { claimStation, claimErrorMessage } = await import('../client/supabaseAuth');
-  const result = await claimStation(role);
+  const result = await (role === 'SUPERVISOR' ? claimStation(role, pin) : claimStation(role));
+  if (role === 'SUPERVISOR' && !result?.ok) throw new AccessError(claimErrorMessage(result), result?.code ?? 'UNKNOWN');
   const current = await refreshSession();
   if (current) return current;
   if (!result?.ok) throw new AccessError(claimErrorMessage(result), result?.code ?? 'UNKNOWN');
@@ -96,6 +107,13 @@ export async function logout(): Promise<void> {
   if (USING_SUPABASE) {
     const { leaveStation } = await import('../client/supabaseAuth');
     await leaveStation();
+  }
+  if (!USING_SUPABASE) {
+    const current = loadSession();
+    if (current) {
+      const res = await fetch('/api/logout', { method: 'POST', headers: { authorization: `Bearer ${current.token}` } });
+      if (!res.ok && res.status !== 401) throw new Error('Chưa thoát được. Thử lại.');
+    }
   }
   saveSession(null);
 }

@@ -128,13 +128,13 @@ export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role 
       </ul>
       {board.allDone ? (
         <p className="reset-foot" data-testid="reset-footnote">
-          Cả ba khu vực đã được xác nhận · NPC 1 còn một bước chốt khu vực.
+          Đủ 3 khu vực · chờ NPC 1 chốt.
         </p>
       ) : role !== 'GATE' ? (
         /* The one reader who has no row of their own still needs to know why the
            card cannot be pressed here. NPC 1's own screen says it row by row. */
         <p className="reset-foot" data-testid="reset-footnote">
-          Chỉ vị trí đứng tại khu vực này mới xác nhận được · màn hình này chỉ đọc.
+          Chỉ nhân sự tại khu vực được xác nhận.
         </p>
       ) : null}
     </section>
@@ -183,7 +183,7 @@ export function RoundResultCard({ summary, teamNumber, nextLimitLabel }: {
       </p>
       <p className="round-result-next" data-testid="next-round-note">
         <ClockIcon className="h-3.5 w-3.5 shrink-0" />
-        <span>LƯỢT KẾ TIẾP · <span className="digital">{nextLimitLabel}</span></span>
+        <span>LƯỢT SAU · <span className="digital">{nextLimitLabel}</span></span>
       </p>
     </section>
   );

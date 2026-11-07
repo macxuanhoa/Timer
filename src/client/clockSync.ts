@@ -6,7 +6,7 @@
  * Nothing here is authoritative: official scores always come from persisted
  * server-side durations.
  */
-export interface ClockSample {
+interface ClockSample {
   rttMs: number;
   offsetMs: number;
 }

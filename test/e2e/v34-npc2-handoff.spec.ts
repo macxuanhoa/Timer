@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
@@ -10,7 +11,7 @@ import { mkdirSync } from 'node:fs';
  * half that could only be proven in a running page:
  *
  *   · the CRITICAL bug — after a correct attempt is finalised, the big
- *     "GHI NHẬN BÁO HOÀN THÀNH" must not merely be hidden: the server still has
+ *     "BÁO HOÀN THÀNH" must not merely be hidden: the server still has
  *     to refuse the press, so the UI is following the authority rather than
  *     papering over it. Both halves are asserted here.
  *   · a rejected attempt keeps its own claim instant and the round continues;
@@ -34,6 +35,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -228,7 +230,7 @@ test.describe.serial('V3.4 §5–§7 — NPC2 verification, sealed result, NPC1 
     // hanging under the card that says the round is over.
     await expect(gate.page.getByTestId('notice')).toHaveCount(0);
     await shot(gate.page, 'npc1-handoff-once');
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ RỜI TẦNG 3');
     // Nobody else is offered a press at all: the exit belongs to NPC 1 alone,
     // and on the other phones the lock renders no control to mis-tap.
     for (const p of [lobby.page, corridor.page, sup.page]) {

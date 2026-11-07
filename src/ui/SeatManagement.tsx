@@ -116,8 +116,7 @@ export function SeatManagement({ store, now }: Props) {
   if (!USING_SUPABASE) {
     return (
       <p className="text-[0.68rem] text-mute" data-testid="seat-mgmt-unavailable">
-        Màn hình quản lý vị trí dùng với máy chủ sự kiện. Bản trình diễn cục bộ không có bảng
-        vị trí nhiều thiết bị.
+        Bảng vị trí chỉ có trên máy chủ sự kiện.
       </p>
     );
   }
@@ -167,17 +166,17 @@ export function SeatManagement({ store, now }: Props) {
       </div>
 
       <p className="text-[0.66rem] leading-snug text-mute">
-        Ai đang giữ từng vị trí và có giải phóng được không. Chạm hai lần để xác nhận.
+        Chạm hai lần để giải phóng vị trí.
       </p>
 
       {knowsFloor && blockReason !== null && (
         <p className="rounded-panel border border-ember/40 bg-ember/5 px-2.5 py-2 text-[0.66rem] leading-snug text-ember"
            data-testid="seat-mgmt-floor">
           {blockReason === 'RUNNING'
-            ? 'ĐANG CÓ ĐỘI TRONG KHU VỰC CHƠI — không giải phóng được ghế của tầng lúc này. Chốt lượt trước.'
+            ? 'Đội đang chơi. Chốt lượt trước khi giải phóng.'
             : blockReason === 'PENDING_CLAIM'
-              ? 'CÓ LẦN BÁO CHƯA ĐƯỢC XÉT — ghế liên quan đang bị khoá cho tới khi quản trị viên chốt.'
-              : 'CÒN LƯỢT CHƯA ĐÓNG — cân nhắc chốt lượt trước khi đổi người trực.'}
+              ? 'Còn lần báo chờ xét. Vị trí đang khóa.'
+              : 'Còn lượt chưa đóng. Cần chốt trước khi bàn giao.'}
         </p>
       )}
 
@@ -255,8 +254,7 @@ export function SeatManagement({ store, now }: Props) {
 
       {armed !== null && (
         <p className="text-[0.64rem] leading-snug text-ember" data-testid="seat-mgmt-armed">
-          Lần bấm tiếp theo sẽ đuổi máy đang giữ {ROLE_LABEL[armed]}. Máy đó mất quyền thao tác
-          ngay; đồng hồ, kết quả và các vị trí khác không đổi. Có ghi nhật ký ai giải phóng.
+          Nhấn tiếp để thu hồi máy giữ {ROLE_LABEL[armed]}. Thao tác có ghi nhật ký.
         </p>
       )}
       {result !== null && (
@@ -266,7 +264,7 @@ export function SeatManagement({ store, now }: Props) {
       )}
       {failed && !loading && (
         <p className="text-[0.64rem] leading-snug text-mute" data-testid="seat-mgmt-degraded">
-          Không đọc được danh sách thiết bị giữ ghế. Vẫn bấm được nút ở trên — máy chủ sẽ trả lời rõ có giải phóng được hay không.
+          Chưa đọc được thiết bị. Bấm lấy lại danh sách.
         </p>
       )}
     </div>

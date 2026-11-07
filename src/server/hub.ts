@@ -1,12 +1,12 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isSteppable, SystemClock, type Clock, type CommandRequest, type Snapshot, type SteppableClock } from '../shared/types.ts' ;
 import { OBSERVER_CAPACITY, OBSERVER_TTL_MS } from '../shared/constants.ts' ;
 import { ScreamEngine, initialState, type Account, type PersistedState } from './engine.ts' ;
-import { FileStore, MemoryStore, type StateStore } from './store.ts' ;
+import { MemoryStore, type StateStore } from './store.ts' ;
 import { analytics, roundMetrics } from '../shared/metrics.ts' ;
 
-export interface OperatorAccount extends Account {
+interface OperatorAccount extends Account {
   /** Empty means “no passcode”: the open observer seat is password-free. */
   secret: string;
 }
@@ -25,7 +25,7 @@ export function devAccounts(): OperatorAccount[] {
     ['corridor', 'CORRIDOR', process.env.SC_PASSCODE_CORRIDOR ?? DEFAULT_PASSCODE],
     ['gate', 'GATE', process.env.SC_PASSCODE_GATE ?? DEFAULT_PASSCODE],
     ['room305', 'ROOM305', process.env.SC_PASSCODE_ROOM305 ?? DEFAULT_PASSCODE],
-    ['supervisor', 'SUPERVISOR', process.env.SC_PASSCODE_SUPERVISOR ?? DEFAULT_PASSCODE],
+    ['supervisor', 'SUPERVISOR', process.env.SC_PASSCODE_SUPERVISOR ?? '211105'],
     ['observer', 'OBSERVER', ''],
   ];
   return roles.map(([id, role, secret]) => ({
@@ -36,7 +36,7 @@ export function devAccounts(): OperatorAccount[] {
   }));
 }
 
-export interface HubOptions {
+interface HubOptions {
   store?: StateStore;
   clock?: Clock;
   accounts?: OperatorAccount[];
@@ -45,7 +45,7 @@ export interface HubOptions {
   tokenSecret?: string;
 }
 
-export interface Hub {
+interface Hub {
   engine: ScreamEngine;
   clock: Clock;
   accounts: OperatorAccount[];
@@ -70,10 +70,19 @@ export function createHub(options: HubOptions = {}): Hub {
   const fake: SteppableClock | null = isSteppable(clock) ? clock : null;
 
   const sign = (id: string) => createHmac('sha256', tokenSecret).update(id).digest('hex').slice(0, 32);
-  const issueToken = (id: string) => `${id}.${sign(id)}`;
+  const adminTokens = new Set<string>();
+  const adminFailures = new Map<string, { attempts: number; until: number }>();
+  const issueToken = (id: string) => {
+    if (accountMap[id]?.role !== 'SUPERVISOR') return `${id}.${sign(id)}`;
+    const token = `${id}.${randomUUID()}`;
+    adminTokens.add(token);
+    return token;
+  };
   const verifyToken = (token: string | undefined): Account | null => {
     if (!token) return null;
+    if (adminTokens.has(token)) return accountMap[token.split('.')[0]] ?? null;
     const [id, sig] = token.split('.');
+    if (accountMap[id]?.role === 'SUPERVISOR') return null;
     const expected = sign(id);
     if (!sig || sig.length !== expected.length) return null;
     if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
@@ -269,12 +278,24 @@ export function createHub(options: HubOptions = {}): Hub {
           return;
         }
         const account = accounts.find((a) => a.id === body.account);
-        // V3.2: no passcode anywhere. Choosing an account IS the claim; the four
-        // duty seats, the admin seat and the viewer seat all bind with nothing to
-        // type. Only the seat race is real, and it is guarded in the engine.
+        // Duty positions remain open. Only the admin requires a server-checked PIN.
         if (!account) {
           send(res, 401, { error: 'TÀI KHOẢN KHÔNG TỒN TẠI' });
           return;
+        }
+        if (account.role === 'SUPERVISOR') {
+          const key = req.socket.remoteAddress ?? 'local';
+          const failure = adminFailures.get(key);
+          if (failure && failure.until > Date.now() && failure.attempts >= 5) {
+            send(res, 429, { error: 'Đã thử nhiều lần. Chờ 15 phút rồi thử lại.' }); return;
+          }
+          const supplied = typeof body.passcode === 'string' ? body.passcode : '';
+          if (!/^[0-9]{6,12}$/.test(supplied) || supplied.length !== account.secret.length ||
+              !timingSafeEqual(Buffer.from(supplied), Buffer.from(account.secret))) {
+            adminFailures.set(key, { attempts: failure && failure.until > Date.now() ? failure.attempts + 1 : 1, until: failure && failure.until > Date.now() ? failure.until : Date.now() + 900_000 });
+            send(res, 401, { error: 'Mật mã chưa đúng.' }); return;
+          }
+          adminFailures.delete(key);
         }
         send(res, 200, {
           token: issueToken(account.id),
@@ -287,6 +308,12 @@ export function createHub(options: HubOptions = {}): Hub {
     const actor = verifyToken(token);
     if (!actor) {
       send(res, 401, { error: 'UNAUTHENTICATED' });
+      return;
+    }
+
+    if (path === '/api/logout' && req.method === 'POST') {
+      adminTokens.delete(token);
+      send(res, 200, { ok: true });
       return;
     }
 

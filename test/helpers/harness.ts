@@ -9,7 +9,7 @@ export const T0 = 1_730_000_000_000;
 export const SEC = 1000;
 export const MIN = 60 * SEC;
 
-export interface OperatorDef {
+interface OperatorDef {
   id: string;
   role: Role;
   display_name: string;
@@ -158,11 +158,6 @@ export class TestHub {
     const id = roundId ?? snap.active_round?.id;
     return snap.attempts.filter((a) => a.round_id === id);
   }
-}
-
-/** Flattened log for assertions about what was recorded. */
-export function actions(hub: TestHub): string[] {
-  return hub.engine.fullLog().map((l) => `${l.action}:${l.actor_role}`);
 }
 
 export function entries(hub: TestHub) {

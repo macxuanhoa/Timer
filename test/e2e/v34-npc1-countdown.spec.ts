@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
@@ -25,6 +26,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -93,7 +95,7 @@ test.describe.serial('V3.4 NPC1 — three screens, one countdown contract', () =
     // The dominant START wears the ember CTA, and its label names the
     // configured duration — the one the round will snapshot.
     const start = gate.page.getByTestId('primary-action');
-    await expect(start).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
+    await expect(start).toHaveText('BẮT ĐẦU');
     await expect(start).toHaveClass(/cta-ember/);
     // §7: unauthorised roles get no START of their own, and each says so in its
     // own role's voice. Floor 2 has already pressed, so it no longer shows a

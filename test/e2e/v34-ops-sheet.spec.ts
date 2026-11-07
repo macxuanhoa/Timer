@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
@@ -28,6 +29,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;

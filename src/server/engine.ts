@@ -23,13 +23,10 @@ import {
   attemptsOf,
   authorizePhase,
   authorizeRole,
-  deriveEventStatus,
-  derivePhase,
   evaluateDispatch,
   evaluateGameStart,
   finalizeSnapshot,
   flowStatus,
-  gameElapsedMs,
   hasValidatedAttempt,
   isEligibleClaim,
   isResetWindow,
@@ -49,7 +46,6 @@ import type {
   EventConfig,
   EventSession,
   FlowStatus,
-  LegacyRoundStatus,
   LogEntry,
   OperatorState,
   OperationStatus,
@@ -122,7 +118,7 @@ export function initialState(nowMs: number, overrides: Partial<EventConfig> = {}
  * crashing the countdown, and maps every legacy status onto the one vocabulary the
  * rest of the system reads.
  */
-export function hydrateState(state: PersistedState, nowMs = Date.now()): PersistedState {
+function hydrateState(state: PersistedState, nowMs = Date.now()): PersistedState {
   state.attempts ??= [];
   for (const r of state.rounds) {
     const legacy: Partial<Round> = r;
@@ -1415,7 +1411,7 @@ export class ScreamEngine {
 
   /* ------------------------------------------------------------------ utils */
 
-  private invalidRound(req: CommandRequest, now: number): CommandResult {
+  private invalidRound(_req: CommandRequest, now: number): CommandResult {
     return this.result(false, 'INVALID_STATE', 'Không có lượt chơi đang hoạt động', this.revision, now);
   }
 
@@ -1483,8 +1479,6 @@ export class ScreamEngine {
 
 /* ------------------------------------------------------------------ helpers */
 
-export { deriveEventStatus, derivePhase, flowStatus, gameElapsedMs, liveStatus, resultOf, roundDeadlineMs };
-
 /** Trim a submitted team label; missing or non-string input means “no label”. */
 function teamNameOf(meta: CommandRequest['meta']): string | null {
   const raw = (meta as { team_name?: unknown } | undefined)?.team_name;
@@ -1493,7 +1487,7 @@ function teamNameOf(meta: CommandRequest['meta']): string | null {
   return name.length > 0 ? name : null;
 }
 
-export function pad3(n: number): string {
+function pad3(n: number): string {
   return String(n).padStart(3, '0');
 }
 
@@ -1556,7 +1550,7 @@ function fieldLabel(field: keyof Round | string): string {
 }
 
 /** Human-readable duration for labels and messages (MM:SS). */
-export function formatClockSec(ms: number): string {
+function formatClockSec(ms: number): string {
   const abs = Math.max(0, Math.floor(ms / 1000) * 1000);
   const m = Math.floor(abs / 60_000);
   const s = Math.floor((abs % 60_000) / 1000);
@@ -1589,7 +1583,7 @@ export function validateRoundDuration(value: unknown): { ok: boolean; message: s
 }
 
 /** Human-readable elapsed for messages and the attempt list (MM:SS.hh). */
-export function formatClockCs(ms: number): string {
+function formatClockCs(ms: number): string {
   const abs = Math.max(0, ms);
   const m = Math.floor(abs / 60_000);
   const s = Math.floor((abs % 60_000) / 1000);

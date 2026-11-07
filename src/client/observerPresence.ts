@@ -20,7 +20,7 @@ export interface PresenceResult {
 }
 
 /** The stable id for this browser, created once and reused by every later visit. */
-export function viewerId(): string {
+function viewerId(): string {
   try {
     const stored = localStorage.getItem(KEY);
     if (stored && /^[A-Za-z0-9_-]{8,64}$/.test(stored)) return stored;
@@ -68,11 +68,11 @@ async function rpcCall(rpc: 'observer_join' | 'observer_beat' | 'observer_leave'
   };
 }
 
-export async function observerJoin(token: string): Promise<PresenceResult> {
+async function observerJoin(token: string): Promise<PresenceResult> {
   return USING_SUPABASE ? rpcCall('observer_join') : localCall('join', token);
 }
 
-export async function observerBeat(token: string): Promise<PresenceResult> {
+async function observerBeat(token: string): Promise<PresenceResult> {
   return USING_SUPABASE ? rpcCall('observer_beat') : localCall('beat', token);
 }
 

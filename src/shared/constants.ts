@@ -21,9 +21,6 @@ export const ROLES = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305', 'SUPERVISOR', 'OBS
 /** The four positions that act on the game, in walking order. */
 export const STATION_ROLES = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'] as const;
 
-/** Everything that can hold an operator binding, including the retained admin. */
-export const OPERATOR_ROLES = [...STATION_ROLES, 'SUPERVISOR'] as const;
-
 /** What the picker offers: four stations plus the open observer seat. */
 export const BOARD_ROLES = [...STATION_ROLES, 'OBSERVER'] as const;
 
@@ -42,8 +39,6 @@ export const DEFAULT_ROUND_DURATION_MS = 5 * 60_000;
 /** Valid configuration range for one round: 00:01 … 59:59 (V3.1 §7.3). */
 export const ROUND_DURATION_MIN_MS = 1_000;
 export const ROUND_DURATION_MAX_MS = 59 * 60_000 + 59_000;
-/** @deprecated kept as the historical 05:00 name for tests and old comments. */
-export const GAME_LIMIT_MS = DEFAULT_ROUND_DURATION_MS;
 export const PREP_ALLOWANCE_MS = 90_000;
 
 /** Observers are anonymous viewers, so their capacity is a presence property. */

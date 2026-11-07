@@ -3,7 +3,6 @@ import type { CSSProperties } from 'react';
 import type { LiveStore, StoreState } from '../client/liveStore';
 import type { StoredSession } from './session';
 import {
-  awaitingVerification,
   isLockedPhase,
   pad,
   phaseOf,
@@ -43,6 +42,7 @@ import { roundLimitMs } from '../shared/machine';
 import { formatClockCs, formatClockSec, formatWallTime, leaderboard } from '../shared/metrics';
 import type { ActionType, CommandMeta, Round, SystemPhase } from '../shared/types';
 import { DetailsSheet } from './DetailsSheet';
+import { AdminToggle } from './AdminToggle';
 import { BigScreen } from './BigScreen';
 import { JourneyBoard, JourneyStepper } from './JourneyMap';
 import { ACCENT_HEX, ROLE_ACCENT, TEAM_TONE_HEX } from './accents';
@@ -55,7 +55,6 @@ import {
   ArrowUpIcon,
   BarsIcon,
   CheckIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
   GearIcon,
@@ -126,6 +125,14 @@ function splitActionLabel(label: string): { head: string; tail: string } | null 
 }
 
 function CtaLabel({ label }: { label: string }) {
+  const shortLabels: Record<string, string> = {
+    'NHẬN ĐỘI & CHO LÊN TẦNG 2': 'NHẬN ĐỘI · LÊN TẦNG 2',
+    'XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2': 'ĐỘI ĐÃ ĐẾN TẦNG 2',
+    'XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3': 'ĐỘI ĐÃ RỜI TẦNG 3',
+    'GHI NHẬN BÁO HOÀN THÀNH': 'BÁO HOÀN THÀNH',
+  };
+  if (shortLabels[label]) return <span className="cta-label-main" title={label}>{shortLabels[label]}</span>;
+  if (label.startsWith('BẮT ĐẦU TRÒ CHƠI')) return <span className="cta-label-main" title={label}>BẮT ĐẦU</span>;
   const split = splitActionLabel(label);
   if (!split) return <span className="cta-label-main">{label}</span>;
   return (
@@ -222,11 +229,11 @@ export function Dashboard({ store, account, onLogout }: Props) {
         <div className="w-full max-w-[19rem] px-6 text-center">
           <p className="text-lg font-extrabold tracking-[0.18em] text-blood">SCREAM CONTROL</p>
           <p className="mt-3 text-sm" data-testid="booting-state">
-            {failed ? 'KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI MÁY CHỦ' : 'ĐANG ĐỒNG BỘ TRẠNG THÁI…'}
+            {failed ? 'CHƯA KẾT NỐI MÁY CHỦ' : 'ĐANG ĐỒNG BỘ TRẠNG THÁI…'}
           </p>
           <p className="mt-1.5 text-[0.72rem] leading-snug text-mute" data-testid="booting-cause">
             {failed
-              ? 'Máy chưa lấy được dữ liệu sự kiện. Kiểm tra Wi-Fi, hoặc bấm thử lại.'
+              ? 'Kiểm tra Wi-Fi rồi thử lại.'
               : 'Đang tải dữ liệu trực tiếp từ máy chủ…'}
           </p>
           {failed ? (
@@ -304,7 +311,8 @@ export function Dashboard({ store, account, onLogout }: Props) {
         </div>
 
         <div className="flex shrink-0 items-start gap-1.5">
-          <div className="flex flex-col items-end gap-0.5">
+          {account.role === 'SUPERVISOR' ? <AdminToggle active onLeave={onLogout} /> : null}
+          <div className={account.role === 'SUPERVISOR' ? 'sr-only' : 'flex flex-col items-end gap-0.5'}>
             <div className="flex h-[30px] items-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2.5">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} aria-hidden />
               <span className="text-[11px] font-bold leading-none text-snow" data-testid="role-tag">
@@ -326,9 +334,9 @@ export function Dashboard({ store, account, onLogout }: Props) {
               type="button"
               onClick={() => { setSheetTab('admin'); setSheetOpen(true); }}
               className="shrink-0 rounded-[10px] border border-ember/50 bg-ember/10 px-2.5 py-1.5 text-[9px] font-bold tracking-[0.06em] text-ember active:bg-ember/20"
-              data-testid="open-seat-management"
+              data-testid="open-seat-management" aria-label="Quản lý vị trí" title="Quản lý vị trí"
             >
-              VỊ TRÍ
+              <UsersIcon className="h-5 w-5" />
             </button>
           )}
           {/* V3.4 §1 (UI-08): the station settings entry stays available for the
@@ -810,7 +818,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
             already said in words by the header chip and the workflow badge. */}
         <span className="badge" data-tone="confirmed" data-testid="binding-state">
           <CheckIcon />
-          ĐÃ GẮN VỊ TRÍ
+          <span className="sr-only">ĐÃ GẮN VỊ TRÍ</span>
         </span>
       </section>
 
@@ -844,7 +852,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
           />
         </div>
 
-        <p
+        {received && <p
           className="team-status mt-2"
           data-testid="team-status"
           style={{ color: TEAM_TONE_HEX[syncBroken ? 'red' : teamLine.tone] }}
@@ -854,13 +862,13 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
             {teamLine.text}
             {round?.team_name ? <span className="text-mute"> · {round.team_name}</span> : null}
           </span>
-        </p>
+        </p>}
 
         {/* V3.4.1: the identity caption printed the team label a second time and the
             reception timestamp, which the route strip and the sheet's history both
             already carry. Whose hand the round is in stays, because nothing else
             on this screen says it. */}
-        {turn ? (
+        {turn && !turn.mine ? (
           <p className="r01-hand" data-testid="r01-hand" data-mine={turn.mine ? '1' : '0'}>
             <span className="r01-hand-who" data-testid="r01-hand-who">
               {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
@@ -991,12 +999,12 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
   const instruction = syncBroken
     ? 'Không đọc được máy chủ — kiểm tra Wi-Fi rồi bấm THỬ LẠI ở đầu màn hình.'
     : handoff.key === 'incoming'
-      ? 'Theo dõi lối lên tầng 2. Chỉ bấm xác nhận khi đội đã có mặt thật ở đây.'
+      ? 'Chỉ xác nhận khi đội đã có mặt tại tầng 2.'
       : handoff.key === 'bypassed'
-        ? 'NPC 1 đã bỏ qua tầng 2 có ghi nhật ký. Không cần thao tác ở đây.'
+        ? 'NPC 1 đã bỏ qua tầng 2.'
         : handoff.key === 'waiting-next'
           ? 'Đang chờ bước tiếp theo từ máy chủ.'
-          : 'Chưa có đội bàn giao. Khi Nhân sự 01 gửi đội lên, nút xác nhận sẽ hiện ở đây.';
+          : 'Chờ Nhân sự 01 bàn giao đội.';
   return (
     // V3.4.1: the spare height belongs between the blocks, not under the last one.
     // With the duplicated sentences gone this column is shorter than the phone, and
@@ -1017,7 +1025,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
         </div>
         <span className="badge" data-tone="confirmed" data-testid="r02-binding-state">
           <CheckIcon />
-          ĐÃ GẮN VỊ TRÍ
+          <span className="sr-only">ĐÃ GẮN VỊ TRÍ</span>
         </span>
       </section>
 
@@ -1053,7 +1061,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
             <span className="r01-hand-who" data-testid="r02-hand-who">
               {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
             </span>
-            {!turn.mine ? <span className="r01-hand-what">{turn.label}</span> : null}
+
           </p>
         ) : null}
       </section>
@@ -1065,7 +1073,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
           instruction stays for every state where there is nothing to press, and
           for the read failure, where the hint would promise a press the phone
           cannot honour. */}
-      {!confirmed && (syncBroken || handoff.key !== 'incoming') && (
+      {!confirmed && (syncBroken || handoff.key === 'bypassed') && (
         <section className="r02-instruct" data-testid="r02-instruction">
           <p>{instruction}</p>
         </section>
@@ -1279,7 +1287,7 @@ function PreStartAlert({ round, isNpc1, label, durationLabel }: { round: Round |
         {label.toUpperCase()}
       </p>
       <p className="prestart-hint" data-testid="prestart-hint">
-        {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'NPC 1 đang phổ biến luật ở cửa vào tầng 3'}
+        {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'Chờ NPC 1 phổ biến luật'}
       </p>
       {/* V3.4.1: the duration already sits at the top of the band, and “chờ NPC 1 bấm
           BẮT ĐẦU” is what the badge, the route and the disabled press all say. */}
@@ -1324,11 +1332,11 @@ function PreStartCard({ round, isNpc1, label, durationLabel }: {
         <ul className="prestart-steps mt-3" data-testid="prestart-checklist">
           <li className="prestart-step">Xác nhận đội đã có mặt</li>
           <li className="prestart-step">Phổ biến luật chơi</li>
-          <li className="prestart-step">Đưa gợi ý theo quy trình hiện hành</li>
+          <li className="prestart-step">Đưa gợi ý</li>
         </ul>
       ) : (
         <p className="prestart-hint mt-3" data-testid="prestart-hint">
-          NPC 1 đang phổ biến luật ở cửa vào tầng 3 — chỉ NPC 1 bấm BẮT ĐẦU
+          Chờ NPC 1 bấm BẮT ĐẦU.
         </p>
       )}
       <p className="prestart-duration mt-3" data-testid="prestart-duration">
@@ -1605,7 +1613,8 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
            receipt — "ĐÃ BẮT ĐẦU 05:00 — màn hình đã khoá" — still echoing a press
            made a whole round ago, under a card that already says the round is
            over. A receipt stops being information once the screen proves it. */
-        && !(role === 'GATE' && primary.action === 'CONFIRM_EXIT') ? (
+        && !(role === 'GATE' && primary.action === 'CONFIRM_EXIT')
+        && !(role === 'ROOM305' && attempts.some(a => a.status === 'PENDING')) ? (
         /* An error is never hidden. This is the success acknowledgement — and on
            the sealed NPC2 screen the card below already states the same server
            sentence, in larger type, with the timestamp that counts. That extends
@@ -1647,7 +1656,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
               ) : null}
             </div>
             <p className="npc1-handoff-note">
-              Chỉ xác nhận khi bạn tận mắt thấy toàn bộ đội đã ra khỏi tầng 3. Thao tác được ghi nhật ký.
+              Chỉ xác nhận khi toàn bộ đội đã rời tầng 3.
             </p>
           </section>
         )}
@@ -1818,22 +1827,12 @@ function PrimaryZone({ store, primary, pending, verifying, draftName }: ZoneProp
     // one-line reason the server state implies. Disabling here is courtesy — the
     // RPC refuses the same call outright if anyone forces it.
     return (
-      <div className="flex flex-col gap-1">
-        <button
-          type="button"
-          disabled
-          aria-disabled="true"
-          title={primary.hint ?? undefined}
-          className="cta cta-neutral opacity-45 saturate-50"
-          data-testid="waiting-state"
-          data-unavailable={primary.hint ? '1' : '0'}
-        >
-          <CtaLabel label={primary.label} />
-        </button>
-        {/* The reason is stated on screen, not only in a tooltip a phone held in
-            the hand cannot show. */}
-        {primary.hint ? <p className="cta-reason" data-testid="waiting-reason">{primary.hint}</p> : null}
-      </div>
+      <button type="button" disabled aria-disabled="true" className="waiting-status"
+        title={primary.label} data-testid="waiting-state" data-unavailable={primary.hint ? '1' : '0'}>
+        <ClockIcon className="h-4 w-4 shrink-0" />
+        <span className="sr-only">{primary.label}</span>
+        <span data-testid="waiting-reason">{primary.hint ?? primary.label}</span>
+      </button>
     );
   }
 
@@ -1879,7 +1878,7 @@ function PrimaryZone({ store, primary, pending, verifying, draftName }: ZoneProp
           and never only inside a tooltip. */}
       {blocked ? (
         <p className="cta-reason cta-reason-warn" data-testid="primary-block">{primary.reasonPrompt ?? 'Cần nhập lý do trước khi bấm.'}</p>
-      ) : primary.hint ? (
+      ) : primary.hint && primary.action !== 'START_GAME' ? (
         <p className="cta-reason" data-testid="primary-hint">{primary.hint}</p>
       ) : null}
     </div>

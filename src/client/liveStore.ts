@@ -1,4 +1,4 @@
-import type { ConnectionStatus, Gateway, RevisionHint } from './gateway';
+import type { ConnectionStatus, Gateway } from './gateway';
 import { GATEWAY_TIMEOUT_MS, withTimeout } from './gateway';
 import { ServerClockEstimate } from './clockSync';
 import { DEGRADED_AFTER_MS, VERIFY_INTERVAL_MS } from '../shared/constants';
@@ -51,7 +51,7 @@ export interface StoreAccount {
   display_name: string;
 }
 
-export interface LiveStoreOptions {
+interface LiveStoreOptions {
   gateway: Gateway;
   account: StoreAccount;
   /** Injectable monotonic source, so tests never wait on real time. */

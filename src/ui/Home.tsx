@@ -11,7 +11,8 @@ import {
 import type { StationBoard } from '../shared/types';
 import { USING_SUPABASE } from '../client/gateway';
 import { isClientStale } from '../shared/version';
-import { isAdminRoute, selectStation, type StoredSession } from './session';
+import { selectStation, type StoredSession } from './session';
+import { AdminToggle } from './AdminToggle';
 import { ACCENT_HEX, ROLE_ACCENT } from './accents';
 import {
   DoorIcon, EyeIcon, PinIcon, RoomIcon, StairsIcon, UsersIcon,
@@ -45,10 +46,10 @@ type SeatState = 'available' | 'full' | 'self' | 'pending' | 'unknown';
 
 const SEAT_WORD: Record<SeatState, string> = {
   available: 'CÒN TRỐNG',
-  full: 'ĐÃ CÓ NGƯỜI TRỰC',
-  self: 'MÁY NÀY ĐANG GIỮ',
+  full: 'ĐÃ CÓ NGƯỜI',
+  self: 'MÁY NÀY',
   pending: 'ĐANG VÀO…',
-  unknown: 'CHƯA XÁC MINH ĐƯỢC',
+  unknown: 'CHƯA XÁC MINH',
 };
 
 /**
@@ -71,24 +72,10 @@ export function Home({ onEnter, canSelect = true, error }: {
   // that already holds a seat but could not open its dashboard (gateway failure,
   // lost session write) must see that fact named on the card, not a spinner.
   const [selfRole, setSelfRole] = useState<Role | null>(null);
-  // V3.2: the organiser route reveals the admin seat plus this device's uuid, so
-  // the organiser can put it on the allow-list once. Players never load any of it.
-  const adminRoute = isAdminRoute();
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  // The panel mirrors the REAL server-side permission (whoami binding), never a guess:
-  // an authorised device is never shown raw UUID/SQL boilerplate again.
-  const [adminState, setAdminState] = useState<'checking' | 'ready' | 'none' | 'error'>('checking');
   const loading = useRef(false);
   const refresh = useRef<() => Promise<void>>(async () => {});
   const entering = useRef(false);
   const lastRead = useRef(0);
-
-  useEffect(() => {
-    if (!USING_SUPABASE || !adminRoute) return;
-    void import('../client/supabaseAuth').then(({ myDeviceId }) =>
-      myDeviceId().then(setDeviceId).catch(() => setDeviceId(null)));
-  }, [adminRoute]);
 
   /** Authoritative read of this device's own binding (whoami). Never a guess: a
    *  failed or empty read simply leaves every card in its board-derived state. */
@@ -100,27 +87,6 @@ export function Home({ onEnter, canSelect = true, error }: {
       .catch(() => { if (!disposed) setSelfRole(null); });
     return () => { disposed = true; };
   }, []);
-
-  /** Ask the backend who this device really is: a live SUPERVISOR binding can only
-   *  exist for an allow-listed device, so it is the authoritative granted state. */
-  const checkAdmin = useRef(async () => {});
-  useEffect(() => {
-    if (!adminRoute) return;
-    if (!USING_SUPABASE) { setAdminState('ready'); return; }
-    let disposed = false;
-    checkAdmin.current = async () => {
-      setAdminState('checking');
-      try {
-        const { currentProfile } = await import('../client/supabaseAuth');
-        const profile = await currentProfile();
-        if (!disposed) setAdminState(profile?.role === 'SUPERVISOR' ? 'ready' : 'none');
-      } catch {
-        if (!disposed) setAdminState('error');
-      }
-    };
-    void checkAdmin.current();
-    return () => { disposed = true; };
-  }, [adminRoute]);
 
   useEffect(() => {
     if (!USING_SUPABASE) return;
@@ -181,7 +147,7 @@ export function Home({ onEnter, canSelect = true, error }: {
       setMessage(text);
       // A refused admin claim (revoked allow-list entry) drops the panel back to the
       // setup guidance instead of leaving a stale "granted" badge on screen.
-      if (role === 'SUPERVISOR' && /QUẢN TRỊ/.test(text)) setAdminState('none');
+
       await refresh.current();
     } finally {
       entering.current = false; setBusy(null);
@@ -208,7 +174,6 @@ export function Home({ onEnter, canSelect = true, error }: {
   const dutyDevices = fresh
     ? STATION_ROLES.reduce((sum, role) => sum + (seatSlot(role)?.devices ?? 0), 0)
     : null;
-  const observerDevices = fresh ? (board?.observer_devices ?? 0) : null;
 
   const seatState = (role: Role, capacity: number): SeatState => {
     if (busy === role) return 'pending';
@@ -245,18 +210,16 @@ export function Home({ onEnter, canSelect = true, error }: {
             <span className="home-brand-word">SCREAM NIGHT</span>
             <span className="home-brand-room"><span className="home-signal" aria-hidden />ROOM 305</span>
           </div>
-          <h1 className="home-title">CHỌN VỊ TRÍ TRỰC</h1>
+          <div className="home-title-row"><h1 className="home-title">CHỌN VỊ TRÍ</h1>
+            <AdminToggle disabled={!canSelect || busy !== null} onEnter={onEnter} />
+          </div>
         </header>
 
         <section className="home-overview card" aria-label="Tổng quan bảng vị trí" data-testid="home-overview" data-fresh={fresh ? '1' : '0'}>
           <div className="home-meters">
             <div className="home-meter">
-              <span className="home-meter-label">Vị trí trực</span>
+              <span className="home-meter-label">Đang trực</span>
               <span className="home-meter-value digital" data-testid="station-count">{dutyDevices === null ? '—/4' : `${dutyDevices}/4`}</span>
-            </div>
-            <div className="home-meter">
-              <span className="home-meter-label">Người xem</span>
-              <span className="home-meter-value digital" data-testid="observer-count">{observerDevices === null ? `—/${OBSERVER_CAPACITY}` : `${observerDevices}/${OBSERVER_CAPACITY}`}</span>
             </div>
           </div>
           {floorBusy ? (
@@ -318,7 +281,7 @@ export function Home({ onEnter, canSelect = true, error }: {
                 <span className="home-observer-icon" aria-hidden><EyeIcon className="h-5 w-5" /></span>
                 <span className="home-observer-id">
                   <strong>XEM TRỰC TIẾP</strong>
-                  <small>Chỉ đọc · không cần mật khẩu</small>
+                  <small>Chỉ xem</small>
                 </span>
                 <span className="home-observer-state">
                   <span className="digital" data-testid="observer-seat-count">{known ? `${slot?.devices ?? 0}/${OBSERVER_CAPACITY}` : `—/${OBSERVER_CAPACITY}`}</span>
@@ -335,65 +298,6 @@ export function Home({ onEnter, canSelect = true, error }: {
           })()}
         </section>
 
-        {/* V3.2: the admin seat is not offered on the public board at all. On the private
-           /admin route the panel mirrors the real permission: a granted device sees one
-           badge and one button; anything else sees short guidance with the UUID/SQL tucked
-           into "advanced setup" until deliberately opened. Players never see this. */}
-        {adminRoute ? (
-          <div className="home-admin-line" data-testid="admin-panel">
-            {adminState === 'checking' ? (
-              <p className="home-pin-note" data-testid="admin-checking">ĐANG KIỂM TRA QUYỀN MÁY…</p>
-            ) : adminState === 'ready' ? (
-              <>
-                <p className="home-admin-granted" data-testid="admin-granted">
-                  <span aria-hidden="true">✓</span> THIẾT BỊ ĐÃ ĐƯỢC CẤP QUYỀN
-                </p>
-                <button type="button" data-testid="home-admin-open" className="home-admin-primary"
-                  disabled={!fresh || busy !== null || !canSelect}
-                  onClick={() => void claim('SUPERVISOR')}>
-                  {busy === 'SUPERVISOR' ? 'ĐANG VÀO…' : 'VÀO BẢNG QUẢN TRỊ'}
-                </button>
-              </>
-            ) : (
-              <>
-                <p className="home-pin-note" data-testid="admin-guide">
-                  {adminState === 'error'
-                    ? 'CHƯA KIỂM TRA ĐƯỢC QUYỀN DO MẤT KẾT NỐI.'
-                    : 'Máy chưa nằm trong danh sách cấp quyền. Mở Thiết lập nâng cao để lấy mã máy gửi người phụ trách.'}
-                </p>
-                <div className="flex gap-2">
-                  <button type="button" data-testid="home-admin-open" className="home-admin-primary flex-1"
-                    disabled={!fresh || busy !== null || !canSelect}
-                    onClick={() => void claim('SUPERVISOR')}>
-                    {busy === 'SUPERVISOR' ? 'ĐANG VÀO…' : 'VÀO QUẢN TRỊ'}
-                  </button>
-                  {USING_SUPABASE && adminState === 'error' ? (
-                    <button type="button" data-testid="admin-recheck" className="flex-1 rounded-[10px] border border-hair bg-panel px-3 py-2 text-[10.5px] font-semibold text-snow/90"
-                      onClick={() => void checkAdmin.current()}>KIỂM TRA LẠI QUYỀN</button>
-                  ) : null}
-                </div>
-                <details className="home-admin-advanced" data-testid="admin-advanced">
-                  <summary>THIẾT LẬP NÂNG CAO</summary>
-                  <p className="home-pin-note">
-                    Mã máy: <strong className="digital" data-testid="admin-device-id">{deviceId ?? '…'}</strong>. Chạy MỘT lần trong Supabase → SQL Editor:
-                  </p>
-                  <pre className="home-admin-sql" data-testid="admin-bootstrap-sql">{`insert into sc.admin_devices (user_id, note)
-  values ('${deviceId ?? '<uuid-máy-này>'}', 'máy quản trị');`}</pre>
-                  <button type="button" data-testid="admin-copy"
-                    className="w-full rounded-[10px] border border-hair bg-panel px-3 py-2 text-[10.5px] font-semibold text-snow/90"
-                    onClick={() => {
-                      if (!deviceId) return;
-                      void navigator.clipboard?.writeText(deviceId).catch(() => undefined);
-                      setCopied(true);
-                      window.setTimeout(() => setCopied(false), 1500);
-                    }}>
-                    {copied ? 'ĐÃ SAO CHÉP' : 'SAO CHÉP MÃ MÁY'}
-                  </button>
-                </details>
-              </>
-            )}
-          </div>
-        ) : null}
         {/* V3.3 P0: the board now carries the event's real state, so the picker can
             tell the truth instead of leaving every phone guessing at a spinner. The
             three lines below are mutually exclusive diagnoses:
@@ -404,7 +308,7 @@ export function Home({ onEnter, canSelect = true, error }: {
         {USING_SUPABASE && !fresh ? (
           <div className="notice-band" data-tone="warn" role="status" data-testid="home-board-stalled">
             <p>
-              Không đọc được bảng vị trí — kiểm tra kết nối internet của máy này.
+              Chưa đọc được vị trí. Kiểm tra kết nối.
             </p>
             <button
               type="button"
@@ -412,19 +316,19 @@ export function Home({ onEnter, canSelect = true, error }: {
               className="home-board-retry"
               data-testid="home-board-retry"
             >
-              THỬ LẠI NGAY
+              THỬ LẠI
             </button>
           </div>
         ) : null}
         {eventClosed ? (
           <p className="notice-band" data-tone="info" role="status" data-testid="home-event-closed">
             <span><strong className="home-closed-strong">SỰ KIỆN ĐÃ KẾT THÚC.</strong>{' '}
-            Quản trị viên bấm <strong className="home-closed-key">MỞ SỰ KIỆN MỚI</strong> để bàn giao phòng cho ca tiếp theo.</span>
+            Quản trị: <strong className="home-closed-key">MỞ SỰ KIỆN MỚI</strong>.</span>
           </p>
         ) : null}
         {fresh && board && isClientStale(board.min_client_version) ? (
           <p className="notice-band" data-tone="danger" role="status" data-testid="home-bundle-stale">
-            <span>Máy đang chạy bản ứng dụng cũ — đóng hẳn và mở lại để nhận bản mới.</span>
+            <span>Cần cập nhật. Đóng ứng dụng rồi mở lại.</span>
           </p>
         ) : null}
         <div aria-live="polite" className="home-feedback">

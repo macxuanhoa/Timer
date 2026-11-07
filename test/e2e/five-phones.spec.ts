@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor' | 'observer';
@@ -19,6 +20,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, phone: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${phone}`);
+  if (phone === 'supervisor') await unlockAdmin(page);
   if (phone === 'observer') {
     await expect(page.getByTestId('observer')).toBeVisible();
     return page;
@@ -64,11 +66,11 @@ async function freshSession(sup: { page: Page; context: BrowserContext }, pages:
 
 /** Reception → floor 2 → START: the three presses that put a clock on the floor. */
 async function toCountdown(lobby: Page, corridor: Page, gate: Page) {
-  await expect(primary(lobby)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+  await expect(primary(lobby)).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2');
   await primary(lobby).click();
-  await expect(primary(corridor)).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
+  await expect(primary(corridor)).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 2');
   await primary(corridor).click();
-  await expect(primary(gate)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
+  await expect(primary(gate)).toHaveText('BẮT ĐẦU');
   await primary(gate).click();
   await expect(gate.getByTestId('countdown-screen')).toBeVisible();
 }
@@ -107,7 +109,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await freshSession(sup, pages);
 
     // §5 Before the first team: one control on one phone, a grey lock everywhere else.
-    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2');
     await expect(gate.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
     await expect(sup.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
     await expect(corridor.page.getByTestId('waiting-state')).toBeDisabled();
@@ -121,7 +123,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
 
     // §6 Only OPERATOR_02 confirms arrival, and no clock has started anywhere.
-    await expect(corridor.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
+    await expect(corridor.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 2');
     // NPC1 holds the documented exception for this phase, and it asks why first.
     await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 3 — BỎ QUA XÁC NHẬN TẦNG 2');
     await corridor.page.getByTestId('primary-action').click();
@@ -147,7 +149,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // §8 Pre-start: the same loud alert on every phone, one START permission.
     await expect(room.page.getByTestId('prestart-alert')).toBeVisible();
     await expect(room.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
-    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
+    await expect(primary(gate.page)).toHaveText('BẮT ĐẦU');
     await primary(gate.page).click();
 
     // §9 The countdown locks every screen: no navigation, no editing, no old buttons.
@@ -168,12 +170,12 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     expect(fractionPx).toBeLessThan(mainPx / 2);
 
     // §10 NPC2 records the announcement; the countdown deliberately keeps running.
-    await expect(room.page.getByTestId('record-claim')).toHaveText('GHI NHẬN BÁO HOÀN THÀNH');
+    await expect(room.page.getByTestId('record-claim')).toHaveText('BÁO HOÀN THÀNH');
     await room.page.getByTestId('record-claim').click();
     // V3.4 §5: the pending attempt wears its own verification card — attempt
     // number, recorded timestamp, and the two decisions with their meaning.
     await expect(room.page.getByTestId('verify-head-1')).toContainText('LẦN 1');
-    await expect(room.page.getByTestId('verify-state-1')).toContainText('ĐANG CHỜ XÁC MINH');
+    await expect(room.page.getByTestId('verify-state-1')).toContainText('CHỜ XÁC MINH');
     await expect(room.page.getByTestId('attempt-hint')).toContainText('đồng hồ vẫn chạy');
     const claimed = await snapshotOf(sup);
     const claim = claimed.attempts[0];
@@ -226,7 +228,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(room.page.getByTestId('hero-clock')).toHaveText(official);
 
     // §12 The exit is a second, separate event that cannot move the score.
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ RỜI TẦNG 3');
     // V3.4 §7: the hand-off states what is already confirmed before the press.
     await expect(gate.page.getByTestId('npc1-handoff')).toBeVisible();
     await expect(gate.page.getByTestId('npc1-handoff-state')).toContainText('NPC 2 ĐÃ CHỐT KẾT QUẢ');
@@ -252,7 +254,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect.poll(async () => (await snapshotOf(sup)).active_round).toBeNull();
 
     // §5 The lobby may receive the next team as soon as the area is cleared.
-    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+    await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2');
     await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '0');
 
     // The ranking carries the claim-based time, and the wall clock shows ms detail.
@@ -345,7 +347,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // The claim never became the exit instant either: the round is still open.
     expect(won.active_round?.exit_confirmed_at).toBeNull();
     // NPC1 may still let the team out afterwards, without touching the score.
-    await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3');
+    await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ RỜI TẦNG 3');
     for (const { context } of [lobby, corridor, gate, room, sup]) await context.close();
   });
 
@@ -623,7 +625,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // V3.4: the overview counts the four duty seats and the ten viewer seats
     // separately — never the aggregate that also carries the hidden admin seats.
     await expect(page.getByTestId('station-count')).toHaveText(/\d\/4/);
-    await expect(page.getByTestId('observer-count')).toHaveText(/\d\/10/);
+    await expect(page.getByTestId('observer-seat-count')).toHaveText(/\d\/10/);
     await expect(page.locator('.home-station')).toHaveCount(4);
     await expect(page.locator('.home-observer-card')).toHaveCount(1);
     for (const role of ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305']) {
@@ -633,17 +635,17 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // V3.2: the retained admin is not a board tile and the public page never even
     // shows the admin line — there is no PIN sheet anywhere to reach.
     await expect(page.getByTestId('station-SUPERVISOR')).toHaveCount(0);
-    await expect(page.getByTestId('home-admin-open')).toHaveCount(0);
+    await expect(page.getByTestId('admin-toggle')).toBeVisible();
     await expect(page.getByTestId('admin-panel')).toHaveCount(0);
     await expect(page.locator('input')).toHaveCount(0);
   });
 
-  test('19b. /admin binds the retained admin with a single tap, no credential', async ({ page }) => {
+  test('19b. the admin circle requires a PIN and toggles back to guest', async ({ page }) => {
     await page.goto('/admin');
-    await expect(page.getByTestId('admin-panel')).toBeVisible();
-    await page.getByTestId('home-admin-open').click();
-    await expect(page.getByTestId('dashboard')).toBeVisible();
+    await unlockAdmin(page);
     await expect(page.getByTestId('role-tag')).toHaveText('TRỊ');
+    await page.getByTestId('admin-toggle').click();
+    await expect(page.getByTestId('scream-home')).toBeVisible();
   });
 
   test('20. a redeemed station survives reopening without the link', async ({ browser }) => {

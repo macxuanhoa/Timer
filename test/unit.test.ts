@@ -8,7 +8,7 @@ import {
   qualifiesForLeaderboard,
   roundMetrics,
 } from '../src/shared/metrics';
-import { OBSERVER_CAPACITY, RESET_TASKS, ROLES, type Role } from '../src/shared/constants';
+import { OBSERVER_CAPACITY, RESET_TASKS, ROLES } from '../src/shared/constants';
 import {
   ROLE_ACTIONS,
   authorize,

@@ -36,55 +36,17 @@ kept as its own attempt (Lần 1, Lần 2, …) with its own timestamp and its o
 
 ## Staff access
 
-Open the root URL → choose an available station → dashboard → **VỀ HOME SCREAM ROOM**.
-No account registration, email, invitation token or second confirmation for the four
-stations or the viewing seat.
+Mọi thiết bị mở URL gốc. Bốn vị trí trực và Xem trực tiếp vào bằng một lần chạm, không cần mật mã. Máy chủ kiểm tra chỗ trống; mỗi vị trí trực có một máy, người xem có tối đa 10 máy.
 
-| Tile | Label | Device capacity |
-| --- | --- | --- |
-| 01 · SẢNH TẦNG 1 | OPERATOR 01 | 1 |
-| 02 · TẦNG 2 | OPERATOR 02 | 1 |
-| NPC 1 · CỬA VÀO TẦNG 3 | NPC1 / FLOOR3_GATE | 1 |
-| NPC 2 · PHÒNG 305 | NPC2 / PUZZLE_CHECKER | 1 |
-| XEM TRỰC TIẾP | OBSERVER — no password | 10 concurrent seats |
+Circle hình người quản trị nằm cạnh tiêu đề Home. Chạm circle, nhập mật mã 6 số để máy chủ cấp vai trò SUPERVISOR cho thiết bị. Tối đa hai máy quản trị cùng lúc. Làm mới trang vẫn giữ quyền đã được máy chủ xác minh. Chạm lại circle đang sáng trên dashboard để nhả quyền và trở về Home ở trạng thái Khách. Nếu nhả quyền thất bại, màn hình giữ phiên hiện tại và hiện lỗi để thử lại.
 
-The retained **QUẢN TRỊ · GIÁM SÁT** entry is deliberately not a tile on the board: it
-opens the same PIN sheet from a quiet management line, so the operator side stays
-authenticated while the audience side stays open. One identity holds one role; switching
-requires releasing first, and the database refuses either direction.
+Mật mã được kiểm tra ở máy chủ bằng hash; frontend không chứa giá trị mặc định. Sai 5 lần trên một danh tính hoặc 30 lần tổng trong 15 phút sẽ bị tạm khóa. Thiết bị có danh tính cũ trong danh sách cấp quyền cũng phải nhập mã khi vào lại. Chọn vị trí khác cần nhả vị trí hiện tại trước.
 
-Home reads actual server occupancy. Available stations are green; full stations are grey
-and disabled. The viewer seat shows `n/10` and is claimed with no credential at all.
-Unknown, stale or offline occupancy is neutral and disabled. A PostgreSQL Realtime
-subscription refetches the public board on updates; a 3-second poll and foreground/
-online refetch recover missed hints. The server always rechecks capacity at claim time,
-so two phones can never take the same seat — including the tenth viewing seat.
+Supabase Anonymous Auth tạo danh tính nền và giữ qua refresh, khóa màn hình hoặc khởi động lại PWA. whoami là nguồn xác minh quyền; local storage và tham số URL không cấp quyền trên Production. Nhả quyền dùng release_device(), nên một thiết bị đã nhả ghế không thể tiếp tục gửi lệnh bằng vai trò cũ. Bản local dùng token quản trị có thể thu hồi qua /api/logout.
 
-On the board heading line, the **↺ RESET BẢNG VỊ TRÍ** icon is the organiser escape hatch for a
-stuck board: after the administrator secret is typed in, PostgreSQL revokes every live binding at
-once, so all six seats return to CÒN TRỐNG and each kicked phone lands back on this picker within
-its next 5-second authority recheck. It is an **access action only** — it never stops a clock,
-closes a round, deletes a result or marks a physical check, and the freed seats are immediately
-re-claimable. It is refused while a team is inside the 5:00 window: the icon greys out (the board
-publishes `game_running`) and the RPC answers `RESET_GAME_RUNNING`, because cancelling a live
-round is the separate KẾT THÚC SỚM / HỦY LƯỢT action, which keeps its own history.
-The secret field starts masked; the eye button in it switches between readable and
-hidden so a long secret can be checked before committing, and closing the sheet always
-masks it again.
+UI ưu tiên một thông tin ở một nơi: nhãn ngắn, trạng thái chờ dạng dòng gọn, hướng dẫn phụ trong mục mở rộng và can thiệp nâng cao mặc định đóng. Cảnh báo mất mạng, xác nhận vật lý và hệ quả chốt kết quả vẫn hiện tại bước liên quan. Các mục hướng dẫn dùng được bằng chạm và bàn phím.
 
-Supabase Anonymous Auth runs in the background on selection and persists across refresh,
-screen lock, network loss and PWA restart. Every boot resolves authority with whoami;
-active dashboards recheck it every 5 seconds and on foreground/reconnect. Local storage,
-URL parameters and caller-supplied device identifiers never grant production permissions.
-
-Returning Home releases only auth.uid()'s binding and waits for an affirmative server result.
-A failure keeps the dashboard and shows a short retry instruction. A committed release with a
-lost reply is safely repeatable. Closing a tab, refreshing, going offline or hiding the page
-never releases a seat. One identity has one role; switching roles requires releasing first.
-
-Legacy /i/<token> and ?i=<token> URLs are scrubbed to the root and never redeemed. Existing
-bindings still restore. Old cached clients cannot redeem invitations after migration 0010.
-The historical mint tool refuses operation on the new access model.
+Triển khai luồng Admin mới cần migration 0023_admin_pin_toggle.sql trước frontend. Migration này giữ nguyên lượt chơi, đồng hồ và lịch sử; nó chỉ thêm cấu hình PIN riêng tư và RPC cấp quyền. Các migration cũ được giữ làm lịch sử. Dùng npm run test:sql để kiểm tra cả migration và kịch bản 046 về cấp quyền, giới hạn, nhả quyền và từ chối quyền cũ.
 
 ## How the rules are implemented
 

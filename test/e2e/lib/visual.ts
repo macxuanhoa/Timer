@@ -22,7 +22,7 @@ export const shot = async (page: Page, name: string) => {
  * fit-content label measures — and `text-overflow: ellipsis` is a deliberate
  * truncation, not a defect.
  */
-export const clipReport = (page: Page) =>
+const clipReport = (page: Page) =>
   page.evaluate(() => {
     const doc = document.documentElement;
     const clipped: string[] = [];

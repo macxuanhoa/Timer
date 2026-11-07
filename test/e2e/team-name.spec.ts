@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test } from '@playwright/test';
 
 /**
@@ -13,6 +14,7 @@ test('team label is persisted and reaches every phone', async ({ browser }) => {
   const gate = await gateContext.newPage();
   const supervisor = await supervisorContext.newPage();
   await supervisor.goto('/?station=supervisor');
+  await unlockAdmin(supervisor);
   await expect(supervisor.getByTestId('dashboard')).toBeVisible();
   const token = await supervisor.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
   const reset = await supervisorContext.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${token}` } });

@@ -4,13 +4,9 @@ import type { StationBoard } from '../shared/types';
 import { GATEWAY_TIMEOUT_MS, withTimeout } from './gateway';
 
 /**
- * Passwordless operator access (V3.2).
- *
- * Opening the link and tapping a free seat is the whole joining ritual: the four
- * operating positions and the viewer seat need no credential of any kind. Slot
- * exclusivity is enforced inside PostgreSQL under one advisory lock, so two phones
- * can never hold the same seat. The retained admin is not a station: it lives on a
- * separate /admin route and only a device on the allow-list can bind it.
+ * Duty and viewing positions are password-free; Home's admin circle needs a PIN.
+ * PostgreSQL enforces capacity, validates the PIN and binds the authenticated
+ * identity. Leaving revokes that binding and its permissions.
  */
 
 const URL_KEY = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -43,12 +39,16 @@ export interface ClaimResult {
 
 /** What the person holding the phone needs to read, not the RPC code. */
 const CLAIM_ERROR: Record<string, string> = {
-  ROLE_TAKEN: 'VỊ TRÍ ĐANG CÓ NGƯỜI TRỰC',
+  PIN_REQUIRED: 'Cần nhập mật mã quản trị.',
+  PIN_INVALID: 'Mật mã chưa đúng.',
+  PIN_RATE_LIMITED: 'Đã thử nhiều lần. Chờ 15 phút rồi thử lại.',
+  PIN_NOT_CONFIGURED: 'Quản trị chưa được cấu hình trên máy chủ.',
+  ROLE_TAKEN: 'Vị trí đã có người trực.',
   OBSERVER_FULL: 'ĐÃ ĐỦ 10 NGƯỜI THEO DÕI — VUI LÒNG THỬ LẠI SAU',
   ALREADY_BOUND_OTHER_ROLE: 'MÁY NÀY ĐANG GIỮ VỊ TRÍ KHÁC — VỀ HOME TRƯỚC KHI CHUYỂN',
   NOT_AUTHENTICATED: 'CHƯA TẠO ĐƯỢC PHIÊN ẨN DANH TRÊN MÁY NÀY',
-  // V3.2: the admin seat belongs to the organiser allow-list, never to a typed code.
-  ADMIN_NOT_ALLOWED: 'MÁY NÀY CHƯA ĐƯỢC CẤP QUYỀN QUẢN TRỊ — VÀO /admin TRÊN MÁY CỦA NGƯỜI TỔ CHỨC',
+  // Compatibility with a server that has not yet applied the PIN migration.
+  ADMIN_NOT_ALLOWED: 'Chưa cấp được quyền quản trị. Kiểm tra cấu hình máy chủ.',
   INVALID_ROLE: 'VỊ TRÍ KHÔNG HỢP LỆ',
 };
 
@@ -119,10 +119,10 @@ export async function ensureAnonymousSession(): Promise<void> {
 }
 
 /** The server derives identity from auth.uid(), never a caller-supplied device. */
-export async function claimStation(role: Role): Promise<ClaimResult> {
+export async function claimStation(role: Role, pin?: string): Promise<ClaimResult> {
   await ensureAnonymousSession();
   const { data, error } = await withTimeout(
-    supabase().rpc('claim_station', { p_role: role }), GATEWAY_TIMEOUT_MS, 'claim_station',
+    supabase().rpc('claim_station', { p_role: role, ...(role === 'SUPERVISOR' ? { p_pin: pin ?? '' } : {}) }), GATEWAY_TIMEOUT_MS, 'claim_station',
   );
   if (error) throw new Error(error.message);
   return data as ClaimResult;

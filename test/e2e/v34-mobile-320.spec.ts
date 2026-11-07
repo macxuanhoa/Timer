@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { unlockAdmin } from './lib/admin';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
 /**
@@ -26,6 +27,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -93,7 +95,7 @@ test.describe.serial('V3.4 §11 — every redesigned screen at the 320px floor',
     }, { timeout: 20_000 }).toBe('WAITING_FLOOR2_CONFIRMATION');
 
     // UI-02: floor 2 facing the handoff it must confirm.
-    await expect(corridor.getByTestId('primary-action')).toHaveText('XÁC NHẬN ĐỘI ĐÃ ĐẾN TẦNG 2');
+    await expect(corridor.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ ĐẾN TẦNG 2');
     await assertFits(corridor, 'corridor handoff', width);
     await shot(corridor, '320-corridor');
 

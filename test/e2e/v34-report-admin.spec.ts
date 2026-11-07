@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { unlockAdmin } from './lib/admin';
+import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
 /**
@@ -37,7 +38,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     test.setTimeout(240_000);
 
     const token = async (account: Account) => {
-      const res = await request.post('/api/login', { data: { account } });
+      const res = await request.post('/api/login', { data: { account, ...(account === 'supervisor' ? { passcode: process.env.SC_PASSCODE_SUPERVISOR ?? '211105' } : {}) } });
       expect(res.ok()).toBe(true);
       return (await res.json()) as { token: string };
     };
@@ -114,6 +115,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     const context = await browser.newContext();
     const sup: Page = await context.newPage();
     await sup.goto('/?station=supervisor');
+    await unlockAdmin(sup);
     await expect(sup.getByTestId('dashboard')).toBeVisible();
     await expect(sup.getByTestId('role-tag')).toHaveText('TRỊ');
 
@@ -190,7 +192,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     // coincidence the way it did when the two populations shared a value.
     expect(await readKpi('Đội đã xử lý')).toMatch(/^\d+$/);
     expect(await readKpi('Vòng đang chờ Quản trị viên quyết')).toBe('1');
-    expect(await readKpi('Kết quả chờ xét (có điểm chính thức)')).toBe('0');
+    expect(await readKpi('Điểm chờ xét')).toBe('0');
     expect(await readKpi('Lượt bị hủy')).toBe('1');
 
     // 6 — the audit filters, and says how much it hid.

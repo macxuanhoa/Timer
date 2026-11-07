@@ -48,9 +48,7 @@ export function UpdateGate({ appName = 'SCREAM CONTROL' }: { appName?: string })
         ỨNG DỤNG CẦN<br />CẬP NHẬT
       </h1>
       <p className="max-w-[16rem] text-[0.78rem] leading-snug text-mute">
-        Máy này đang chạy phiên bản cũ hơn quy định hiện hành của ca trực. Để bảo
-        đảm mọi thiết bị cùng nhìn một bộ luật, thao tác đã bị tạm khoá cho tới khi
-        bản mới được tải về.
+        Cập nhật để tiếp tục thao tác.
       </p>
       <button
         type="button"

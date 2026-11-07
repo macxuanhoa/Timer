@@ -38,13 +38,6 @@ export const MIN_CLIENT_VERSION = APP_VERSION;
 export const CLIENT_BUILD =
   (import.meta.env.VITE_BUILD_STAMP as string | undefined) ?? `${APP_VERSION}+dev`;
 
-/**
- * Milliseconds between the client's "is there a newer build?" poll. Deliberately
- * short: the moment an organiser pushes a fix, every phone should refuse to
- * keep pressing buttons on the stale bundle within this window.
- */
-export const VERSION_POLL_INTERVAL_MS = 5 * 60 * 1000;
-
 /** Compares two dotted `MAJOR.MINOR.PATCH` strings; returns -1, 0 or 1. */
 export function compareSemver(a: string, b: string): -1 | 0 | 1 {
   const pa = a.split('.').map((x) => Number.parseInt(x, 10) || 0);

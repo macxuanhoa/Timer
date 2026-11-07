@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withTimeout, GATEWAY_TIMEOUT_MS, type Gateway } from '../src/client/gateway';
+import { withTimeout, type Gateway } from '../src/client/gateway';
 import { LiveStore } from '../src/client/liveStore';
 import type { CommandRequest, CommandResult, RevisionHintResponse, Snapshot } from '../src/shared/types';
 import { TestHub } from './helpers/harness';
@@ -122,10 +122,10 @@ describe('LiveStore boot never hangs', () => {
       subscribe: () => () => undefined,
     });
     const started = Date.now();
-    const res = await store.act('CALL_TEAM', { team_name: 'Do treo' });
+    await store.act('CALL_TEAM', { team_name: 'Do treo' });
     expect(Date.now() - started).toBeLessThan(30_000);
-    // res is null (outcome unknown, refused by reconcile) or an explicit failure;
-    // either way the store is no longer holding the action in flight.
+    // The result is null (outcome unknown, refused by reconcile) or an explicit
+    // failure; either way the store is no longer holding the action in flight.
     const after = store.getSnapshot();
     expect(after.pending).toBeNull();
     expect(after.verifying).toBeNull();

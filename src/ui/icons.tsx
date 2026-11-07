@@ -196,26 +196,14 @@ export function FlagIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
 }
 
 /**
- * The secret peek pair. The open eye is shown while the value is hidden ("tap to
- * see"), the barred eye while it is visible ("tap to hide"), so the icon always
- * names the next action rather than the current state.
+ * The secret peek icon: an open eye shown while the value is hidden ("tap to
+ * see"), so the icon names the next action rather than the current state.
  */
 export function EyeIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   return (
     <svg {...stroke({ className, ...rest })}>
       <path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12z" />
       <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-export function EyeOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
-  return (
-    <svg {...stroke({ className, ...rest })}>
-      <path d="M4 4l16 16" />
-      <path d="M9.7 6A9.7 9.7 0 0 1 12 5.8c6 0 9.4 6.2 9.4 6.2a17.4 17.4 0 0 1-3.4 4.1" />
-      <path d="M6.3 7.9A16.9 16.9 0 0 0 2.6 12S6 18.2 12 18.2c1.5 0 2.9-.4 4.1-1" />
-      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
     </svg>
   );
 }
@@ -269,15 +257,6 @@ export function SignalOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   );
 }
 
-/** The lantern. Marks the spotlight side of a card, and the running clock. */
-export function FlameIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
-  return (
-    <svg {...stroke({ className, ...rest })}>
-      <path d="M12 3.2c3.4 3.6 5.6 6 5.6 9.1A5.6 5.6 0 0 1 12 20.8a5.6 5.6 0 0 1-5.6-8.5c1-1.6 2.2-2.3 2.6-4 1.4 1.3 2 2.4 2.2 3.7.6-2.4 1.4-5.4.6-8.8z" />
-    </svg>
-  );
-}
-
 /** V3.4 picker: the floor-2 stairwell — the climb between the two handovers. */
 export function StairsIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   return (
@@ -298,13 +277,11 @@ export function PinIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   );
 }
 
-/** Records, rounds and rankings: the reporting destination. */
-export function ReportIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
-  return (
-    <svg {...stroke({ className, ...rest })}>
-      <rect x="4" y="3.5" width="16" height="17" rx="2" />
-      <path d="M8 16.5v-3M12 16.5v-6M16 16.5v-4" />
-    </svg>
-  );
+/** Personal admin badge, distinct from the station settings gear. */
+export function AdminIcon({ className = 'h-5 w-5', ...rest }: IconProps) {
+  return <svg {...stroke({ className, ...rest })}>
+    <circle cx="9" cy="7" r="3" />
+    <path d="M2 20v-2a7 7 0 0 1 11-5.7M17 11l5 2v3c0 3-5 5-5 5s-5-2-5-5v-3l5-2Z" />
+    <path d="m15 16 1.5 1.5L19 15" />
+  </svg>;
 }
-

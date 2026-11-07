@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
@@ -29,6 +30,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   // A viewer has no station band and no operator chrome: its own root is the
   // proof it is live, and it is the surface the palette check below reads.
   if (which === 'observer') {
@@ -105,7 +107,7 @@ test.describe.serial('V3.4 §3–§4 — one countdown, one palette, four stages
 
     /* ------------------------------------ unauthorised START, everywhere else */
     const start = gate.page.getByTestId('primary-action');
-    await expect(start).toHaveText('BẮT ĐẦU TRÒ CHƠI — 05:00');
+    await expect(start).toHaveText('BẮT ĐẦU');
     for (const p of [lobby.page, corridor.page, room.page, sup.page]) {
       await expect(p.getByTestId('primary-action')).toHaveCount(0);
     }

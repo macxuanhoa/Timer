@@ -79,4 +79,3 @@ class AlarmEngine {
 }
 
 export const alarms = new AlarmEngine();
-export type AlarmPattern = Pattern;

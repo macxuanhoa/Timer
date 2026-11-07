@@ -1,4 +1,4 @@
-import type { JourneyStopDef, Role } from '../shared/constants';
+import type { Role } from '../shared/constants';
 import type { TeamTone } from '../client/selectors';
 
 /**
@@ -17,7 +17,7 @@ import type { TeamTone } from '../client/selectors';
  * "ready" bone-amber rather than jade. Callers that read the semantic word
  * keep working; the surface shifts.
  */
-export type Accent = 'red' | 'green' | 'amber' | 'blue' | 'violet' | 'slate';
+type Accent = 'red' | 'green' | 'amber' | 'blue' | 'violet' | 'slate';
 
 export const ACCENT_HEX: Record<Accent, string> = {
   /** Danger / blood / OPERATOR_01 (the door team). Deep crimson, still readable
@@ -44,15 +44,6 @@ export const ROLE_ACCENT: Record<Role, Accent> = {
   ROOM305: 'violet',
   SUPERVISOR: 'slate',
   OBSERVER: 'green',
-};
-
-/** Area colours: the stepper ring and the status dot under it. */
-export const STOP_ACCENT: Record<JourneyStopDef['key'], Accent> = {
-  lobby: 'red',
-  floor2: 'blue',
-  gate: 'amber',
-  room: 'violet',
-  end: 'slate',
 };
 
 /** Team-line colours. Same mapping as the station accents. */

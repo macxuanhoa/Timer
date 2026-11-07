@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { assertReadable } from './lib/visual';
@@ -35,6 +36,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -272,7 +274,7 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     const closed = (await snapshot()).rounds ?? [];
     expect(closed.at(-1)?.official_duration_ms).toBe(officialMs);
     // Only now may the next team be received, and the lobby says so itself.
-    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 20_000 });
+    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2', { timeout: 20_000 });
 
     /* ------------------------------------ the strict distinctions, audited */
     // A physical reset is not a seat release, not Reset All, not an event

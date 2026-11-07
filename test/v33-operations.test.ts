@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TestHub, SEC, playRound } from './helpers/harness';
+import { TestHub, playRound } from './helpers/harness';
 import { ScreamEngine, initialState } from '../src/server/engine';
 import { FakeClock } from '../src/shared/types';
 import { CLIENT_BUILD, MIN_CLIENT_VERSION, APP_VERSION, compareSemver, isClientStale } from '../src/shared/version';

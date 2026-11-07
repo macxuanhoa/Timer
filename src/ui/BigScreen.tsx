@@ -182,7 +182,7 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
 
         {clock.pendingValidation && (
           <p className="digital mt-2 text-[clamp(0.8rem,3vw,1.6rem)] font-bold tracking-[0.16em] text-ember" data-testid="big-pending">
-            HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ
+            HẾT GIỜ · CHỜ XÁC MINH
           </p>
         )}
 
@@ -235,8 +235,8 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
           )}
           <p className="max-w-[60ch] text-[0.65rem] leading-snug text-mute" data-testid="big-note">
             {role === 'GATE'
-              ? 'Màn hình này không điều khiển được đồng hồ. NPC 1 bấm trên điện thoại của mình.'
-              : 'Chỉ hiển thị. Đồng hồ do NPC 1 mở và kết thúc theo mốc NPC 2 chốt.'}
+              ? 'Chỉ xem · NPC 1 điều khiển trên máy trực.'
+              : 'Chỉ xem · kết quả do NPC 2 chốt.'}
           </p>
         </footer>
       ) : (

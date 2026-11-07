@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Captures the V3 operator-screen previews committed under shots/ against the
+ * Captures the V3 operator-screen previews into shots/ (git-ignored) against the
  * self-hosted engine (VITE_BACKEND=local). Bring a fresh dev server up first, then:
  *
  *   npm run dev           # in another terminal, or set PREVIEW_BASE elsewhere

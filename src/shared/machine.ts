@@ -76,17 +76,6 @@ export const ROLE_ACTIONS: Record<ActionType, string[]> = {
   SESSION_RESTORE: [],
 };
 
-/** Statuses of the authoritative flow, in order. */
-export const FLOW_ORDER: FlowStatus[] = [
-  'WAITING_FLOOR2_CONFIRMATION',
-  'READY_AT_FLOOR3',
-  'RUNNING',
-  'TIME_EXPIRED_PENDING_VALIDATION',
-  'WAITING_FOR_EXIT',
-  'EXIT_CONFIRMED',
-  'CLOSED',
-];
-
 export const STAGE_OF_STATUS: Record<RoundStatus, number> = {
   // legacy (history only)
   LOBBY_CALL: 1,
@@ -203,16 +192,6 @@ export function gameElapsedMs(r: Round, nowMs: number): number {
   // Legacy rows: honour the banked time of the flexible window they were scored on.
   const segment = r.game_anchor_ms === null ? 0 : Math.max(0, nowMs - r.game_anchor_ms);
   return r.game_elapsed_ms + segment;
-}
-
-/** True while the countdown is live on screen — running, not yet expired or settled. */
-export function isCountdownLive(r: Round | null, limitMs: number, nowMs: number): boolean {
-  if (!r) return false;
-  if (gameElapsedMs(r, nowMs) === 0 && r.game_started_at === null) return false;
-  if (r.aborted_at !== null || r.exit_confirmed_at !== null) return false;
-  if (resultOf(r, [], limitMs, nowMs) === 'WON') return false;
-  const deadline = roundDeadlineMs(r, limitMs, nowMs);
-  return deadline !== null && nowMs < deadline && !hasValidatedAttempt(r);
 }
 
 /** A round whose result has been decided — success is immutable from here. */
@@ -438,7 +417,7 @@ export function authorizePhase(
 
 /* ------------------------------------------------------------ admission control */
 
-export type AdmissionCode =
+type AdmissionCode =
   | 'ALLOWED'
   | 'OVERRIDE_ALLOWED'
   | 'EVENT_NOT_STARTED'
@@ -447,7 +426,7 @@ export type AdmissionCode =
   | 'ROUND_ACTIVE'
   | 'NOT_READY';
 
-export interface AdmissionDecision {
+interface AdmissionDecision {
   allowed: boolean;
   /** A supervisor may force the action with an explicit reason + audit entry. */
   overridePossible: boolean;

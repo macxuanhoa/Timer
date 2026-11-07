@@ -7,7 +7,7 @@ export default async function setup() {
   docker(['run','-d','--name',NAME,'-p','127.0.0.1:55436:5432','-e','POSTGRES_PASSWORD=postgres','postgres:16-alpine']);
   try {
     for (let i=0;i<40;i++) {
-      try { docker(['exec',NAME,'pg_isready','-U','postgres']); break; }
+      try { docker(['exec',NAME,'pg_isready','-h','127.0.0.1','-U','postgres']); break; }
       catch { if (i===39) throw new Error('Local test database unavailable'); await new Promise(r=>setTimeout(r,500)); }
     }
     docker(['exec',NAME,'createdb','-U','postgres','sc305_access']);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../src/server/store';
 import { TestHub, SEC, MIN, playRound } from './helpers/harness';
-import { authorize, flowStatus, liveStatus, resultOf, roundLimitMs } from '../src/shared/machine';
+import { authorize, liveStatus, resultOf, roundLimitMs } from '../src/shared/machine';
 import { resolveCountdown, resolvePrimary, resolveAttempts } from '../src/client/selectors';
 import { ABORT_KINDS, RESET_TASK_LABEL, ROUND_DURATION_MAX_MS, ROUND_DURATION_MIN_MS } from '../src/shared/constants';
 import { validateRoundDuration } from '../src/server/engine';
@@ -127,7 +127,7 @@ describe('V3.1 §12.3 — claims, verification and expiry on every duration', ()
     describe(`round duration ${duration / SEC}s`, () => {
       it('scores the claim instant, never the verification instant', () => {
         const hub = new TestHub();
-        const round = started(hub, duration);
+        started(hub, duration);
         hub.advance(duration / 3);
         hub.command('room305', 'CLAIM_COMPLETE');
         const claim = hub.attempts().at(-1)!;

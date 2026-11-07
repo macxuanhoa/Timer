@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TestHub, MIN, SEC, playRound } from './helpers/harness';
+import { TestHub, MIN, playRound } from './helpers/harness';
 import { phaseAllows, isAllowed } from '../src/shared/machine';
 
 /**

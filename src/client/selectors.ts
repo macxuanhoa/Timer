@@ -7,12 +7,10 @@ import {
   flowStatus,
   gameRemainingMs,
   isResetWindow,
-  isTerminalRound,
   liveStatus,
   pendingEligibleClaims,
   phaseAllows,
   resultOf,
-  roundDeadlineMs,
   roundLimitMs,
   stallSince,
 } from '../shared/machine';
@@ -28,7 +26,7 @@ import type {
   SystemPhase,
 } from '../shared/types';
 
-export type Tone = 'primary' | 'danger' | 'warn' | 'waiting';
+type Tone = 'primary' | 'danger' | 'warn' | 'waiting';
 
 export interface PrimaryAction {
   action: ActionType | null;
@@ -112,7 +110,7 @@ export function flowOf(snap: Snapshot, nowMs: number): FlowStatus | null {
   return phase === 'PRE_EVENT' || phase === 'ENDED' || phase === 'WAITING_FOR_TEAM' ? null : phase;
 }
 
-export function resultOfRound(snap: Snapshot, nowMs: number): RoundResult | null {
+function resultOfRound(snap: Snapshot, nowMs: number): RoundResult | null {
   const round = snap.active_round;
   if (!round) return null;
   return resultOf(round, snap.attempts ?? [], roundLimitMs(round, snap.event.config.game_limit_ms), nowMs);
@@ -568,7 +566,7 @@ export function resolveAttempts(snap: Snapshot, nowMs: number): AttemptRow[] {
 }
 
 /** True while NPC2 has an in-time claim that still needs a decision. */
-export function awaitingVerification(snap: Snapshot, nowMs: number): boolean {
+function awaitingVerification(snap: Snapshot, nowMs: number): boolean {
   const round = snap.active_round;
   if (!round) return false;
   return pendingEligibleClaims(round, snap.attempts ?? [], roundLimitMs(round, snap.event.config.game_limit_ms), nowMs).length > 0;
@@ -579,7 +577,7 @@ export function awaitingVerification(snap: Snapshot, nowMs: number): boolean {
  * seals the list; a cancellation seals it only when it was a disqualification, and
  * then only until a supervisor has resolved the review by name (V3.1 §4.4).
  */
-export function attemptsJudgable(round: Round, result: RoundResult | null): boolean {
+function attemptsJudgable(round: Round, result: RoundResult | null): boolean {
   if (result === 'WON') return false;
   if (round.aborted_at !== null && round.abort_kind === 'misconduct') {
     return round.review_resolved_at !== null && !round.decertified;
@@ -638,7 +636,7 @@ export interface ResetBoard {
 }
 
 /** Where this phone is in the reset write: on the wire, or refused. */
-export interface ResetSubmit {
+interface ResetSubmit {
   submitting?: boolean;
   failed?: boolean;
   message?: string | null;
@@ -768,7 +766,7 @@ export function resolveResetBoard(
  * whose owner is the caller, so the wording follows the caller's real rows and
  * never promises a confirmation the server would not make.
  */
-export function resetConfirmLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
+function resetConfirmLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
   const keys = new Set(tasks.map((t) => t.task_key));
   if (keys.size === 1) {
     const key = [...keys][0];
@@ -781,7 +779,7 @@ export function resetConfirmLabel(tasks: readonly { task_key: ResetTaskKey }[]):
 }
 
 /** The instruction that sits under the CTA: what must be true before pressing. */
-export function resetConfirmHint(tasks: readonly { task_key: ResetTaskKey }[]): string {
+function resetConfirmHint(tasks: readonly { task_key: ResetTaskKey }[]): string {
   const keys = new Set(tasks.map((t) => t.task_key));
   if (keys.size === 1) {
     const key = [...keys][0];
@@ -797,7 +795,7 @@ export function resetConfirmHint(tasks: readonly { task_key: ResetTaskKey }[]): 
  * (V3.4 §4). Named from the rows this station owns and has confirmed, so it can
  * only ever claim the areas this phone was responsible for.
  */
-export function resetConfirmedLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
+function resetConfirmedLabel(tasks: readonly { task_key: ResetTaskKey }[]): string {
   const keys = new Set(tasks.map((t) => t.task_key));
   if (keys.size === 1) {
     const key = [...keys][0];
@@ -907,7 +905,7 @@ export function resolveResultSummary(snap: Snapshot, nowMs: number): ResultSumma
  * into a floor the authority has not cleared, and it never declares readiness on
  * the strength of the hallway tick alone.
  */
-export type ReadinessKey = 'ready' | 'verify' | 'reset' | 'finalize' | 'playing' | 'ended';
+type ReadinessKey = 'ready' | 'verify' | 'reset' | 'finalize' | 'playing' | 'ended';
 
 export interface ReadinessView {
   key: ReadinessKey;
@@ -988,51 +986,6 @@ export function resolveNextTeamReadiness(
 
 /* ---------------------------------------------------------- idle hero read */
 
-/**
- * What the non-locked screen's central read-out carries (V3.4 §2).
- *
- * While a finished round is being reset there is no countdown to show: the
- * next round's 05:00 belongs to a team that has not been received yet, so it
- * must never sit in the hero as though it described the round that just ended.
- * The hero wears the completed round's truth instead, and the next window is
- * offered only as explicitly labelled secondary information.
- */
-export interface HeroView {
-  mode: 'IDLE' | 'RESET';
-  eyebrow: string;
-  digits: string;
-  /** What the number is: an idle window, an official time, or a state word. */
-  digitsMode: 'IDLE' | 'RESULT' | 'STATE';
-  note: string;
-  /** The next round's configured window — always named as the next one's. */
-  nextLimitLabel: string;
-}
-
-export function resolveHero(snap: Snapshot, nowMs: number): HeroView {
-  const nextLimitLabel = formatClockSec(snap.event.config.game_limit_ms);
-  const phase = phaseOf(snap, nowMs);
-  if (snap.active_round && phase === 'EXIT_CONFIRMED') {
-    const summary = resolveResultSummary(snap, nowMs);
-    return {
-      mode: 'RESET',
-      eyebrow: summary?.headline ?? 'LƯỢT CHƠI ĐÃ KẾT THÚC',
-      digits: summary?.officialText ?? summary?.stateWord ?? '—',
-      digitsMode: summary?.officialText ? 'RESULT' : 'STATE',
-      note: 'Đang chuẩn bị khu vực cho đội tiếp theo.',
-      nextLimitLabel,
-    };
-  }
-  return {
-    mode: 'IDLE',
-    eyebrow: phase === 'WAITING_FLOOR2_CONFIRMATION' ? 'CHƯA TÍNH GIỜ — ĐỘI ĐANG LÊN TẦNG 2' : 'CHƯA TÍNH GIỜ',
-    digits: nextLimitLabel,
-    digitsMode: 'IDLE',
-    note: `Đồng hồ ${nextLimitLabel} của lượt chơi chỉ chạy khi NPC 1 bấm BẮT ĐẦU`,
-    nextLimitLabel,
-  };
-}
-
-
 /* ---------------------------------------------------------------- NPC2 stage */
 
 /**
@@ -1100,9 +1053,9 @@ export function resolveNpc2Stage(snap: Snapshot, nowMs: number): Npc2Stage {
  * `current` requires a real verified read inside the verify window, and only
  * the store's own failures can ever move the chip to `failed`.
  */
-export type SyncKey = 'connected' | 'current' | 'syncing' | 'reconnecting' | 'failed';
+type SyncKey = 'connected' | 'current' | 'syncing' | 'reconnecting' | 'failed';
 
-export interface SyncState {
+interface SyncState {
   key: SyncKey;
   label: string;
   /** True when the surface must offer a manual retry next to the chip. */
@@ -1139,7 +1092,7 @@ export function resolveSyncState(
 
 /* --------------------------------------------------------------- big screen */
 
-export interface BigScreenClock {
+interface BigScreenClock {
   /** Identifies the running game; changes when a new countdown is started. */
   key: string;
   teamNumber: number;
@@ -1182,9 +1135,9 @@ export function resolveBigScreen(snap: Snapshot, nowMs: number): BigScreenClock 
 
 /* --------------------------------------------------------------------- journey */
 
-export type JourneyMovement = 'idle' | 'up' | 'at' | 'down';
+type JourneyMovement = 'idle' | 'up' | 'at' | 'down';
 /** done = ✓ red, lead = ring (the area being walked into), here = solid, todo = grey. */
-export type JourneyState = 'done' | 'lead' | 'here' | 'todo';
+type JourneyState = 'done' | 'lead' | 'here' | 'todo';
 
 export interface JourneyStop {
   key: JourneyStopDef['key'];
@@ -1206,14 +1159,14 @@ export interface JourneyStop {
   attention: boolean;
 }
 
-export interface JourneyTask {
+interface JourneyTask {
   key: ResetTaskKey;
   label: string;
   role: Role;
   done: boolean;
 }
 
-export interface JourneyTurn {
+interface JourneyTurn {
   /** Position(s) whose next press moves the team forward. */
   roles: Role[];
   /** The same words as the button on that station. */
@@ -1417,7 +1370,7 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
  * server-recorded timestamps. The badge never claims an arrival the database
  * has not confirmed, and it never claims a confirmation a bypass has replaced.
  */
-export type HandoffKey = 'none' | 'incoming' | 'confirmed' | 'bypassed' | 'waiting-next';
+type HandoffKey = 'none' | 'incoming' | 'confirmed' | 'bypassed' | 'waiting-next';
 
 export interface HandoffInfo {
   key: HandoffKey;
@@ -1522,22 +1475,12 @@ export function resolveTeamLine(snap: Snapshot, nowMs: number): TeamLine {
   }
 }
 
-export function isAreaReady(snap: Snapshot | null, nowMs: number): boolean {
-  if (!snap) return false;
-  const phase = phaseOf(snap, nowMs);
-  return phase === 'WAITING_FOR_TEAM' || phase === 'PRE_EVENT';
-}
-
-export function hasActiveRound(snap: Snapshot | null): boolean {
-  return !!snap && !isTerminalRound(snap.active_round);
-}
-
 export function pad(n: number): string {
   return String(n).padStart(3, '0');
 }
 
 /** MM:SS.hh — the same formatting the authoritative messages use. */
-export function formatClockCs(ms: number): string {
+function formatClockCs(ms: number): string {
   const abs = Math.max(0, ms);
   const m = Math.floor(abs / 60_000);
   const s = Math.floor((abs % 60_000) / 1000);
@@ -1589,7 +1532,7 @@ export function resolveAlerts(snap: Snapshot, nowMs: number, staleData: boolean)
 }
 
 /** Reset tasks still outstanding for the round, honouring the reset cycle. */
-export function pendingTasks(snap: Snapshot, role?: Role) {
+function pendingTasks(snap: Snapshot, role?: Role) {
   const round = snap.active_round;
   if (!round) return [];
   return snap.reset_tasks.filter(
@@ -1602,7 +1545,7 @@ export function pendingTasks(snap: Snapshot, role?: Role) {
  * reset cycle. Only these may be claimed as done on a phone: a mark from an
  * earlier cycle stays outstanding, exactly as `pendingTasks` treats it.
  */
-export function doneTasks(snap: Snapshot, role?: Role) {
+function doneTasks(snap: Snapshot, role?: Role) {
   const round = snap.active_round;
   if (!round) return [];
   return snap.reset_tasks.filter(
@@ -1616,9 +1559,9 @@ export function doneTasks(snap: Snapshot, role?: Role) {
 
 /* -------------------------------------------------------------- station strip */
 
-export type StationState = 'active' | 'idle';
+type StationState = 'active' | 'idle';
 
-export interface StationInfo {
+interface StationInfo {
   role: StationRole;
   /** Short station name for the four-chip strip. */
   label: string;
@@ -1688,7 +1631,7 @@ export function resolveStations(snap: Snapshot, nowMs: number): StationInfo[] {
 
 /* ------------------------------------------------------------------- observer */
 
-export interface ObserverBoard {
+interface ObserverBoard {
   seats: number;
   capacity: number;
   full: boolean;
@@ -1711,7 +1654,7 @@ export function observerBoard(devices?: number, capacity?: number): ObserverBoar
  * authoritative state, never from the most recent audit action. An ended event
  * gets a completed-event answer, not a fake active-round dashboard.
  */
-export type OpsEventState = 'NOT_STARTED' | 'LIVE' | 'ENDED';
+type OpsEventState = 'NOT_STARTED' | 'LIVE' | 'ENDED';
 
 export const OPS_EVENT_STATE_WORD: Record<OpsEventState, string> = {
   NOT_STARTED: 'CHƯA MỞ SỰ KIỆN',
@@ -1727,7 +1670,7 @@ export const OPS_EVENT_STATE_WORD: Record<OpsEventState, string> = {
  * reached CLOSED; “đang diễn ra” is what is left open (at most one); “bị hủy” is a
  * property of a recorded round, stated as such, never a fourth bucket of the sum.
  */
-export interface RoundCounts {
+interface RoundCounts {
   recorded: number;
   closed: number;
   active: number;
@@ -1753,7 +1696,7 @@ export function roundCounts(snap: Snapshot): RoundCounts {
  * multi-device seat board at all, so the caller says `seatKnown: false` and the
  * card reads CHƯA XÁC MINH ĐƯỢC instead of guessing.
  */
-export type OpsSeatState = 'held' | 'free' | 'unknown';
+type OpsSeatState = 'held' | 'free' | 'unknown';
 
 export const OPS_SEAT_WORD: Record<OpsSeatState, string> = {
   held: 'GHẾ ĐANG CÓ MÁY TRỰC',
@@ -1761,9 +1704,9 @@ export const OPS_SEAT_WORD: Record<OpsSeatState, string> = {
   unknown: 'CHƯA XÁC MINH ĐƯỢC GHẾ',
 };
 
-export type OpsBadgeTone = 'confirmed' | 'live' | 'queued' | 'danger' | 'idle';
+type OpsBadgeTone = 'confirmed' | 'live' | 'queued' | 'danger' | 'idle';
 
-export interface OpsRoleStatus {
+interface OpsRoleStatus {
   role: StationRole;
   person: string;
   area: string;
@@ -1866,13 +1809,13 @@ export function resolveOpsRoles(
   });
 }
 
-export interface OpsNextAction {
+interface OpsNextAction {
   /** Short Vietnamese person words, never a raw role key. */
   who: string;
   what: string;
 }
 
-export interface OpsCommand {
+interface OpsCommand {
   state: OpsEventState;
   stateWord: string;
   eventName: string;
@@ -1950,7 +1893,7 @@ export function resolveOpsCommand(
  * neither offer a press the RPC would refuse nor claim ownership it does not
  * have. A phone without the right reads a summary, not misleading controls.
  */
-export interface OpsLayoutView {
+interface OpsLayoutView {
   current: HidingLayout;
   ownerPerson: string;
   ownerArea: string;

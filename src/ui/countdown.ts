@@ -17,7 +17,7 @@ import { COUNTDOWN_TONE } from './accents';
  *   frozen  — the round is decided (or not counting): bone-amber, a clearly
  *             non-running state. Never green.
  */
-export type CountdownStage = keyof typeof COUNTDOWN_TONE;
+type CountdownStage = keyof typeof COUNTDOWN_TONE;
 
 /** The one warning threshold every surface reads (V3.1 configuration). */
 export const COUNTDOWN_WARN_MS = BIG_SCREEN_WARN_MS;
@@ -75,7 +75,7 @@ export function countdownStageOf(view: CountdownViewLike): CountdownStageInput {
 }
 
 /** The shape `countdownStageOf` needs: `resolveCountdown` and `resolveBigScreen` both satisfy it. */
-export interface CountdownViewLike {
+interface CountdownViewLike {
   expired: boolean;
   settled: boolean;
   running: boolean;

@@ -16,6 +16,28 @@
   padding-inline: var(--sc-space-4);
 }
 
+
+/* Compact controls keep readable labels and full-sized touch targets. */
+.home-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-circle { width: 44px; height: 44px; flex: 0 0 44px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-hair); border-radius: 50%; background: var(--color-panel); color: var(--color-mute); cursor: pointer; }
+.admin-circle[data-active="1"] { color: var(--color-ember); border-color: var(--color-ember); background: var(--color-panel2); }
+.admin-circle:disabled { opacity: .5; cursor: default; }
+.admin-circle:focus-visible, .help-details summary:focus-visible { outline: 2px solid var(--color-ember); outline-offset: 3px; }
+.admin-pin-overlay { position: fixed; inset: 0; z-index: 90; background: #000b; }
+.admin-pin-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; z-index: 91; border: 1px solid var(--color-hair); border-radius: 20px; padding: 24px; background: var(--color-panel); display: grid; gap: 10px; }
+.admin-pin-dialog form { display: grid; gap: 14px; }
+.admin-pin-dialog input { width: 100%; min-height: 48px; border: 1px solid var(--color-hair); border-radius: 10px; padding: 10px; background: var(--color-ink); color: var(--color-snow); font-size: 20px; letter-spacing: .2em; }
+.help-details { font-size: .75rem; line-height: 1.5; color: var(--color-mute); }
+.help-details summary { width: fit-content; min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--color-mute); list-style: none; }
+.help-details summary::-webkit-details-marker { display: none; }
+.help-details summary::before { content: '+'; color: var(--color-ember); font-size: 16px; }
+.help-details[open] summary::before { content: '−'; }
+.help-details-body { padding: 0 0 8px; }
+.help-details-body p { margin-top: 0; }
+.admin-risk-group > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.waiting-status { display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--color-hair); border-radius: 12px; color: var(--color-mute); font-size: .75rem; line-height: 1.4; }
+[data-testid="open-settings"], [data-testid="open-seat-management"] { min-width: 44px; min-height: 44px; }
+
 .home-content {
   width: 100%;
   max-width: 560px;
@@ -100,13 +122,15 @@
 
 .home-meters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sc-space-3);
 }
 
 .home-meter {
-  display: grid;
-  gap: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -572,7 +596,6 @@
   /* background → surface → elevated → sunken. Ink is a full blackout, not a
      warm grey, so the ember accents glow like the poster's single lantern. */
   --color-ink: #0a0a0c;
-  --color-ink2: #0e0e12;
   --color-panel: #17171b;
   --color-panel2: #202028;
   --color-hair: #2b2b33;
@@ -584,8 +607,6 @@
   --color-ember: #f4893a;   /* pumpkin orange: NPC 1, warning, the running clock */
   --color-amber: #ffb445;   /* burning amber: the last minute, hot highlight */
   --color-jade: #e6b877;    /* bone-amber: confirmed / success / the official time */
-  --color-azure: #5a9cab;   /* OPERATOR 02 */
-  --color-violet: #a26cd9;  /* NPC 2 */
   --color-off: #55555f;     /* disabled ink: legible, but clearly inert */
 
   /* ---------------------------------------------------------- typography */
@@ -597,10 +618,6 @@
      length in a dark room. No webfont is fetched — the PWA must render identically
      on a venue network that has failed. */
   --font-display: 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, 'Times New Roman', serif;
-
-  --text-hero: clamp(2.4rem, 15vw, 3.4rem);
-  /* The wall display digit: readable across a room, never clipped on a phone. */
-  --text-bigscreen: clamp(3.25rem, 20vw, 24rem);
 
   /* -------------------------------------------------------------- shapes */
   --radius-panel: 14px;
@@ -617,7 +634,6 @@
   --sc-space-3: 12px;
   --sc-space-4: 16px;
   --sc-space-5: 22px;
-  --sc-space-6: 30px;
 
   /* Radii: chip < panel < card. Pills are for status, never for layout. */
   --sc-radius-chip: 10px;
@@ -641,7 +657,6 @@
   --sc-spot: radial-gradient(120% 90% at 12% 0%, rgb(244 137 58 / 0.16) 0%, rgb(244 137 58 / 0.04) 34%, transparent 68%);
   --sc-glow-ember: 0 0 24px -8px rgb(244 137 58 / 0.55);
   --sc-glow-amber: 0 0 26px -6px rgb(255 180 69 / 0.6);
-  --sc-glow-blood: 0 0 24px -8px rgb(211 58 47 / 0.5);
   --sc-glow-jade: 0 0 22px -8px rgb(230 184 119 / 0.45);
   --sc-lift: 0 10px 24px -14px rgb(0 0 0 / 0.9);
 
@@ -704,22 +719,6 @@
     padding-top: calc(var(--safe-top-gap, 0.75rem) + env(safe-area-inset-top, 0px));
   }
 
-  /* Overlay strips anchored to an inset edge are placed on the padding box, so
-     the padding above cannot reach them: they anchor to the notch edge itself. */
-  .notch-top {
-    top: env(safe-area-inset-top, 0px);
-  }
-
-  .notch-bottom {
-    bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  /* Handoff ring: whoever must press now. Visible without motion, so the cue is
-     never only an animation. */
-  .turn-pulse {
-    box-shadow: 0 0 0 2px rgb(244 244 245 / 0.35);
-  }
-
   @media (prefers-reduced-motion: no-preference) {
     .breathe {
       animation: breathe 2.4s ease-in-out infinite;
@@ -731,19 +730,6 @@
       }
       50% {
         opacity: 0.35;
-      }
-    }
-
-    .turn-pulse {
-      animation: turn-pulse 1.6s ease-in-out infinite;
-    }
-    @keyframes turn-pulse {
-      0%,
-      100% {
-        box-shadow: 0 0 0 2px rgb(244 244 245 / 0.35);
-      }
-      50% {
-        box-shadow: 0 0 0 5px rgb(244 244 245 / 0.1);
       }
     }
   }
@@ -767,25 +753,12 @@
   box-shadow: var(--sc-edge), var(--sc-lift);
 }
 
-.track {
-  height: 6px;
-  border-radius: 999px;
-  background: #34343c;
-  overflow: hidden;
-}
-
 /* ------------------------------------------------------------------ header */
 
 /* Compact by design: the header has to earn exactly one line of trust — is this
-   phone live, and which station am I — and nothing else. */
-.sc-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sc-space-2);
-  padding: 0 var(--sc-space-3) var(--sc-space-2);
-}
-
+   phone live, and which station am I — and nothing else. That row is written as
+   utilities on the stage's own `<header>`, so there is no `.sc-header` rule to
+   style here; the wordmark is the only header thing that needs a class. */
 .sc-wordmark {
   font-family: var(--font-display);
   font-size: 1.02rem;
@@ -1049,33 +1022,13 @@
   padding-block: var(--sc-space-2);
 }
 
-/* The pre-start strip keeps the clock compact but lights the amber edge, because
-   this is the one waiting state the whole room has to feel. */
-.hero-block.is-prestart {
-  border-color: color-mix(in srgb, var(--color-amber) 55%, var(--color-hair));
-  box-shadow: var(--sc-edge), var(--sc-glow-amber);
-}
-
-.hero-block.is-prestart .hero-digits {
-  color: var(--color-amber);
-  text-shadow: 0 0 26px rgb(255 180 69 / 0.35);
-}
-
 @supports not (color: color-mix(in srgb, red, blue)) {
   .tm-card.is-received { border-color: #6a4a2f; }
-  .hero-block.is-prestart { border-color: #7a5a2a; }
 }
 
 @media (max-height: 700px) {
   .tm-card { padding: var(--sc-space-3) var(--sc-space-3); }
   .team-digits { font-size: clamp(1.3rem, 6vw, 1.6rem); }
-}
-
-.track > span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  transition: width 180ms linear;
 }
 
 /* ---------------------------------------------------------------- buttons */
@@ -1673,11 +1626,6 @@
   letter-spacing: 0.04em;
   line-height: 1.15;
   color: var(--color-snow);
-}
-
-.admin-status-name {
-  font-size: var(--sc-t-label);
-  color: var(--color-mute);
 }
 
 .admin-status-rows {
@@ -2588,28 +2536,8 @@
 
 /* --------------------------------------------------------------- ornaments */
 
-/* The gothic note the screens are allowed: a lit point above a hairline, used
-   once per surface, never around content that has to be read fast. */
-.ornament {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  color: color-mix(in srgb, var(--color-ember) 55%, var(--color-mute));
-}
-
-.ornament::before,
-.ornament::after {
-  content: '';
-  height: 1px;
-  flex: 1;
-  background: linear-gradient(90deg, transparent, currentColor);
-}
-
-.ornament::after {
-  background: linear-gradient(90deg, currentColor, transparent);
-}
-
+/* The gothic note the screens are allowed: a lit point, used once per surface,
+   never around content that has to be read fast. */
 .ornament-dot {
   width: 5px;
   height: 5px;
@@ -2622,10 +2550,8 @@
 
 /* The column rhythm of an operator screen lives in the stage roots' own
    utilities (flex column, gap, the scrollable middle), so there is no `.sc-flow`
-   wrapper to style — the interrupted V3.4 sessions left that rule, plus
-   `.sc-header` and `.sc-two-col`, defined and referenced by nothing. They are
-   removed here rather than kept as a parallel layout vocabulary: no markup in
-   the repository has ever carried those class names. */
+   wrapper to style. `.cta-ember` and `.cta-green` are built at runtime by
+   `cta-${CTA_LOOK[action]}` in Dashboard, so a literal class scan cannot see them. */
 
 /* Spare height is shared by the column rather than pooled in one empty band:
    the idle screen used to spend half a viewport around a clock that is not
@@ -3526,12 +3452,6 @@
   .role-band {
     padding: var(--sc-space-2);
   }
-
-  /* Static help, not state: the first thing to go when the press is the one
-     thing that has to stay reachable. */
-  .role-band-duty {
-    display: none;
-  }
 }
 
 @media (min-width: 700px) {
@@ -3553,3 +3473,6 @@
     box-shadow: none;
   }
 }
+
+.admin-toggle-wrap { position: relative; flex-shrink: 0; }
+.admin-leave-error { position: absolute; top: calc(100% + 8px); right: 0; z-index: 40; width: min(240px, 80vw); padding: 10px; border: 1px solid var(--color-blood); border-radius: 10px; background: var(--color-panel); color: var(--color-snow); font-size: .75rem; }

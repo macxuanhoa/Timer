@@ -28,7 +28,7 @@ const queries: Record<string, string> = {
 };
 async function rpc(uid: string | null, name: string, body: Record<string, unknown> = {}) {
   if (!queries[name]) throw new Error('Unknown RPC');
-  const args = name === 'claim_station' || name === 'release_station' ? [body.p_role]
+  const args = name === 'claim_station' ? ('p_pin' in body ? [body.p_role, body.p_pin] : [body.p_role]) : name === 'release_station' ? [body.p_role]
     : name === 'handle_command' ? [body.p_action, body.p_meta, body.p_expected_revision, body.p_idempotency_key]
     : name === 'operation_status' ? [body.p_idempotency_key] : [];
   const client = await pool.connect();
@@ -37,7 +37,7 @@ async function rpc(uid: string | null, name: string, body: Record<string, unknow
     await client.query("select set_config('request.jwt.claim.sub',$1,true), set_config('request.jwt.claims',$2,true)",
       [uid ?? '', JSON.stringify({ sub: uid, is_anonymous: true })]);
     await client.query(uid ? 'set local role authenticated' : 'set local role anon');
-    const { rows } = await client.query(queries[name], args);
+    const { rows } = await client.query(name === 'claim_station' && 'p_pin' in body ? 'select public.claim_station($1,$2) as result' : queries[name], args);
     await client.query('commit'); return rows[0].result;
   } catch (err) { await client.query('rollback'); throw err; } finally { client.release(); }
 }
@@ -103,9 +103,9 @@ async function adminPhone(
   transport: { hangSnapshot: boolean; noStationAdmin?: boolean } = { hangSnapshot: false },
 ) {
   const a = await phone(browser, transport, '/admin');
-  await expect(a.page.getByTestId('admin-panel')).toBeVisible();
-  await allowAdmin(a.uid()!);
-  await a.page.getByTestId('home-admin-open').click();
+  await a.page.getByTestId('admin-toggle').click();
+  await a.page.getByTestId('admin-pin').fill('211105');
+  await a.page.getByTestId('admin-unlock').click();
   await expect(a.page.getByTestId('dashboard')).toBeVisible({ timeout: 25_000 });
   return a;
 }
@@ -119,6 +119,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await pool.query('update sc.operators set revoked_at = now() where revoked_at is null');
     await pool.query('delete from sc.observer_seats');
     await pool.query('delete from sc.admin_devices');
+    await pool.query('delete from sc.access_rate_limits');
     // One private event per case; the pointer is moved back before it is removed,
     // because sc.state references it.
     await pool.query(`update sc.rounds set status='CLOSED' where status <> 'CLOSED'`);
@@ -149,7 +150,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     // The board answers (station_board is its own RPC), so the seat is claimable;
     // only the authoritative event read is dead — the exact production shape.
     await p.page.getByTestId('station-LOBBY').click();
-    await expect(p.page.getByTestId('booting-state')).toHaveText('KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI MÁY CHỦ', { timeout: 45_000 });
+    await expect(p.page.getByTestId('booting-state')).toHaveText('CHƯA KẾT NỐI MÁY CHỦ', { timeout: 45_000 });
     await expect(p.page.getByTestId('booting-cause')).toContainText('Kiểm tra Wi-Fi');
     await expect(p.page.getByTestId('booting-retry')).toBeVisible();
     // Recovery, the other half of the contract: the transport answers again and
@@ -184,7 +185,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     // The admin seat itself must be held before the handoff command is accepted —
     // the caller's live binding is the credential for OPEN_NEW_EVENT as for every
     // other supervisor action.
-    expect((await rpc(supUid, 'claim_station', { p_role: 'SUPERVISOR' })).ok).toBe(true);
+    expect((await rpc(supUid, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
     const opened = await rpc(supUid, 'handle_command', {
       p_action: 'OPEN_NEW_EVENT', p_meta: { _v: '3.3.0', event_name: 'v33 night 2' },
       p_expected_revision: await revision(), p_idempotency_key: 'v33-open-' + randomUUID(),
@@ -210,7 +211,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await pool.query('update sc.events set event_ended_at = sc.now_ms(), event_started_at = 1, next_team_number = 7 where id = (select event_id from sc.state where id=true)');
     const closedId = (await pool.query('select id from sc.events where id=(select event_id from sc.state where id=true)')).rows[0].id;
     const supUid = await identity(); await allowAdmin(supUid);
-    expect((await rpc(supUid, 'claim_station', { p_role: 'SUPERVISOR' })).ok).toBe(true);
+    expect((await rpc(supUid, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
 
     const p = await phone(browser);
     await p.page.getByTestId('station-LOBBY').click();
@@ -229,7 +230,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     // The open phone must cross to the new event by itself: the ended card
     // disappears and the lobby CTA returns, on the store's own verification tick.
     await expect(p.page.getByTestId('event-ended-card')).toHaveCount(0, { timeout: 30_000 });
-    await expect(p.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 30_000 });
+    await expect(p.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2', { timeout: 30_000 });
     // And it is genuinely the new event, not the old one re-labelled.
     const snap = await rpc(await p.uid() as string, 'snapshot');
     expect(Number(snap.event.id)).not.toBe(Number(closedId));
@@ -243,7 +244,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await allowAdmin(supUid);
     expect((await rpc(lobbyUid, 'claim_station', { p_role: 'LOBBY' })).ok).toBe(true);
     expect((await rpc(gateUid, 'claim_station', { p_role: 'GATE' })).ok).toBe(true);
-    expect((await rpc(supUid, 'claim_station', { p_role: 'SUPERVISOR' })).ok).toBe(true);
+    expect((await rpc(supUid, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
     // A duty seat cannot free a peer; only the admin binding can.
     expect((await rpc(lobbyUid, 'release_station', { p_role: 'GATE' })).code).toBe('RELEASE_NOT_AUTHORIZED');
     expect((await rpc(supUid, 'release_station', { p_role: 'GATE' })).ok).toBe(true);
@@ -275,7 +276,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
       // The escape hatches sit deliberately outside the gate: a stale supervisor
       // can still unstick a seat.
       const supUid = await identity(); await allowAdmin(supUid);
-      expect((await rpc(supUid, 'claim_station', { p_role: 'SUPERVISOR' })).ok).toBe(true);
+      expect((await rpc(supUid, 'claim_station', {p_role:'SUPERVISOR',p_pin:'211105'})).ok).toBe(true);
       expect((await rpc(supUid, 'release_station', { p_role: 'LOBBY' })).ok).toBe(true);
       // A stamped V3.3 client passes and the night opens normally.
       expect((await rpc(uid, 'claim_station', { p_role: 'LOBBY' })).ok).toBe(true);

@@ -51,10 +51,10 @@ export function Observer({ store, token, onLogout }: Props) {
       <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-ink px-6 text-center" data-testid="observer-full">
         <p className="text-[15px] font-extrabold tracking-[0.06em] text-blood">SCREAM CONTROL</p>
         <p className="text-[13px] font-semibold text-snow" data-testid="observer-full-message">
-          Đã đủ {OBSERVER_CAPACITY} người theo dõi. Vui lòng thử lại sau.
+          Đã đủ {OBSERVER_CAPACITY} người xem.
         </p>
         <p className="text-[11px] leading-snug text-mute">
-          Lượt xem chỉ dành để theo dõi trực tiếp. Khi có chỗ trống, trang này sẽ tự vào lại.
+          Tự vào lại khi có chỗ trống.
         </p>
         <button
           type="button"
@@ -191,7 +191,7 @@ export function Observer({ store, token, onLogout }: Props) {
       </main>
 
       <footer className="safe-bottom flex items-center justify-between gap-2 border-t border-hair px-3 pt-2 pb-2">
-        <p className="text-[9px] font-semibold tracking-[0.1em] text-mute">CHỈ XEM · KHÔNG THAO TÁC</p>
+        <p className="text-[9px] font-semibold tracking-[0.1em] text-mute">CHỈ XEM</p>
         <button
           type="button"
           onClick={() => { void observerLeave(token); void onLogout(); }}

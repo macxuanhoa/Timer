@@ -129,6 +129,7 @@ async function main() {
       // instead of the legacy request.jwt.claim.sub GUC, which PostgREST does
       // not publish on Supabase. One function redefinition; no data touched.
       '0022_v33_station_admin_identity.sql',
+      '0023_admin_pin_toggle.sql',
     ]);
     if (singleUrl && pending.some(f => !allowed.has(f))) throw new Error('Unexpected pending migration; review required.');
     // V3.2: no secret is ever typed, stored or hashed. The one optional set-up act

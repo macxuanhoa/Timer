@@ -3,8 +3,7 @@ dist
 dev-dist
 test-results
 test-results-access
-shots/single-url-home.png
-shots/admin-release-*.png
+shots/
 playwright-report
 .scream-data
 .env
@@ -16,3 +15,4 @@ supabase/.temp
 .vercel
 .env*.local
 .audit-tmp/
+.vitest/

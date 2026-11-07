@@ -43,7 +43,7 @@ try {
 
   for (let i = 0; i < 60; i++) {
     try {
-      docker(['exec', NAME, 'pg_isready', '-U', 'postgres']);
+      docker(['exec', NAME, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres']);
       break;
     } catch {
       await new Promise((r) => setTimeout(r, 1000));
@@ -94,6 +94,8 @@ try {
   run('044 v33 seat management scenario', ['supabase/tests/044_v33_seat_management.sql']);
   run('022 v33 station_admin identity', ['supabase/migrations/0022_v33_station_admin_identity.sql']);
   run('045 v33 station_admin identity scenario', ['supabase/tests/045_v33_station_admin_identity.sql']);
+  run('023 admin PIN toggle', ['supabase/migrations/0023_admin_pin_toggle.sql']);
+  run('046 admin PIN toggle scenario', ['supabase/tests/046_admin_pin_toggle.sql']);
   console.log('\n✓ Production SQL validated: migrations, RLS and every state transition.');
 } finally {
   if (!keep) {

@@ -18,7 +18,7 @@ async function openPicker(page: import('@playwright/test').Page, width: number, 
   // The overview answers only from the server board: four duty seats, ten viewer
   // seats — never the old aggregate that also carried the hidden admin seats.
   await expect(page.getByTestId('station-count')).toHaveText(/\d\/4/);
-  await expect(page.getByTestId('observer-count')).toHaveText(/\d\/10/);
+  await expect(page.getByTestId('observer-seat-count')).toHaveText(/\d\/10/);
 }
 
 for (const width of WIDTHS) {
@@ -45,7 +45,7 @@ for (const width of WIDTHS) {
     await expect(page.getByTestId('station-ROOM305')).toContainText('NPC 2');
     await expect(page.getByTestId('station-ROOM305')).toContainText('PHÒNG 305');
     // The viewer band is separated from the duty grid and explains read-only.
-    await expect(page.getByTestId('station-OBSERVER')).toContainText('Chỉ đọc');
+    await expect(page.getByTestId('station-OBSERVER')).toContainText('Chỉ xem');
     // No horizontal overflow, and no card clipped off the bottom of the shell.
     const overflow = await page.evaluate(() =>
       document.documentElement.scrollWidth - window.innerWidth);

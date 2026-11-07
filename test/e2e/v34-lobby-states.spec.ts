@@ -1,3 +1,4 @@
+import { unlockAdmin } from './lib/admin';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { assertActionReachable, assertReadable, shot } from './lib/visual';
 
@@ -32,6 +33,7 @@ const ROLE_TAG: Record<Phone, string> = {
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/?station=${which}`);
+  if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
   await expect(page.getByTestId('role-tag')).toHaveText(ROLE_TAG[which]);
   return page;
@@ -66,7 +68,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('binding-state')).toContainText('ĐÃ GẮN VỊ TRÍ');
     await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #001');
     await expect(lobby.page.getByTestId('r01-team-badge')).toContainText('CHỜ NHẬN ĐỘI');
-    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2');
+    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2');
     // V3.4.1: the idle duration is one compact row. Why it is not moving is the
     // badge and the press's own hint, so no sentence is repeated under the number.
     await expect(lobby.page.getByTestId('hero-clock')).toHaveText(/^0\d:\d\d$/);
@@ -162,7 +164,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN SẴN SÀNG', { timeout: 20_000 });
     await gate.page.getByTestId('primary-action').click();
     // Between teams the lobby owns its press again, with the next number queued.
-    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI & CHO LÊN TẦNG 2', { timeout: 20_000 });
+    await expect(lobby.page.getByTestId('primary-action')).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2', { timeout: 20_000 });
     await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #002');
 
     /* ------------------------------------- 8. event ended */

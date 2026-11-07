@@ -7,6 +7,7 @@ import { useNow, useWakeLock } from './hooks';
 import { alarms } from './sound';
 import { countdownStage, countdownStateLabel, countdownStageOf, countdownToneHex } from './countdown';
 import { TimeDigits } from './TimeView';
+import { VolumeOffIcon, VolumeOnIcon } from './icons';
 
 interface Props {
   store: LiveStore;
@@ -216,8 +217,16 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
             >
               {fsLabel}
             </button>
-            <button type="button" onClick={() => setMuted((m) => !m)} className="wall-util-btn" data-active={muted ? '1' : '0'} data-testid="big-mute">
-              {muted ? 'BẬT TIẾNG' : 'TẮT TIẾNG'}
+            <button
+              type="button"
+              onClick={() => setMuted((m) => !m)}
+              className="wall-util-btn"
+              data-active={muted ? '1' : '0'}
+              data-testid="big-mute"
+              title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+              aria-label={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+            >
+              {muted ? <VolumeOffIcon className="h-4 w-4" /> : <VolumeOnIcon className="h-4 w-4" />}
             </button>
             <button type="button" onClick={onClose} className="wall-util-btn" data-variant="close" data-testid="big-close">
               ĐÓNG
@@ -235,8 +244,8 @@ export function BigScreen({ store, role, onClose, autoOpened }: Props) {
           )}
           <p className="max-w-[60ch] text-[0.65rem] leading-snug text-mute" data-testid="big-note">
             {role === 'GATE'
-              ? 'Chỉ xem · NPC 1 điều khiển trên máy trực.'
-              : 'Chỉ xem · kết quả do NPC 2 chốt.'}
+              ? 'Chỉ xem · Nhân sự 03 điều khiển trên máy trực.'
+              : 'Chỉ xem · kết quả do Nhân sự 04 chốt.'}
           </p>
         </footer>
       ) : (

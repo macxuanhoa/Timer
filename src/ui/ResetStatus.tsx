@@ -128,7 +128,7 @@ export function ResetChecklist({ board, role }: { board: ResetBoard; role: Role 
       </ul>
       {board.allDone ? (
         <p className="reset-foot" data-testid="reset-footnote">
-          Đủ 3 khu vực · chờ NPC 1 chốt.
+          Đủ 3 khu vực · chờ Nhân sự 03 chốt.
         </p>
       ) : role !== 'GATE' ? (
         /* The one reader who has no row of their own still needs to know why the

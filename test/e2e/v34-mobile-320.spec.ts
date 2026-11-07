@@ -19,13 +19,19 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
 async function signIn(context: BrowserContext, which: Phone): Promise<Page> {
   const page = await context.newPage();
+  if (which === 'supervisor') {
+    // All pages in this context share localStorage. The organiser route needs
+    // to start unbound so the PIN flow is tested instead of reusing ROOM305.
+    await page.goto('/');
+    await page.evaluate(() => localStorage.removeItem('sc305.session.v1'));
+  }
   await page.goto(`/?station=${which}`);
   if (which === 'supervisor') await unlockAdmin(page);
   await expect(page.getByTestId('dashboard')).toBeVisible();
@@ -75,12 +81,16 @@ test.describe.serial('V3.4 §11 — every redesigned screen at the 320px floor',
     const gate = await signIn(context, 'gate');
     const room = await signIn(context, 'room305');
     const sup = await signIn(context, 'supervisor');
+    const supervisorSession = await sup.evaluate(() => localStorage.getItem('sc305.session.v1'));
+    expect(supervisorSession).not.toBeNull();
 
     const token = (page: Page) =>
       page.evaluate(() => JSON.parse(localStorage.getItem('sc305.session.v1') ?? '{}').token as string);
     const reset = await context.request.post('/api/dev/reset', { headers: { authorization: `Bearer ${await token(sup)}` } });
     expect(reset.ok()).toBe(true);
-    for (const p of [lobby, corridor, gate, room, sup]) await p.reload();
+    for (const p of [lobby, corridor, gate, room]) await p.reload();
+    await sup.evaluate((session) => localStorage.setItem('sc305.session.v1', session!), supervisorSession);
+    await sup.reload();
     for (const p of [lobby, corridor, gate, room, sup]) await expect(p.getByTestId('dashboard')).toBeVisible();
 
     // UI-01: reception with a team waiting to be received.

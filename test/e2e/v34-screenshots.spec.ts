@@ -7,8 +7,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -93,7 +93,7 @@ test.describe.serial('V3.4 §11 — rendered mobile states for visual QA', () =>
     await shot(room.page, 'npc2-official-result');
 
     // 5. NPC2 waiting for team exit — the same read-only surface one beat later.
-    await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ NPC 1 xác nhận đội rời tầng 3.');
+    await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ Nhân sự 03 xác nhận đội rời tầng 3.');
     await shot(room.page, 'npc2-waiting-team-exit');
 
     // 6. NPC1 awaiting the exit confirmation: hand-off card + guarded CTA.

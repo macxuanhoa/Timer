@@ -7,8 +7,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor' | 'observe
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
   observer: 'XEM',
 };
@@ -112,7 +112,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(primary(lobby.page)).toHaveText('NHẬN ĐỘI · LÊN TẦNG 2');
     await expect(gate.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
     await expect(sup.page.getByTestId('waiting-state')).toContainText('ĐANG CHỜ TIẾP NHẬN ĐỘI CHƠI');
-    await expect(corridor.page.getByTestId('waiting-state')).toBeDisabled();
+    await expect(corridor.page.getByTestId('waiting-state')).toHaveAttribute('role', 'status');
 
     // The optional label is drafted before the press and travels with it.
     await lobby.page.getByTestId('team-edit').click();
@@ -143,7 +143,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
     // V3.4.1: the summary states the confirmed arrival and the server instant; who
     // owns the next step is the card's hand line, stated once for the whole screen.
-    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NPC 1');
+    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NHÂN SỰ 03');
     await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
 
     // §8 Pre-start: the same loud alert on every phone, one START permission.
@@ -173,10 +173,11 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(room.page.getByTestId('record-claim')).toHaveText('BÁO HOÀN THÀNH');
     await room.page.getByTestId('record-claim').click();
     // V3.4 §5: the pending attempt wears its own verification card — attempt
-    // number, recorded timestamp, and the two decisions with their meaning.
+    // number, recorded timestamp, and the two decisions with their meaning. The
+    // aggregate timer hint is reserved for overlapping claims.
     await expect(room.page.getByTestId('verify-head-1')).toContainText('LẦN 1');
     await expect(room.page.getByTestId('verify-state-1')).toContainText('CHỜ XÁC MINH');
-    await expect(room.page.getByTestId('attempt-hint')).toContainText('đồng hồ vẫn chạy');
+    await expect(room.page.getByTestId('attempt-hint')).toHaveCount(0);
     const claimed = await snapshotOf(sup);
     const claim = claimed.attempts[0];
     expect(claim.status).toBe('PENDING');
@@ -211,7 +212,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     // digits, which the board ranks and the card no longer prints a second time.
     await expect(room.page.getByTestId('hero-clock')).toHaveText(formatClockCsLocal(second.elapsed_ms).slice(0, 5));
     await expect(room.page.getByTestId('hero-fraction')).toHaveText(`.${formatClockCsLocal(second.elapsed_ms).slice(6, 8)}`);
-    await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ NPC 1 xác nhận đội rời tầng 3.');
+    await expect(room.page.getByTestId('official-result-wait')).toContainText('Đang chờ Nhân sự 03 xác nhận đội rời tầng 3.');
     await expect(room.page.getByTestId('record-claim')).toHaveCount(0);
     // The rejected first attempt keeps its row and its own timestamp (§4).
     await expect(room.page.getByTestId('attempt-1')).toHaveAttribute('data-status', 'INVALID');
@@ -231,7 +232,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(gate.page.getByTestId('primary-action')).toHaveText('ĐỘI ĐÃ RỜI TẦNG 3');
     // V3.4 §7: the hand-off states what is already confirmed before the press.
     await expect(gate.page.getByTestId('npc1-handoff')).toBeVisible();
-    await expect(gate.page.getByTestId('npc1-handoff-state')).toContainText('NPC 2 ĐÃ CHỐT KẾT QUẢ');
+    await expect(gate.page.getByTestId('npc1-handoff-state')).toContainText('NHÂN SỰ 04 ĐÃ CHỐT KẾT QUẢ');
     await gate.page.getByTestId('primary-action').click();
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN LẠI: ĐỘI ĐÃ RỜI TẦNG 3');
     await gate.page.getByTestId('primary-action').click();
@@ -258,7 +259,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(lobby.page.getByTestId('journey-strip')).toHaveAttribute('data-position', '0');
 
     // The ranking carries the claim-based time, and the wall clock shows ms detail.
-    await lobby.page.getByTestId('open-details').click();
+    await lobby.page.getByTestId('open-settings').click();
     // V3.2 IA: the report tab shows rounds, ranking and audit flat — no accordions.
     await lobby.page.getByTestId('sheet-tab-report').click();
     await expect(lobby.page.getByTestId('leaderboard-table')).toContainText('#001');
@@ -272,7 +273,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
     await expect(lobby.page.getByTestId('history')).toContainText('ghi nhận báo hoàn thành');
     await expect(lobby.page.getByTestId('history')).toContainText('đã rời tầng 3');
     // V3.1 §IV: the actor column wears `ROLE_SHORT` ("NPC 2"), never the raw key.
-    await expect(lobby.page.getByTestId('history')).toContainText('NPC 2');
+    await expect(lobby.page.getByTestId('history')).toContainText('04');
     await expect(lobby.page.getByTestId('history')).not.toContainText('ROOM305');
     await lobby.page.getByTestId('close-details').click();
 
@@ -481,7 +482,7 @@ test.describe.serial('SCREAM CONTROL V3 — one flow, every phone', () => {
       );
       expect(overflow, `${which} overflows by ${overflow}px`).toBeLessThanOrEqual(0);
       if (which !== 'observer') {
-        await page.getByTestId('open-details').click();
+        await page.getByTestId('open-settings').click();
         const sheetOverflow = await page.evaluate(
           () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
         );

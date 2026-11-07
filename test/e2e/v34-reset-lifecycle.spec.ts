@@ -28,8 +28,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -128,7 +128,7 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     // “CHỜ NPC 2” was one station introduced twice on one line.
     for (const key of ['hidden_objects', 'room']) {
       const rowText = (await gate.page.getByTestId(`reset-row-${key}`).textContent()) ?? '';
-      expect((rowText.match(/NPC 2/g) ?? []).length, `${key} names its owner once: ${rowText}`).toBe(1);
+      expect((rowText.match(/04/g) ?? []).length, `${key} names its owner once: ${rowText}`).toBe(1);
     }
     // And the row that is this phone's own still says whose job it is.
     await expect(gate.page.getByTestId('reset-row-hallway')).toContainText('phần của bạn');
@@ -169,7 +169,7 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
       return `${m}:${s}.${ms}`;
     };
     await expect(room.page.getByTestId('attempt-history')).toContainText(hundredths(officialMs!));
-    await room.page.getByTestId('open-details').click();
+    await room.page.getByTestId('open-settings').click();
     await room.page.getByTestId('sheet-tab-report').click();
     await expect(room.page.getByTestId('round-score-1')).toContainText('THÀNH CÔNG');
     await expect(room.page.getByTestId('round-score-1')).toContainText(millis(officialMs!));
@@ -298,7 +298,7 @@ test.describe.serial('V3.4 §8 — one continuous lifecycle: verification → ex
     expect(afterReset.active_round).toBeNull();
 
     /* ------------------------------------- event ended: the reset UI steps aside */
-    await sup.page.getByTestId('open-details').click();
+    await sup.page.getByTestId('open-settings').click();
     await sup.page.getByTestId('sheet-tab-admin').click();
     await sup.page.getByTestId('close-reason').fill('Hết ca');
     await sup.page.getByTestId('admin-end').click();

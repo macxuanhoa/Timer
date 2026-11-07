@@ -322,7 +322,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
     await expect(a.page.getByTestId('seat-holder-GATE')).toContainText('NPC1 bo may');
     await expect(a.page.getByTestId('seat-holder-GATE')).toContainText(gateUid.slice(0, 8));
     // The button speaks the operator's vocabulary, not an internal code name.
-    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('GIẢI PHÓNG NPC 1');
+    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('GIẢI PHÓNG NHÂN SỰ 03');
     // An empty seat is reported as empty rather than offering a phantom release.
     await expect(a.page.getByTestId('seat-state-ROOM305')).toHaveText('CÒN TRỐNG');
   });
@@ -339,12 +339,12 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
 
     // Step one arms, and the panel explains what the second tap will do.
     await a.page.getByTestId('seat-release-GATE').click();
-    await expect(a.page.getByTestId('seat-mgmt-armed')).toContainText('NPC 1 · CỬA TẦNG 3');
-    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('XÁC NHẬN GIẢI PHÓNG NPC 1');
+    await expect(a.page.getByTestId('seat-mgmt-armed')).toContainText('NHÂN SỰ 03 · CỬA TẦNG 3');
+    await expect(a.page.getByTestId('seat-release-GATE')).toHaveText('XÁC NHẬN GIẢI PHÓNG NHÂN SỰ 03');
 
     // Step two commits.
     await a.page.getByTestId('seat-release-GATE').click();
-    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NPC 1', { timeout: 20_000 });
+    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NHÂN SỰ 03', { timeout: 20_000 });
 
     const board = await rpc(null, 'station_board');
     const seat = (role: string) => board.stations.find((s: { role: string }) => s.role === role) as
@@ -423,7 +423,7 @@ test.describe.serial('V3.3 P0 — stuck-sync recovery, real event state, supervi
 
     await a.page.getByTestId('seat-release-GATE').click();
     await a.page.getByTestId('seat-release-GATE').click();
-    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NPC 1', { timeout: 20_000 });
+    await expect(a.page.getByTestId('seat-mgmt-result')).toContainText('ĐÃ GIẢI PHÓNG NHÂN SỰ 03', { timeout: 20_000 });
 
     const board = await rpc(null, 'station_board');
     expect(board.stations.find((s: { role: string }) => s.role === 'GATE').devices).toBe(0);

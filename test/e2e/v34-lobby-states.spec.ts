@@ -25,8 +25,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -98,8 +98,9 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     /* ------------------------------------------- 4. awaiting CORRIDOR */
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐÃ CHO ĐỘI LÊN TẦNG 2');
     await expect(lobby.page.getByTestId('primary-action')).toHaveCount(0);
-    await expect(lobby.page.getByTestId('r01-hand')).toHaveText('CHỜ 02');
-    // V3.4.1: the phase sentence lives once, under the press that cannot fire yet.
+    // V3.4.1: the separate "CHỜ 02" badge was removed; the reason names the
+    // person and the handoff in one authoritative waiting message.
+    await expect(lobby.page.getByTestId('r01-hand')).toHaveCount(0);
     await expect(lobby.page.getByTestId('waiting-reason')).toContainText('Chờ Nhân sự 02 xác nhận');
 
     /* ------------------------------- 4b. offline while the handoff is pending */
@@ -129,12 +130,12 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
 
     /* ------------------------------------------- 5. handoff complete */
     await expect(lobby.page.getByTestId('prestart-alert')).toBeVisible({ timeout: 20_000 });
-    await expect(lobby.page.getByTestId('prestart-team')).toContainText('MA TRO');
+    await expect(lobby.page.getByTestId('active-team')).toContainText('Ma Tro');
     await expect(lobby.page.getByTestId('prestart-duration')).toHaveText(/^0\d:\d\d$/);
-    await expect(lobby.page.getByTestId('prestart-hint')).toContainText('NPC 1 đang phổ biến luật');
+    await expect(lobby.page.getByTestId('prestart-hint')).toContainText('Chờ Nhân sự 03 phổ biến luật');
     // The pre-start banner is the phase statement, so the card's state line keeps
     // only whose hand the round is in, and the warning strip drops its duplicate.
-    await expect(lobby.page.getByTestId('r01-hand-who')).toHaveText('CHỜ NPC 1');
+    await expect(lobby.page.getByTestId('waiting-reason')).toContainText('Nhân sự 03');
     await expect(lobby.page.getByTestId('alert-PRESTART')).toHaveCount(0);
     await expect(lobby.page.getByTestId('waiting-state')).toContainText('ĐỘI CHƠI SẮP BẮT ĐẦU');
     await assertReadable(lobby.page, 'lobby: handoff complete');
@@ -168,7 +169,7 @@ test.describe.serial('V3.4 §1 — NHÂN SỰ 01 across its eight states', () =>
     await expect(lobby.page.getByTestId('r01-team-stage')).toHaveText('ĐỘI #002');
 
     /* ------------------------------------- 8. event ended */
-    await sup.page.getByTestId('open-details').click();
+    await sup.page.getByTestId('open-settings').click();
     await sup.page.getByTestId('sheet-tab-admin').click();
     await sup.page.getByTestId('close-reason').fill('Hết ca');
     await sup.page.getByTestId('admin-end').click();

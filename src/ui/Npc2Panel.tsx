@@ -55,7 +55,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
     if (a.status === 'INVALID') return 'Giữ nguyên mốc báo để đối chiếu';
     if (a.status === 'LATE') return 'Không tạo kết quả thắng';
     return a.open
-      ? 'Đang chờ NPC 2 kiểm tra trận đồ'
+      ? 'Đang chờ Nhân sự 04 kiểm tra trận đồ'
       : 'Mốc báo giữ nguyên — lần báo này chưa được quyết định';
   };
 
@@ -69,7 +69,7 @@ export function Npc2Panel({ store, stage, attempts, countdown, pending, verifyin
         <OfficialResultCard
           teamText={countdown.teamText}
           officialMs={stage.officialMs ?? countdown.officialMs ?? 0}
-          waitingLine="Đang chờ NPC 1 xác nhận đội rời tầng 3."
+          waitingLine="Đang chờ Nhân sự 03 xác nhận đội rời tầng 3."
           showTime={false}
         />
       ) : stage.canClaim ? (

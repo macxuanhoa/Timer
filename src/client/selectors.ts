@@ -186,7 +186,7 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
           tone: 'primary',
           // V3.4 §2 kept the briefing steps inside NPC 1's own preparation card;
           // the hint used to read those steps out a second time under the press.
-          hint: 'Chỉ NPC 1 mở đồng hồ.',
+          hint: 'Chỉ Nhân sự 03 mở đồng hồ.',
         });
       }
       // V3.4 Role 02: after the handoff is server-confirmed the confirmation
@@ -195,10 +195,10 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
       // wording so a skipped floor is never displayed as a confirmation.
       if (role === 'CORRIDOR') {
         return round?.floor2_confirmed_at !== null
-          ? locked('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2', 'Đội đang được hướng dẫn lên tầng 3 — NPC 1 mở đồng hồ')
-          : locked('TẦNG 2 ĐÃ ĐƯỢC BỎ QUA', 'NPC 1 đã bỏ qua xác nhận tầng 2 — không còn thao tác ở đây');
+          ? locked('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2', 'Đội đang được hướng dẫn lên tầng 3 — Nhân sự 03 mở đồng hồ')
+          : locked('TẦNG 2 ĐÃ ĐƯỢC BỎ QUA', 'Nhân sự 03 đã bỏ qua xác nhận tầng 2 — không còn thao tác ở đây');
       }
-      return locked('ĐỘI CHƠI SẮP BẮT ĐẦU', 'Chỉ NPC 1 được bấm BẮT ĐẦU');
+      return locked('ĐỘI CHƠI SẮP BẮT ĐẦU', 'Chỉ Nhân sự 03 được bấm BẮT ĐẦU');
 
       case 'RUNNING': {
         if (role === 'ROOM305') {
@@ -237,7 +237,7 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
         });
       }
       return locked(round && round.aborted_at !== null
-        ? 'LƯỢT CHƠI ĐÃ HỦY — CHỜ NPC 1 XÁC NHẬN ĐÃ RỜI TẦNG 3'
+        ? 'LƯỢT CHƠI ĐÃ HỦY — CHỜ NHÂN SỰ 03 XÁC NHẬN ĐÃ RỜI TẦNG 3'
         : 'ĐANG CHỜ NPC1 XÁC NHẬN ĐỘI RỜI TẦNG 3');
 
     case 'EXIT_CONFIRMED': {
@@ -273,10 +273,10 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
           const outstanding = `Còn: ${resetTasksSentence(missing.map((m) => m.task_key))} · chờ ${Array.from(new Set(missing.map((m) => ROLE_SHORT[m.required_role]))).join(' · ')}`;
           return locked(
             mine.length > 0 ? resetConfirmedLabel(mine) : 'CHỜ RESET HOÀN TẤT',
-            pendingResult ? 'Kết quả đang chờ NPC 2 xác minh' : outstanding,
+            pendingResult ? 'Kết quả đang chờ Nhân sự 04 xác minh' : outstanding,
           );
         }
-        return locked('ĐÃ XONG PHẦN CỦA BẠN', 'Chờ NPC 1 chốt lượt chơi');
+        return locked('ĐÃ XONG PHẦN CỦA BẠN', 'Chờ Nhân sự 03 chốt lượt chơi');
       }
       // A station that owns no part of the floor-3 checklist reads the same truth:
       // what is outstanding, and who owes it.
@@ -284,7 +284,7 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
       return locked(
         'ĐANG RESET KHU VỰC',
         rest.length === 0
-          ? 'Khu vực đã reset xong — chờ NPC 1 chốt cho đội tiếp theo'
+          ? 'Khu vực đã reset xong — chờ Nhân sự 03 chốt cho đội tiếp theo'
           : `Còn ${resetTasksSentence(rest.map((t) => t.task_key))} · chờ ${Array.from(new Set(rest.map((t) => ROLE_SHORT[t.required_role]))).join(' · ')}`,
       );
     }
@@ -304,7 +304,7 @@ export function resolvePrimary(role: Role, snap: Snapshot, nowMs: number): Prima
 function secondary(snap: Snapshot, round: Round | null, nowMs: number): string | null {
   if (!round) return null;
   if (round.floor2_bypassed_at !== null) {
-    return 'NPC 1 đã bỏ qua xác nhận tầng 2 — không cần thao tác ở tầng 2';
+    return 'Nhân sự 03 đã bỏ qua xác nhận tầng 2 — không cần thao tác ở tầng 2';
   }
   if (round.floor2_confirmed_at !== null) return 'Đội đang được hướng dẫn lên tầng 3';
   return resultOfRound(snap, nowMs) === 'IN_PROGRESS' ? 'Chờ Nhân sự 02 xác nhận đội đã đến tầng 2' : null;
@@ -866,7 +866,7 @@ export function resolveResultSummary(snap: Snapshot, nowMs: number): ResultSumma
         ...base,
         headline: 'LƯỢT CHƠI ĐÃ KẾT THÚC',
         stateWord: 'CHỜ XÁC MINH',
-        resultLabel: 'Kết quả chờ NPC 2 xác minh lần báo',
+        resultLabel: 'Kết quả chờ Nhân sự 04 xác minh lần báo',
         tone: 'amber',
       };
     case 'ABORTED':
@@ -960,8 +960,8 @@ export function resolveNextTeamReadiness(
     return {
       key: 'verify',
       title: 'CHƯA THỂ NHẬN ĐỘI MỚI',
-      detail: 'Kết quả đang chờ NPC 2 xác minh — khu vực chưa được chốt.',
-      waitingOn: ['NPC 2'],
+      detail: 'Kết quả đang chờ Nhân sự 04 xác minh — khu vực chưa được chốt.',
+      waitingOn: ['Nhân sự 04'],
       canCallTeam,
     };
   }
@@ -978,8 +978,8 @@ export function resolveNextTeamReadiness(
   return {
     key: 'finalize',
     title: 'KHU VỰC ĐÃ RESET XONG',
-    detail: 'Còn một bước: NPC 1 chốt khu vực thì Nhân sự 01 mới nhận được đội mới.',
-    waitingOn: ['NPC 1'],
+    detail: 'Còn một bước: Nhân sự 03 chốt khu vực thì Nhân sự 01 mới nhận được đội mới.',
+    waitingOn: ['Nhân sự 03'],
     canCallTeam,
   };
 }
@@ -1233,7 +1233,7 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
         position = 2;
         movement = 'at';
         where = 'CỬA VÀO · TẦNG 3';
-        notes[1] = round.floor2_bypassed_at !== null ? 'Bỏ qua xác nhận (NPC 1)' : `Đã xác nhận · ${formatWallTime(round.floor2_confirmed_at ?? 0)}`;
+        notes[1] = round.floor2_bypassed_at !== null ? 'Bỏ qua xác nhận (Nhân sự 03)' : `Đã xác nhận · ${formatWallTime(round.floor2_confirmed_at ?? 0)}`;
         notes[2] = 'Đội đang nghe phổ biến luật';
         caption = 'ĐỘI CHƠI SẮP BẮT ĐẦU';
         turn = { roles: ['GATE'], label: `BẮT ĐẦU TRÒ CHƠI — ${limitLabel}` };
@@ -1284,7 +1284,7 @@ export function resolveJourney(snap: Snapshot, nowMs: number, role: Role): Journ
             label: `XÁC NHẬN ĐÃ RESET ${resetTasksSentence(open.map((t) => t.task_key)).toUpperCase()}`,
           };
         } else {
-          caption = 'Đã setup xong · chờ NPC 1 chốt lượt chơi';
+          caption = 'Đã setup xong · chờ Nhân sự 03 chốt lượt chơi';
           turn = { roles: ['GATE'], label: 'XÁC NHẬN SẴN SÀNG' };
         }
         break;
@@ -1399,7 +1399,7 @@ export function resolveHandoff(snap: Snapshot, nowMs: number): HandoffInfo {
   if (round.floor2_bypassed_at !== null) {
     return {
       key: 'bypassed',
-      badge: 'TẦNG 2 ĐÃ BỎ QUA (NPC 1)',
+      badge: 'TẦNG 2 ĐÃ BỎ QUA (NHÂN SỰ 03)',
       tone: 'amber',
       requirement: 'Không cần thao tác ở tầng 2 — lượt bỏ qua có ghi nhật ký',
     };
@@ -1410,7 +1410,7 @@ export function resolveHandoff(snap: Snapshot, nowMs: number): HandoffInfo {
       badge: `ĐÃ XÁC NHẬN · ${formatWallTime(round.floor2_confirmed_at)}`,
       tone: 'green',
       requirement: phase === 'READY_AT_FLOOR3'
-        ? 'Đang chờ bước tiếp theo — NPC 1 bấm BẮT ĐẦU ở cửa tầng 3'
+        ? 'Đang chờ bước tiếp theo — Nhân sự 03 bấm BẮT ĐẦU ở cửa tầng 3'
         : 'Đội đã được Nhân sự 02 xác nhận tại tầng 2',
     };
   }
@@ -1428,7 +1428,7 @@ export function resolveHandoff(snap: Snapshot, nowMs: number): HandoffInfo {
     key: 'waiting-next',
     badge: 'ĐANG CHỜ BƯỚC TIẾP THEO',
     tone: 'blue',
-    requirement: 'Đồng hồ và các bước sau đều do NPC 1 kiểm soát',
+    requirement: 'Đồng hồ và các bước sau đều do Nhân sự 03 kiểm soát',
   };
 }
 
@@ -1514,13 +1514,13 @@ export function resolveAlerts(snap: Snapshot, nowMs: number, staleData: boolean)
     });
   }
   if (phase === 'READY_AT_FLOOR3') {
-    out.push({ id: 'PRESTART', tone: 'warn', text: 'ĐỘI CHƠI SẮP BẮT ĐẦU — NPC 1 chuẩn bị phổ biến luật' });
+    out.push({ id: 'PRESTART', tone: 'warn', text: 'ĐỘI CHƠI SẮP BẮT ĐẦU — Nhân sự 03 chuẩn bị phổ biến luật' });
   }
   if (round && resultOfRound(snap, nowMs) === 'PENDING_VALIDATION') {
     out.push({ id: 'PENDING', tone: 'warn', text: 'HẾT GIỜ — ĐANG CHỜ XÁC MINH MỐC HỢP LỆ' });
   }
   if (round && round.floor2_bypassed_at !== null) {
-    out.push({ id: 'BYPASS', tone: 'warn', text: 'Tầng 2 được NPC 1 bỏ qua — có ghi nhật ký' });
+    out.push({ id: 'BYPASS', tone: 'warn', text: 'Tầng 2 được Nhân sự 03 bỏ qua — có ghi nhật ký' });
   }
   if (round && round.needs_review && round.review_reasons.length > 0) {
     out.push({ id: 'REVIEW', tone: 'warn', text: `Kết quả ${teamLabel(round, snap.event.next_team_number)} chờ xét lại` });
@@ -1576,8 +1576,8 @@ const STATION_ORDER: StationRole[] = ['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305'];
 const STATION_LABEL: Record<StationRole, string> = {
   LOBBY: '01 · SẢNH',
   CORRIDOR: '02 · TẦNG 2',
-  GATE: 'NPC 1',
-  ROOM305: 'NPC 2',
+  GATE: 'Nhân sự 03',
+  ROOM305: 'Nhân sự 04',
 };
 
 /**

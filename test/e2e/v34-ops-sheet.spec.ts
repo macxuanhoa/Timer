@@ -21,8 +21,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -155,7 +155,7 @@ test.describe.serial('V3.4 §1–§5 — the operations group is the shift comma
     await expect(sup.page.getByTestId('sheet-event-state')).not.toHaveText('');
     await expect(sup.page.getByTestId('ops-stage')).not.toHaveText('');
     await expect(sup.page.getByTestId('ops-team')).toContainText(/#\d{3}/);
-    await expect(sup.page.getByTestId('ops-attention-item').first()).toContainText('NPC 2');
+    await expect(sup.page.getByTestId('ops-attention-item').first()).toContainText('NHÂN SỰ 04');
 
     await sup.page.screenshot({ path: 'shots/v34-ops-first-viewport.png' });
 
@@ -248,7 +248,7 @@ test.describe.serial('V3.4 §1–§5 — the operations group is the shift comma
 
     // §4: the layout card mirrors the server permission. ROOM305 owns the props
     // here, so NPC 2 gets the press and NPC 1 gets the reason it has none.
-    await expect(gate.page.getByTestId('ops-layout')).toContainText('NPC 2');
+    await expect(gate.page.getByTestId('ops-layout')).toContainText('04');
     await expect(gate.page.getByTestId('layout-A')).toHaveCount(0);
     await expect(gate.page.getByTestId('ops-layout-locked')).toContainText('Chỉ');
 

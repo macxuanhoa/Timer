@@ -27,8 +27,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -111,7 +111,7 @@ test.describe.serial('V3.4 §5–§7 — NPC2 verification, sealed result, NPC1 
     // 2. NPC2 records a completion report; the clock keeps running.
     await room.page.getByTestId('record-claim').click();
     await expect(room.page.getByTestId('verify-card-1')).toBeVisible();
-    await expect(room.page.getByTestId('verify-state-1')).toHaveText('ĐANG CHỜ XÁC MINH');
+    await expect(room.page.getByTestId('verify-state-1')).toHaveText('CHỜ XÁC MINH');
     await expect(room.page.getByTestId('hero-clock')).toHaveAttribute('data-mode', 'GAME');
     const claimOne = (await snapshot()).attempts?.find((a) => a.seq === 1)!;
     expect(claimOne.status).toBe('PENDING');

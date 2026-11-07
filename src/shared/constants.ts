@@ -125,13 +125,13 @@ export type HiddenObjectOwner = Extract<Role, 'GATE' | 'ROOM305'>;
 /**
  * The names the floor actually reads. §III of the brief pairs every identifier with a
  * Vietnamese display name, so "LOBBY" and "OPERATOR" stay in the wire format and never
- * appear on a phone: the crew are Nhân sự 01/02, the scare actors are NPC 1/NPC 2.
+ * appear on a phone: all four floor positions use Nhân sự 01–04.
  */
 export const ROLE_LABEL: Record<Role, string> = {
   LOBBY: 'NHÂN SỰ 01 · TẦNG 1',
   CORRIDOR: 'NHÂN SỰ 02 · TẦNG 2',
-  GATE: 'NPC 1 · CỬA TẦNG 3',
-  ROOM305: 'NPC 2 · PHÒNG 305',
+  GATE: 'NHÂN SỰ 03 · CỬA TẦNG 3',
+  ROOM305: 'NHÂN SỰ 04 · PHÒNG 305',
   SUPERVISOR: 'QUẢN TRỊ VIÊN',
   OBSERVER: 'NGƯỜI THEO DÕI',
 };
@@ -140,8 +140,8 @@ export const ROLE_LABEL: Record<Role, string> = {
 export const ROLE_SHORT: Record<Role, string> = {
   LOBBY: '01',
   CORRIDOR: '02',
-  GATE: 'NPC 1',
-  ROOM305: 'NPC 2',
+  GATE: '03',
+  ROOM305: '04',
   SUPERVISOR: 'TRỊ',
   OBSERVER: 'XEM',
 };
@@ -166,8 +166,8 @@ export const ROLE_DUTY: Record<Role, string> = {
 export const ROLE_PERSON: Record<Role, string> = {
   LOBBY: 'NHÂN SỰ 01',
   CORRIDOR: 'NHÂN SỰ 02',
-  GATE: 'NPC 1',
-  ROOM305: 'NPC 2',
+  GATE: 'NHÂN SỰ 03',
+  ROOM305: 'NHÂN SỰ 04',
   SUPERVISOR: 'QUẢN TRỊ VIÊN',
   OBSERVER: 'NGƯỜI THEO DÕI',
 };
@@ -290,8 +290,8 @@ export const SYNC_STATE_LABEL: Record<'connected' | 'current' | 'syncing' | 'rec
 
 /** Why the board cannot be released right now, in words an operator can act on. */
 export const RESET_BLOCK_LABEL: Record<ResetBlockReason, string> = {
-  RUNNING: 'Vẫn còn đội trong khu vực — NPC 1 chưa xác nhận rời tầng 3',
-  PENDING_CLAIM: 'Còn lần báo hoàn thành chờ NPC 2 xác minh',
+  RUNNING: 'Vẫn còn đội trong khu vực — Nhân sự 03 chưa xác nhận rời tầng 3',
+  PENDING_CLAIM: 'Còn lần báo hoàn thành chờ Nhân sự 04 xác minh',
   RESET_OPEN: 'Khu vực chưa xác nhận reset xong',
 };
 
@@ -334,7 +334,7 @@ export const PHASE_LABEL: Record<string, string> = {
   READY_AT_FLOOR3: 'ĐỘI CHƠI SẮP BẮT ĐẦU',
   RUNNING: 'LƯỢT CHƠI ĐANG CHẠY',
   TIME_EXPIRED_PENDING_VALIDATION: 'HẾT GIỜ — ĐANG CHỜ XÁC MINH',
-  WAITING_FOR_EXIT: 'Chờ NPC 1 xác nhận đội rời tầng 3',
+  WAITING_FOR_EXIT: 'Chờ Nhân sự 03 xác nhận đội rời tầng 3',
   EXIT_CONFIRMED: 'Đang reset khu vực',
   CLOSED: 'Sẵn sàng nhận đội tiếp theo',
   ENDED: 'Sự kiện đã kết thúc',
@@ -382,7 +382,7 @@ export const ACTION_LABEL: Record<string, string> = {
   CONFIRM_EXIT: 'Xác nhận đội đã rời tầng 3',
   EARLY_EXIT: 'Đội rời khu vực sớm',
   RESET_DONE: 'Xác nhận reset khu vực',
-  GATE_FINALIZE: 'NPC 1 chốt khu vực sẵn sàng',
+  GATE_FINALIZE: 'Nhân sự 03 chốt khu vực sẵn sàng',
   SET_LAYOUT: 'Chọn bố trí vật ẩn',
   SET_TEAM_NAME: 'Đặt tên đội',
   /* admin & event */
@@ -422,6 +422,6 @@ export const REVIEW_REASON_LABEL: Record<string, string> = {
   GAME_RESET: 'Đồng hồ lượt chơi bị reset giữa trận',
   CORRECTED: 'Đã hiệu chỉnh thủ công',
   RESET_REOPENED: 'Một bước reset đã được mở lại',
-  FLOOR2_BYPASS: 'Bỏ qua xác nhận tầng 2 (NPC 1)',
+  FLOOR2_BYPASS: 'Bỏ qua xác nhận tầng 2 (Nhân sự 03)',
   ROUND_ABORTED: 'Lượt chơi bị hủy có kiểm toán',
 };

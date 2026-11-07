@@ -39,7 +39,7 @@ import {
   type Role,
 } from '../shared/constants';
 import { roundLimitMs } from '../shared/machine';
-import { formatClockCs, formatClockSec, formatWallTime, leaderboard } from '../shared/metrics';
+import { formatClockCs, formatClockSec, formatWallTime } from '../shared/metrics';
 import type { ActionType, CommandMeta, Round, SystemPhase } from '../shared/types';
 import { DetailsSheet } from './DetailsSheet';
 import { AdminToggle } from './AdminToggle';
@@ -53,9 +53,7 @@ import { Npc1ResetStage } from './Npc1ResetStage';
 import {
   AlertIcon,
   ArrowUpIcon,
-  BarsIcon,
   CheckIcon,
-  ChevronRightIcon,
   ClockIcon,
   GearIcon,
   PencilIcon,
@@ -191,7 +189,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
   const npc2Stage = useMemo(() => (snap ? resolveNpc2Stage(snap, now) : null), [snap, now]);
   // The ranking reads persisted results only, so it is rebuilt when the snapshot
   // changes — not on every frame of the running game clock.
-  const rows = useMemo(() => (snap ? leaderboard(snap) : []), [snap]);
 
   const locked = isLockedPhase(phase) || phase === 'WAITING_FOR_EXIT';
   useWakeLock(phase !== 'ENDED' && phase !== 'PRE_EVENT');
@@ -312,7 +309,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
 
         <div className="flex shrink-0 items-start gap-1.5">
           {account.role === 'SUPERVISOR' ? <AdminToggle active onLeave={onLogout} /> : null}
-          <div className={account.role === 'SUPERVISOR' ? 'sr-only' : 'flex flex-col items-end gap-0.5'}>
+          <div className={account.role === 'SUPERVISOR' ? 'sr-only' : undefined}>
             <div className="flex h-[30px] items-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2.5">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} aria-hidden />
               <span className="text-[11px] font-bold leading-none text-snow" data-testid="role-tag">
@@ -485,7 +482,7 @@ export function Dashboard({ store, account, onLogout }: Props) {
             <>
           {/* ------------------------------------------------------- team card */}
           <section className="card tm-card" data-testid="active-team">
-            <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
               <h1 className="digital team-digits font-bold text-snow" data-testid="team-identity">
                 ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}
               </h1>
@@ -535,7 +532,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
             <PreStartAlert
               round={round}
               isNpc1={account.role === 'GATE'}
-              label={teamLabel(round, snap.event.next_team_number)}
               durationLabel={formatClockSec(roundLimitMs(round, snap.event.config.game_limit_ms))}
             />
           ) : (
@@ -592,53 +588,6 @@ export function Dashboard({ store, account, onLogout }: Props) {
         </main>
       )}
 
-      {/* ------------------------------------------------------------- footer */}
-      {!locked && (
-        <footer className="safe-bottom nav-row">
-          {account.role === 'CORRIDOR' ? (
-            /* V3.4.1: the route rail at the top of this screen is already the map
-               button, so the footer keeps the one destination nothing else
-               offers — the report — and names it in two words. */
-            <button
-              type="button"
-              onClick={() => { setSheetTab('report'); setSheetOpen(true); }}
-              className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-hair bg-panel px-2 text-[10px] font-semibold text-snow active:bg-panel2"
-              data-testid="open-details"
-            >
-              <BarsIcon className="h-3.5 w-3.5" />
-              BÁO CÁO
-              <ChevronRightIcon className="h-3 w-3 text-mute" />
-            </button>
-          ) : (
-            <>
-              {/* V3.4 §7: the footer is navigation, not a second dashboard. The
-                  record, the ranking and the round history live in the sheet's
-                  BÁO CÁO group now, so the strip names where it goes instead of
-                  saying "Xem thêm" about nothing. */}
-              {/* V3.4.1 §3: the strip used to read “LƯỢT #002 · ĐÃ CHƠI 0”. The first
-                  half is `next_team_number` — the number the team card is already
-                  printing one screen above as “ĐỘI #001”, so one phone showed two
-                  different “#00N” figures for two different things and invited the
-                  operator to read them as one. The second half counted leaderboard
-                  entries, which are closed official results, not rounds played.
-                  Both facts now say what they actually are. */}
-              <p className="r01-progress" data-testid="summary-line">
-                KẾT QUẢ ĐÃ CHỐT {rows.length}
-              </p>
-              <button
-                type="button"
-                onClick={() => { setSheetTab('ops'); setSheetOpen(true); }}
-                className="btn-quiet shrink-0"
-                data-testid="open-details"
-              >
-                <BarsIcon className="h-3.5 w-3.5" />
-                CHI TIẾT
-                <ChevronRightIcon className="h-3 w-3" />
-              </button>
-            </>
-          )}
-        </footer>
-      )}
       {/* Every screen keeps one explicit way back to the picker: a station that walks
           off duty must be able to release its seat without hunting through the sheet. */}
       <ReturnHome onLogout={onLogout} />
@@ -763,7 +712,6 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
   const canRename = received
     ? phase === 'WAITING_FLOOR2_CONFIRMATION' || phase === 'READY_AT_FLOOR3'
     : primary.action === 'CALL_TEAM';
-  const turn = journey.turn;
   const badge = syncBroken
     ? { text: 'KHÔNG ĐỌC ĐƯỢC MÁY CHỦ', tone: 'danger' as const }
     : received
@@ -828,29 +776,29 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
         data-testid="active-team"
         data-received={received ? '1' : '0'}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-start justify-between gap-2">
             <h1 className="digital team-digits font-bold text-snow" data-testid="r01-team-stage">
               ĐỘI #{pad(round?.team_number ?? snap.event.next_team_number)}
             </h1>
+            <span className="badge shrink-0" data-tone={badge.tone} data-testid="r01-team-badge">
+              {received ? <CheckIcon /> : <ClockIcon />}
+              {badge.text}
+            </span>
           </div>
-          <span className="badge" data-tone={badge.tone} data-testid="r01-team-badge">
-            {received ? <CheckIcon /> : <ClockIcon />}
-            {badge.text}
-          </span>
-          <TeamNameEditor
-            store={store}
-            role="LOBBY"
-            round={round}
-            canRename={canRename}
-            value={teamName}
-            onChange={onTeamName}
-            open={nameOpen}
-            onOpen={onNameOpen}
-            onClose={onNameClose}
-            saving={state.pending === 'SET_TEAM_NAME'}
-          />
         </div>
+        <TeamNameEditor
+          store={store}
+          role="LOBBY"
+          round={round}
+          canRename={canRename}
+          value={teamName}
+          onChange={onTeamName}
+          open={nameOpen}
+          onOpen={onNameOpen}
+          onClose={onNameClose}
+          saving={state.pending === 'SET_TEAM_NAME'}
+        />
 
         {received && <p
           className="team-status mt-2"
@@ -868,24 +816,17 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
             reception timestamp, which the route strip and the sheet's history both
             already carry. Whose hand the round is in stays, because nothing else
             on this screen says it. */}
-        {turn && !turn.mine ? (
-          <p className="r01-hand" data-testid="r01-hand" data-mine={turn.mine ? '1' : '0'}>
-            <span className="r01-hand-who" data-testid="r01-hand-who">
-              {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
-            </span>
-          </p>
+        {phase === 'READY_AT_FLOOR3' ? (
+          <PreStartAlert
+            round={round}
+            isNpc1={false}
+            durationLabel={limitLabel}
+          />
         ) : null}
       </section>
 
       {/* ------------------------------------------------- context timer */}
-      {phase === 'READY_AT_FLOOR3' ? (
-        <PreStartAlert
-          round={round}
-          isNpc1={false}
-          label={teamLabel(round, snap.event.next_team_number)}
-          durationLabel={limitLabel}
-        />
-      ) : (
+      {phase !== 'READY_AT_FLOOR3' ? (
         <section className="hero-block is-slim" data-testid="hero">
           <div className="flex w-full items-baseline justify-between gap-2">
             <p className="team-eyebrow flex items-center gap-1.5" data-testid="hero-label">
@@ -903,7 +844,7 @@ function LobbyStage({ store, snap, phase, primary, journey, teamLine, attempts, 
             <p className="hero-caption mt-1" data-testid="hero-note">{idleCaption}</p>
           ) : null}
         </section>
-      )}
+      ) : null}
 
       {/* --------------------------------------------------------- route */}
       <JourneyStepper journey={journey} onOpen={onOpenJourney} caption={false} />
@@ -1001,7 +942,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
     : handoff.key === 'incoming'
       ? 'Chỉ xác nhận khi đội đã có mặt tại tầng 2.'
       : handoff.key === 'bypassed'
-        ? 'NPC 1 đã bỏ qua tầng 2.'
+        ? 'Nhân sự 03 đã bỏ qua tầng 2.'
         : handoff.key === 'waiting-next'
           ? 'Đang chờ bước tiếp theo từ máy chủ.'
           : 'Chờ Nhân sự 01 bàn giao đội.';
@@ -1059,7 +1000,7 @@ function CorridorStage({ store, snap, primary, journey, handoff, alerts, state, 
         {turn ? (
           <p className="r01-hand mt-2" data-testid="r02-hand" data-mine={turn.mine ? '1' : '0'}>
             <span className="r01-hand-who" data-testid="r02-hand-who">
-              {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_SHORT[r]).join(' · ')}`}
+              {turn.mine ? 'ĐẾN LƯỢT BẠN' : `CHỜ ${turn.roles.map((r) => ROLE_PERSON[r]).join(' · ')}`}
             </span>
 
           </p>
@@ -1206,21 +1147,20 @@ function TeamNameEditor({ store, round, canRename, value, onChange, open, onOpen
     if (result?.ok) onClose();
   };
   return (
-    <>
+    <div className={`team-name-editor${open ? ' is-open' : ''}`} data-editing={open ? '1' : '0'}>
       <button
         type="button"
         onClick={open ? onClose : onOpen}
         disabled={!canRename}
         aria-label="Đặt tên đội"
         aria-expanded={open}
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border border-hair bg-panel2 text-mute active:text-snow disabled:opacity-40"
+        className="team-name-edit-toggle flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border border-hair bg-panel2 text-mute active:text-snow disabled:opacity-40"
         data-testid="team-edit"
       >
         <PencilIcon className="h-3.5 w-3.5" />
       </button>
       {open && canRename && (
-        <div className="mt-2 w-full">
-          <div className="flex items-center gap-2">
+        <div className="team-name-editor-form">
             <input
               value={value}
               onChange={(e) => onChange(e.target.value)}
@@ -1237,14 +1177,14 @@ function TeamNameEditor({ store, round, canRename, value, onChange, open, onOpen
               maxLength={TEAM_NAME_MAX}
               autoFocus
               disabled={saving}
-              className="h-8 min-w-0 flex-1 rounded-[8px] border border-hair bg-panel2 px-2.5 text-[12px] text-snow outline-none focus:border-blood disabled:opacity-60"
+              className="h-10 w-full min-w-0 rounded-[8px] border border-hair bg-panel2 px-2.5 text-[12px] text-snow outline-none focus:border-blood disabled:opacity-60"
               data-testid="team-name"
             />
             <button
               type="button"
               onClick={() => void save()}
               disabled={saving || (round !== null && !dirty)}
-              className="flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-blood/60 bg-blood/10 px-2.5 text-[10px] font-bold text-blood disabled:opacity-40"
+              className="flex min-h-10 shrink-0 items-center justify-center rounded-[8px] border border-blood/60 bg-blood/10 px-2 text-[10px] font-bold text-blood disabled:opacity-40"
               data-testid="team-name-save"
             >
               {saving ? 'ĐANG LƯU' : round ? 'LƯU' : 'XONG'}
@@ -1253,15 +1193,14 @@ function TeamNameEditor({ store, round, canRename, value, onChange, open, onOpen
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-hair px-2.5 text-[10px] font-semibold text-mute disabled:opacity-40"
+              className="flex min-h-10 shrink-0 items-center justify-center rounded-[8px] border border-hair px-2 text-[10px] font-semibold text-mute disabled:opacity-40"
               data-testid="team-name-cancel"
             >
               HỦY
             </button>
-          </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -1274,29 +1213,24 @@ function TeamNameEditor({ store, round, canRename, value, onChange, open, onOpen
  * run is the fact, so it sits at the top of the band as a number; everything else is
  * one line each. The space below belongs to the route and the press.
  */
-function PreStartAlert({ round, isNpc1, label, durationLabel }: { round: Round | null; isNpc1: boolean; label: string; durationLabel: string }) {
+function PreStartAlert({ round, isNpc1, durationLabel }: { round: Round | null; isNpc1: boolean; durationLabel: string }) {
   return (
-    <section className="prestart-block px-3 py-3" data-testid="prestart-alert">
+    <div className="prestart-inline" data-testid="prestart-alert">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="prestart-eyebrow">ĐỘI CHƠI SẮP BẮT ĐẦU</p>
+        <p className="prestart-eyebrow">SẮP BẮT ĐẦU</p>
         <p className="digital prestart-clock" data-testid="prestart-duration">
           {durationLabel}
         </p>
       </div>
-      <p className="digital prestart-team" data-testid="prestart-team">
-        {label.toUpperCase()}
-      </p>
       <p className="prestart-hint" data-testid="prestart-hint">
-        {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'Chờ NPC 1 phổ biến luật'}
+        {isNpc1 ? 'Kiểm tra đội có mặt, phổ biến luật và đưa gợi ý' : 'Chờ Nhân sự 03 phổ biến luật'}
       </p>
-      {/* V3.4.1: the duration already sits at the top of the band, and “chờ NPC 1 bấm
-          BẮT ĐẦU” is what the badge, the route and the disabled press all say. */}
       {round?.floor2_bypassed_at !== null && round?.floor2_bypassed_at !== undefined ? (
         <p className="prestart-hint" data-testid="prestart-bypassed">
           Tầng 2 đã được bỏ qua có ghi nhật ký
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -1336,7 +1270,7 @@ function PreStartCard({ round, isNpc1, label, durationLabel }: {
         </ul>
       ) : (
         <p className="prestart-hint mt-3" data-testid="prestart-hint">
-          Chờ NPC 1 bấm BẮT ĐẦU.
+          Chờ Nhân sự 03 bấm BẮT ĐẦU.
         </p>
       )}
       <p className="prestart-duration mt-3" data-testid="prestart-duration">
@@ -1638,7 +1572,7 @@ function CountdownScreen({ store, role, primary, countdown, attempts, npc2Stage,
           <section className="npc1-handoff" data-testid="npc1-handoff">
             <p className="npc1-handoff-eyebrow" data-testid="npc1-handoff-state">
               {countdown.result === 'WON'
-                ? 'NPC 2 ĐÃ CHỐT KẾT QUẢ — CÒN XÁC NHẬN ĐỘI RỜI TẦNG 3'
+                ? 'NHÂN SỰ 04 ĐÃ CHỐT KẾT QUẢ — CÒN XÁC NHẬN ĐỘI RỜI TẦNG 3'
                 : countdown.result === 'ABORTED'
                   ? 'LƯỢT CHƠI ĐÃ HỦY — CẦN XÁC NHẬN THỰC TẾ'
                   : 'HẾT GIỜ — CẦN XÁC NHẬN THỰC TẾ'}
@@ -1823,16 +1757,17 @@ function PrimaryZone({ store, primary, pending, verifying, draftName }: ZoneProp
   };
 
   if (primary.action === null) {
-    // Not this phone's step: the same shape as the action, visibly off, with the
-    // one-line reason the server state implies. Disabling here is courtesy — the
-    // RPC refuses the same call outright if anyone forces it.
+    // Not this phone's step: render a status, not a disabled button that looks
+    // like an action the operator should try to press.
     return (
-      <button type="button" disabled aria-disabled="true" className="waiting-status"
+      <p role="status" className="waiting-summary"
         title={primary.label} data-testid="waiting-state" data-unavailable={primary.hint ? '1' : '0'}>
         <ClockIcon className="h-4 w-4 shrink-0" />
-        <span className="sr-only">{primary.label}</span>
-        <span data-testid="waiting-reason">{primary.hint ?? primary.label}</span>
-      </button>
+        <span className="waiting-summary-copy">
+          <strong>{primary.label}</strong>
+          {primary.hint ? <span data-testid="waiting-reason">{primary.hint}</span> : null}
+        </span>
+      </p>
     );
   }
 

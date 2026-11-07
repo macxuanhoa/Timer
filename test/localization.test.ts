@@ -120,8 +120,8 @@ describe('V3.1 §IV — Vietnamese label layer', () => {
     // §3.4 handoff: LOBBY is presented as "NHÂN SỰ 01 · TẦNG 1".
     expect(ROLE_LABEL.LOBBY).toBe('NHÂN SỰ 01 · TẦNG 1');
     expect(ROLE_LABEL.CORRIDOR).toBe('NHÂN SỰ 02 · TẦNG 2');
-    expect(ROLE_LABEL.GATE).toBe('NPC 1 · CỬA TẦNG 3');
-    expect(ROLE_LABEL.ROOM305).toBe('NPC 2 · PHÒNG 305');
+    expect(ROLE_LABEL.GATE).toBe('NHÂN SỰ 03 · CỬA TẦNG 3');
+    expect(ROLE_LABEL.ROOM305).toBe('NHÂN SỰ 04 · PHÒNG 305');
     expect(ROLE_LABEL.SUPERVISOR).toBe('QUẢN TRỊ VIÊN');
     expect(ROLE_LABEL.OBSERVER).toBe('NGƯỜI THEO DÕI');
   });

@@ -40,9 +40,9 @@ for (const width of WIDTHS) {
     await expect(page.getByTestId('station-LOBBY')).toContainText('NHÂN SỰ 01');
     await expect(page.getByTestId('station-LOBBY')).toContainText('SẢNH TẦNG 1');
     await expect(page.getByTestId('station-CORRIDOR')).toContainText('NHÂN SỰ 02');
-    await expect(page.getByTestId('station-GATE')).toContainText('NPC 1');
+    await expect(page.getByTestId('station-GATE')).toContainText('NHÂN SỰ 03');
     await expect(page.getByTestId('station-GATE')).toContainText('TẦNG 3');
-    await expect(page.getByTestId('station-ROOM305')).toContainText('NPC 2');
+    await expect(page.getByTestId('station-ROOM305')).toContainText('NHÂN SỰ 04');
     await expect(page.getByTestId('station-ROOM305')).toContainText('PHÒNG 305');
     // The viewer band is separated from the duty grid and explains read-only.
     await expect(page.getByTestId('station-OBSERVER')).toContainText('Chỉ xem');
@@ -120,7 +120,7 @@ test('the board never promises a seat it has not confirmed', async ({ page }) =>
 test('screen readers get person, place and real state on every card', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: /NHÂN SỰ 01 — SẢNH TẦNG 1\. CÒN TRỐNG/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /NPC 2 — PHÒNG 305\./ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /NHÂN SỰ 04 — PHÒNG 305\./ })).toBeVisible();
   // The viewer band names its capacity class, not a raw role key.
   await expect(page.getByRole('button', { name: /Quan sát trực tiếp/ })).toBeVisible();
 });

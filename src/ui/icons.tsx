@@ -208,6 +208,26 @@ export function EyeIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
   );
 }
 
+export function VolumeOnIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M5 10h3l4-4v12l-4-4H5z" />
+      <path d="M16 9a4 4 0 0 1 0 6" />
+      <path d="M18.5 7a7 7 0 0 1 0 10" />
+    </svg>
+  );
+}
+
+export function VolumeOffIcon({ className = 'h-4 w-4', ...rest }: IconProps) {
+  return (
+    <svg {...stroke({ className, ...rest })}>
+      <path d="M5 10h3l4-4v12l-4-4H5z" />
+      <path d="M16 9l5 6" />
+      <path d="m21 9-5 6" />
+    </svg>
+  );
+}
+
 /**
  * V3.4 state glyphs. The stepper and the connection chip must read their state
  * from the SHAPE as well as the colour, so each of these is a distinct silhouette

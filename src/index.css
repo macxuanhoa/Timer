@@ -35,7 +35,17 @@
 .help-details-body { padding: 0 0 8px; }
 .help-details-body p { margin-top: 0; }
 .admin-risk-group > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
-.waiting-status { display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--color-hair); border-radius: 12px; color: var(--color-mute); font-size: .75rem; line-height: 1.4; }
+.waiting-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--color-mute);
+  font-size: var(--sc-t-label);
+  line-height: 1.4;
+}
+.waiting-summary-copy { display: grid; gap: 2px; min-width: 0; }
+.waiting-summary-copy strong { color: var(--color-snow); font-size: var(--sc-t-body); }
 [data-testid="open-settings"], [data-testid="open-seat-management"] { min-width: 44px; min-height: 44px; }
 
 .home-content {
@@ -115,49 +125,90 @@
    number is allowed to come from. */
 .home-overview {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--sc-space-2);
   padding: var(--sc-space-3);
 }
 
-.home-meters {
+.home-roster {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--sc-space-3);
+  flex: none;
+  width: 72px;
+  height: 72px;
+  place-items: center;
 }
 
-.home-meter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
+.home-roster-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
-.home-meter + .home-meter {
-  padding-left: var(--sc-space-3);
-  border-left: 1px solid var(--color-hair);
+.home-roster-ring circle {
+  fill: none;
+  stroke: var(--color-hair);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 3;
 }
 
-.home-meter-label {
-  font-size: var(--sc-t-eyebrow);
+.home-roster-point {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%) rotate(var(--point-angle)) translateY(-28px);
+  border: 2px solid var(--color-panel);
+  border-radius: 50%;
+  background: var(--color-off);
+  box-shadow: 0 0 0 1px var(--color-hair);
+}
+
+.home-roster-point[data-state='available'] {
+  background: #54c78f;
+  box-shadow: 0 0 0 1px #54c78f;
+}
+
+.home-roster-point[data-state='full'],
+.home-roster-point[data-state='self'] {
+  background: #b7b7bf;
+  box-shadow: 0 0 0 1px #777780;
+}
+
+.home-roster-point[data-state='pending'] {
+  background: var(--color-ember);
+  box-shadow: 0 0 0 1px var(--color-ember);
+}
+
+.home-roster-center {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  line-height: 1;
+}
+
+.home-roster-count {
+  font-size: 15px;
   font-weight: 800;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--color-mute);
-}
-
-.home-meter-value {
-  font-size: var(--sc-t-metric);
-  line-height: 1.1;
   color: var(--color-snow);
 }
 
-.home-overview[data-fresh='0'] .home-meter-value {
+.home-roster-label {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--color-mute);
+}
+
+.home-overview[data-fresh='0'] .home-roster-count {
   color: var(--color-off);
 }
 
 .home-overview-busy {
+  flex: 1 1 100%;
   margin: 0;
   padding: 6px var(--sc-space-2);
   border: 1px solid color-mix(in srgb, var(--color-ember) 45%, var(--color-hair));
@@ -185,6 +236,7 @@
 
 .home-stations {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sc-space-2);
 }
 
@@ -199,12 +251,13 @@
 .home-station {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--sc-space-3);
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: var(--sc-space-2);
   width: 100%;
-  min-height: 76px;
-  padding: var(--sc-space-3);
+  min-height: 112px;
+  padding: 10px;
   border: 1px solid var(--color-hair);
   border-left: 3px solid var(--color-off);
   border-radius: var(--sc-radius-card);
@@ -215,9 +268,9 @@
 }
 
 .home-station[data-state='available'] {
-  border-left-color: var(--role-accent, var(--color-ember));
+  border-left-color: #54c78f;
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--role-accent, var(--color-ember)) 9%, transparent) 0%, transparent 58%),
+    linear-gradient(90deg, rgb(84 199 143 / 0.08) 0%, transparent 58%),
     linear-gradient(180deg, #202025 0%, #1b1b20 100%);
   box-shadow: var(--sc-edge), var(--sc-lift);
   color: var(--color-snow);
@@ -279,8 +332,8 @@
 .home-station-icon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   border: 1px solid currentColor;
   border-radius: var(--sc-radius-chip);
   background: rgb(255 255 255 / 0.02);
@@ -301,7 +354,7 @@
 }
 
 .home-station-id strong {
-  font-size: var(--sc-t-strong);
+  font-size: clamp(0.64rem, 3vw, 0.75rem);
   font-weight: 900;
   letter-spacing: 0.02em;
   line-height: 1.15;
@@ -319,7 +372,7 @@
   gap: 5px;
   font-size: var(--sc-t-label);
   font-weight: 800;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--role-accent, var(--color-ember)) 72%, var(--color-snow));
 }
@@ -336,11 +389,15 @@
 }
 
 .home-station-state {
-  display: grid;
-  justify-items: end;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
   align-content: center;
-  gap: 6px;
-  text-align: right;
+  gap: 5px;
+  min-width: 0;
+  text-align: left;
 }
 
 .home-station-seat {
@@ -349,10 +406,24 @@
 }
 
 .home-station .badge {
-  max-width: 12ch;
+  max-width: 100%;
+  min-height: 24px;
+  padding-inline: 7px;
+  font-size: 8px;
   white-space: normal;
   justify-content: center;
   text-align: center;
+}
+
+.home-badge-plus {
+  display: inline-grid;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
 }
 
 /* ------------------------------------------------------------ viewer seat */
@@ -544,8 +615,9 @@
    glyph tile and the gaps step down one token so nothing clips. */
 @media (max-width: 359px) {
   .home-shell { padding-inline: var(--sc-space-3); }
-  .home-station { gap: var(--sc-space-2); padding: var(--sc-space-2); }
-  .home-station-icon { width: 38px; height: 38px; }
+  .home-stations { gap: 7px; }
+  .home-station { gap: 7px; min-height: 108px; padding: 8px; }
+  .home-station-icon { width: 30px; height: 30px; }
   .home-observer-card { gap: var(--sc-space-2); padding: var(--sc-space-2); }
   .home-station .badge,
   .home-observer-state .badge { max-width: 10ch; }
@@ -575,7 +647,7 @@
     gap: var(--sc-space-3);
   }
 
-  .home-station { min-height: 92px; padding: var(--sc-space-4); }
+  .home-station { min-height: 112px; padding: var(--sc-space-3); }
 }
 
 /* ==========================================================================
@@ -895,6 +967,16 @@
 .badge[data-tone='danger'] { color: var(--color-blood); background: rgb(211 58 47 / 0.12); }
 .badge[data-tone='queued'] { color: var(--color-mute); background: rgb(143 138 146 / 0.1); border-style: dashed; }
 .badge[data-tone='idle'] { color: var(--color-off); background: transparent; }
+.badge[data-tone='available'] {
+  color: #70dfa8;
+  border-color: #3a9468;
+  background: rgb(44 132 89 / 0.2);
+}
+.badge[data-tone='full'] {
+  color: #c2c2c9;
+  border-color: #66666f;
+  background: rgb(143 138 146 / 0.16);
+}
 
 /* ------------------------------------------------------------- team card */
 
@@ -964,6 +1046,27 @@
   line-height: 1.25;
   color: var(--color-mute);
   overflow-wrap: anywhere;
+}
+
+.team-name-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--sc-space-2);
+}
+
+.team-name-editor:not(.is-open) {
+  justify-content: flex-end;
+}
+
+.team-name-editor-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
 }
 
 .team-status {
@@ -1408,8 +1511,8 @@
   position: absolute;
   z-index: 0;
   top: 14px;
-  left: 10%;
-  right: 10%;
+  left: calc(10% + 15px);
+  right: calc(10% + 15px);
   height: 2px;
   background: var(--color-hair);
   border-radius: 999px;
@@ -1441,6 +1544,8 @@
 
   .stepper-rail {
     top: 13px;
+    left: calc(10% + 14px);
+    right: calc(10% + 14px);
   }
 
   .cta {
@@ -2024,6 +2129,15 @@
   box-shadow: var(--sc-edge), var(--sc-glow-amber);
 }
 
+.prestart-inline {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin-top: var(--sc-space-2);
+  padding-top: var(--sc-space-2);
+  border-top: 1px solid color-mix(in srgb, var(--color-amber) 35%, var(--color-hair));
+}
+
 /* The breathing is an opacity fade on its own layer, not an animated box-shadow:
    the compositor can do opacity without repainting, and the clock beside it keeps
    its frames. Reduced-motion users get the steady, equally lit band instead. */
@@ -2240,6 +2354,7 @@
   align-items: center;
   justify-content: center;
   min-height: 44px;
+  gap: 6px;
   padding: 0 var(--sc-space-4);
   border: 1px solid var(--color-hair);
   border-radius: var(--sc-radius-chip);
@@ -2249,6 +2364,12 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.wall-util-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
 }
 
 .wall-util-btn:active {
@@ -2390,24 +2511,6 @@
 }
 
 /* ================================================================ V3.4 layer */
-
-/* --------------------------------------------------------- secondary nav row */
-
-/* One quiet band under the action: the destinations that used to hide behind
-   "Xem thêm", now named for what they open. Nothing here competes with the
-   primary control — no fill, half the type, and a hairline above. */
-.nav-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sc-space-2);
-  padding: var(--sc-space-2) var(--sc-space-3);
-  border-top: 1px solid var(--color-hair);
-}
-
-.nav-row .btn-quiet {
-  flex: 1 1 0;
-  min-width: 0;
-}
 
 /* A nav row entry that must never look like the action keeps a transparent fill
    and a dashed-free hairline; only the icon and the words carry it. */
@@ -2567,9 +2670,6 @@
     margin-inline: var(--sc-space-5);
   }
 
-  .nav-row {
-    padding-inline: var(--sc-space-5);
-  }
 }
 
 /* --------------------------------------------------------- accessibility */

@@ -18,8 +18,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -150,7 +150,12 @@ test.describe.serial('V3.4 NPC1 — three screens, one countdown contract', () =
     // Utility band: the four legitimate controls, none of them a clock control.
     await expect(gate.page.getByTestId('big-focus')).toHaveText('CHỮ SỐ TO');
     await expect(gate.page.getByTestId('big-full')).toHaveText('TOÀN MÀN HÌNH');
-    await expect(gate.page.getByTestId('big-mute')).toHaveText('TẮT TIẾNG');
+    const mute = gate.page.getByTestId('big-mute');
+    await expect(mute).toHaveAccessibleName('Tắt âm thanh');
+    await expect(mute).toHaveAttribute('data-active', '0');
+    await mute.click();
+    await expect(mute).toHaveAccessibleName('Bật âm thanh');
+    await expect(mute).toHaveAttribute('data-active', '1');
     await expect(gate.page.getByTestId('big-close')).toHaveText('ĐÓNG');
     await expect(gate.page.getByTestId('big-pause')).toHaveCount(0);
     await expect(gate.page.getByTestId('big-reset')).toHaveCount(0);

@@ -21,8 +21,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor' | 'observe
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
   observer: 'XEM',
 };

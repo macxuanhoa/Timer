@@ -4,7 +4,7 @@ import { USING_SUPABASE } from '../client/gateway';
 // Types only here: the Supabase client stays out of the local-backend bundle,
 // exactly as DetailsSheet keeps release_station behind a dynamic import.
 import type { SeatReport, StationAdminResult } from '../client/supabaseAuth';
-import { ACTION_LABEL, ROLE_LABEL, ROLE_SHORT, type Role } from '../shared/constants';
+import { ACTION_LABEL, ROLE_LABEL, ROLE_PERSON, type Role } from '../shared/constants';
 import { formatWallTime } from '../shared/metrics';
 
 /**
@@ -101,7 +101,7 @@ export function SeatManagement({ store, now }: Props) {
       const { releaseStation, releaseErrorMessage } = await import('../client/supabaseAuth');
       const done = await releaseStation(target);
       setResult(done.ok
-        ? `ĐÃ GIẢI PHÓNG ${ROLE_SHORT[target]} — ${done.freed ?? 0} thiết bị, các máy khác vẫn trực bình thường`
+        ? `ĐÃ GIẢI PHÓNG ${ROLE_PERSON[target]} — ${done.freed ?? 0} thiết bị, các máy khác vẫn trực bình thường`
         : releaseErrorMessage(done));
       // The picker has to say CÒN TRỐNG now, not on the next heartbeat.
       window.setTimeout(() => void store.refresh(), 250);
@@ -241,10 +241,10 @@ export function SeatManagement({ store, now }: Props) {
                     : knowsFloor && !canRelease
                       ? 'KHÔNG ĐƯỢC — ĐANG CÓ LƯỢT'
                       : isArmed
-                        ? `XÁC NHẬN GIẢI PHÓNG ${ROLE_SHORT[seat.role]}`
+                        ? `XÁC NHẬN GIẢI PHÓNG ${ROLE_PERSON[seat.role]}`
                         : held
-                          ? `GIẢI PHÓNG ${ROLE_SHORT[seat.role]}`
-                          : `KIỂM TRA ${ROLE_SHORT[seat.role]}`}
+                          ? `GIẢI PHÓNG ${ROLE_PERSON[seat.role]}`
+                          : `KIỂM TRA ${ROLE_PERSON[seat.role]}`}
                 </button>
               )}
             </li>

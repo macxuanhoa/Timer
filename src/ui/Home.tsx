@@ -15,7 +15,7 @@ import { selectStation, type StoredSession } from './session';
 import { AdminToggle } from './AdminToggle';
 import { ACCENT_HEX, ROLE_ACCENT } from './accents';
 import {
-  DoorIcon, EyeIcon, PinIcon, RoomIcon, StairsIcon, UsersIcon,
+  CheckIcon, DoorIcon, EyeIcon, PinIcon, RoomIcon, StairsIcon, UsersIcon,
 } from './icons';
 
 /** Operator seats are the ones a shift can fill up; viewing has its own capacity. */
@@ -216,11 +216,27 @@ export function Home({ onEnter, canSelect = true, error }: {
         </header>
 
         <section className="home-overview card" aria-label="Tổng quan bảng vị trí" data-testid="home-overview" data-fresh={fresh ? '1' : '0'}>
-          <div className="home-meters">
-            <div className="home-meter">
-              <span className="home-meter-label">Đang trực</span>
-              <span className="home-meter-value digital" data-testid="station-count">{dutyDevices === null ? '—/4' : `${dutyDevices}/4`}</span>
-            </div>
+          <div
+            className="home-roster"
+            role="img"
+            aria-label={`Phân công bốn vị trí: ${STATION_ROLES.map(role => {
+              const state = seatState(role, 1);
+              return `${ROLE_PERSON[role]} ${SEAT_WORD[state].toLowerCase()}`;
+            }).join(', ')}.`}
+          >
+            <svg className="home-roster-ring" viewBox="0 0 72 72" aria-hidden>
+              <circle cx="36" cy="36" r="28" />
+            </svg>
+            <span className="home-roster-point" data-state={seatState('LOBBY', 1)} style={{ '--point-angle': '0deg' } as CSSProperties} aria-hidden />
+            <span className="home-roster-point" data-state={seatState('CORRIDOR', 1)} style={{ '--point-angle': '90deg' } as CSSProperties} aria-hidden />
+            <span className="home-roster-point" data-state={seatState('GATE', 1)} style={{ '--point-angle': '180deg' } as CSSProperties} aria-hidden />
+            <span className="home-roster-point" data-state={seatState('ROOM305', 1)} style={{ '--point-angle': '270deg' } as CSSProperties} aria-hidden />
+            <span className="home-roster-center">
+              <span className="home-roster-count digital" data-testid="station-count">
+                {dutyDevices === null ? '—/4' : `${dutyDevices}/4`}
+              </span>
+              <span className="home-roster-label">VỊ TRÍ</span>
+            </span>
           </div>
           {floorBusy ? (
             <p className="home-overview-busy" data-testid="home-floor-busy">
@@ -257,8 +273,12 @@ export function Home({ onEnter, canSelect = true, error }: {
                       </span>
                     ) : null}
                     <span className="badge" data-tone={
-                      state === 'available' ? 'live' : state === 'self' ? 'confirmed' : state === 'full' ? 'idle' : state === 'pending' ? 'live' : 'queued'
-                    }>{SEAT_WORD[state]}</span>
+                      state === 'available' ? 'available' : state === 'self' ? 'confirmed' : state === 'full' ? 'full' : state === 'pending' ? 'live' : 'queued'
+                    }>
+                      {state === 'available' ? <span className="home-badge-plus" aria-hidden>+</span> : null}
+                      {state === 'full' ? <CheckIcon /> : null}
+                      {SEAT_WORD[state]}
+                    </span>
                   </span>
                 </button>
               );
@@ -290,8 +310,12 @@ export function Home({ onEnter, canSelect = true, error }: {
                       this device already holds. The viewer card used to paint
                       "CÒN TRỐNG" in the confirmed tone, which reads as done. */}
                   <span className="badge" data-tone={
-                    state === 'available' ? 'live' : state === 'self' ? 'confirmed' : state === 'pending' ? 'live' : state === 'full' ? 'idle' : 'queued'
-                  }>{state === 'full' ? `ĐÃ ĐỦ ${OBSERVER_CAPACITY} CHỖ` : SEAT_WORD[state]}</span>
+                    state === 'available' ? 'available' : state === 'self' ? 'confirmed' : state === 'pending' ? 'live' : state === 'full' ? 'full' : 'queued'
+                  }>
+                    {state === 'available' ? <span className="home-badge-plus" aria-hidden>+</span> : null}
+                    {state === 'full' ? <CheckIcon /> : null}
+                    {state === 'full' ? `ĐÃ ĐỦ ${OBSERVER_CAPACITY} CHỖ` : SEAT_WORD[state]}
+                  </span>
                 </span>
               </button>
             );

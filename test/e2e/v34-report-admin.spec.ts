@@ -119,7 +119,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await expect(sup.getByTestId('dashboard')).toBeVisible();
     await expect(sup.getByTestId('role-tag')).toHaveText('TRỊ');
 
-    await sup.getByTestId('open-details').click({ timeout: 15_000 });
+    await sup.getByTestId('open-settings').click({ timeout: 15_000 });
     await sup.getByTestId('sheet-tab-report').click({ timeout: 15_000 });
 
     // 1 — the summary is the first block, and it counts rounds the way the
@@ -130,11 +130,11 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await expect(summary).toContainText('Đội có kết quả chính thức');
     // V3.4.1: the withheld-decision count is stated once, in the performance block
     // that explains which population it measures.
-    await expect(sup.getByTestId('performance')).toContainText('Vòng đang chờ Quản trị viên quyết');
+    await expect(sup.getByTestId('performance')).toContainText('Vòng chờ quyết định');
 
     // 2 — the best official result is the stored instant, with its eligibility
     // rule stated next to it.
-    await expect(sup.getByTestId('report-best')).toContainText('Chỉ tính đội được NPC 2 chốt');
+    await expect(sup.getByTestId('report-best')).toContainText('Chỉ tính đội được Nhân sự 04 chốt');
     await expect(sup.getByTestId('report-best-team')).toContainText('#001');
 
     // 3 — the disqualified team never enters the ranking.
@@ -191,7 +191,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     // A third row is read as well, so the index arithmetic above cannot pass by
     // coincidence the way it did when the two populations shared a value.
     expect(await readKpi('Đội đã xử lý')).toMatch(/^\d+$/);
-    expect(await readKpi('Vòng đang chờ Quản trị viên quyết')).toBe('1');
+    expect(await readKpi('Vòng chờ quyết định')).toBe('1');
     expect(await readKpi('Điểm chờ xét')).toBe('0');
     expect(await readKpi('Lượt bị hủy')).toBe('1');
 
@@ -199,7 +199,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await sup.getByTestId('audit-filter-role').selectOption('ROOM305');
     await expect(sup.getByTestId('audit-count')).toContainText('khớp bộ lọc');
     const actorLines = await sup.getByTestId('history').locator('li p').nth(1).innerText();
-    expect(actorLines).toContain('NPC 2');
+    expect(actorLines).toContain('04');
     await sup.getByTestId('audit-filter-role').selectOption('');
 
     // 7 — diagnostics behind one deliberate open; 8 — the export is still the
@@ -260,6 +260,8 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     await expect(sup.getByTestId('review-round')).toContainText('không có điểm chính thức');
     await sup.screenshot({ path: 'shots/v34-admin-hierarchy.png', fullPage: true });
 
+    await sup.getByTestId('admin-group-risk').locator('summary').click();
+    await expect(sup.getByTestId('review-round')).toBeVisible();
     await sup.getByTestId('review-round').selectOption(cancelled.id);
     await sup.getByTestId('review-reason').fill('Đã làm việc với đội trưởng, giữ nguyên quyết định hủy');
     await sup.getByTestId('review-reject').click();
@@ -278,7 +280,7 @@ test.describe.serial('V3.4 §9 — admin hierarchy, report semantics, audit filt
     const gate = await gateContext.newPage();
     await gate.goto('/?station=gate');
     await expect(gate.getByTestId('dashboard')).toBeVisible();
-    await gate.getByTestId('open-details').click({ timeout: 15_000 });
+    await gate.getByTestId('open-settings').click({ timeout: 15_000 });
     await expect(gate.getByTestId('sheet-tab-admin')).toHaveCount(0);
     await expect(gate.getByTestId('sheet-tab-report')).toBeVisible();
     await gateContext.close();

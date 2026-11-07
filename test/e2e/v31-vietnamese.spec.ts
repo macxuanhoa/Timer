@@ -19,8 +19,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor' | 'observe
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
   observer: 'XEM',
 };
@@ -41,7 +41,7 @@ const RAW_TOKENS = [
   'LOBBY_CALL', 'CORRIDOR_ACTIVE',
   // The four internal role identifiers. Handoff §IV keeps them in the wire format
   // but demands the display layer never spell them: the operator surface must read
-  // "NHÂN SỰ 01 · TẦNG 1", "NPC 2 · PHÒNG 305" etc. instead of "LOBBY", "ROOM305".
+  // "NHÂN SỰ 01 · TẦNG 1", "NHÂN SỰ 04 · PHÒNG 305" etc. instead of raw role keys.
   // Only ever checking the visible text and aria-label/title, not `data-*`
   // attributes (which Playwright selectors rely on and never reach the eye).
   'LOBBY', 'CORRIDOR', 'ROOM305', 'SUPERVISOR', 'OBSERVER',
@@ -124,7 +124,7 @@ async function freshSession(sup: { page: Page; context: BrowserContext }, pages:
 
 /** Supervisor stores a new round duration via the details sheet. */
 async function configureDuration(sup: Page, minutes: string, seconds: string) {
-  await sup.getByTestId('open-details').click();
+  await sup.getByTestId('open-settings').click();
   await sup.getByTestId('sheet-tab-admin').click();
   await sup.getByTestId('cfg-duration-min').fill(minutes);
   await sup.getByTestId('cfg-duration-sec').fill(seconds);
@@ -243,7 +243,7 @@ test.describe.serial('V3.1 §IV + §7 — Vietnamese rendered DOM & configurable
 
     // Supervisor admin sheet: every label the operator may open must be Vietnamese,
     // including the correction form and the release panel. V3.2 IA: scan each tab.
-    await sup.page.getByTestId('open-details').click();
+    await sup.page.getByTestId('open-settings').click();
     for (const tab of ['sheet-tab-ops', 'sheet-tab-report', 'sheet-tab-admin']) {
       await sup.page.getByTestId(tab).click();
       await expectVietnamese(sup.page, `SUPERVISOR sheet ${tab}`);

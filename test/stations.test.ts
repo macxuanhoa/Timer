@@ -92,6 +92,6 @@ describe('station relay — exactly one leg lit at a time', () => {
     const hub = new TestHub();
     const strip = resolveStations(hub.snapshot(), hub.now());
     expect(strip.map((s) => s.role)).toEqual(['LOBBY', 'CORRIDOR', 'GATE', 'ROOM305']);
-    expect(strip.map((s) => s.label)).toEqual(['01 · SẢNH', '02 · TẦNG 2', 'NPC 1', 'NPC 2']);
+    expect(strip.map((s) => s.label)).toEqual(['01 · SẢNH', '02 · TẦNG 2', 'Nhân sự 03', 'Nhân sự 04']);
   });
 });

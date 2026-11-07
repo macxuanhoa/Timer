@@ -257,9 +257,9 @@ test('ten viewers fit, the eleventh is refused, and a seat survives a refresh',a
 
 test('refresh, new PWA tab and legacy deep link restore exactly one binding; revocation returns Home',async({browser})=>{
   const a=await phone(browser); await claim(a,'GATE');
-  await a.page.reload(); await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
+  await a.page.reload(); await expect(a.page.getByTestId('role-tag')).toHaveText('03');
   const second=await a.context.newPage(); await second.goto('/i/'+ 'x'.repeat(43));
-  await expect(second.getByTestId('role-tag')).toHaveText('NPC 1'); await expect(second).toHaveURL('http://127.0.0.1:5177/');
+  await expect(second.getByTestId('role-tag')).toHaveText('03'); await expect(second).toHaveURL('http://127.0.0.1:5177/');
   const board=await rpc(null,'station_board'); expect(board.devices).toBe(1);
   expect((await rpc(a.uid(),'claim_station',{p_role:'CORRIDOR'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
   await pool.query('update sc.operators set revoked_at=now() where user_id=$1',[a.uid()]);
@@ -304,7 +304,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
   expect((await act(gate.uid(),'START_GAME')).ok).toBe(true);
   expect((await rpc(lobby.uid(),'reset_all_stations',{p_force:false})).code).toBe('RESET_NOT_AUTHORIZED');
   expect((await rpc(sup.uid(),'reset_all_stations',{p_force:false})).code).toBe('RESET_GAME_RUNNING');
-  await expect(picker.page.getByTestId('home-floor-busy')).toContainText('NPC 1 chưa xác nhận rời tầng 3');
+  await expect(picker.page.getByTestId('home-floor-busy')).toContainText('Nhân sự 03 chưa xác nhận rời tầng 3');
   // The release is no longer a control on the picker at all.
   await expect(picker.page.getByTestId('home-reset-open')).toHaveCount(0);
   expect((await rpc(lobby.uid(),'whoami'))?.role).toBe('LOBBY');
@@ -322,7 +322,7 @@ test('supervisor releases the board; a stranger or a live floor keeps every seat
 
   // The control lives in the admin sheet of a supervisor phone: two deliberate
   // taps, an armed warning between them, and an emergency path kept one click away.
-  await sup.page.getByTestId('open-details').click();
+  await sup.page.getByTestId('open-settings').click();
   await sup.page.getByTestId('sheet-tab-admin').click();
   await expect(sup.page.getByTestId('release-panel')).toBeVisible();
   await sup.page.screenshot({path:'shots/admin-release-peek.png'});
@@ -402,12 +402,12 @@ test('seats bind with one tap; only the admin seat is gated, and the allow-list 
   await expect(a.page.locator('input')).toHaveCount(0);
   await a.page.getByTestId('station-GATE').click();
   await expect(a.page.getByTestId('dashboard')).toBeVisible();
-  await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
+  await expect(a.page.getByTestId('role-tag')).toHaveText('03');
   // The same identity cannot hold a second position.
   expect((await rpc(a.uid(),'claim_station',{p_role:'LOBBY'})).code).toBe('ALREADY_BOUND_OTHER_ROLE');
   // A refresh does not challenge again: the binding is what authorises.
   await a.page.reload();
-  await expect(a.page.getByTestId('role-tag')).toHaveText('NPC 1');
+  await expect(a.page.getByTestId('role-tag')).toHaveText('03');
   // NOTE on the picker's `self` state: it is the card's answer when this device
   // holds the seat but its dashboard could not boot. It is deliberately NOT
   // asserted here, because the hosted app re-verifies the session every five

@@ -602,7 +602,7 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
               <Row k="Nhận đội" v={r.called_at ? formatWallTime(r.called_at) : '—'} />
               <Row
                 k="Tầng 2"
-                v={r.floor2_confirmed_at ? formatWallTime(r.floor2_confirmed_at) : r.floor2_bypassed_at ? 'BỎ QUA (NPC 1)' : '—'}
+                v=                {r.floor2_confirmed_at ? formatWallTime(r.floor2_confirmed_at) : r.floor2_bypassed_at ? 'BỎ QUA (NHÂN SỰ 03)' : '—'}
                 tone={r.floor2_bypassed_at !== null ? 'text-ember' : 'text-snow'}
               />
               <Row k="Bắt đầu lượt chơi" v={r.game_started_at ? formatWallTime(r.game_started_at) : '—'} />
@@ -625,7 +625,7 @@ function RoundDetails({ snap, now }: { snap: NonNullable<ReturnType<LiveStore['g
                 <Row k="Lý do ghi nhận" v={String(r.abort_reason ?? r.exit_reason)} tone="text-blood" />
               ) : null}
               <Row k="Reset tổng" v={formatSeconds(m.reset_total_ms)} tone={isSlowReset(m.reset_total_ms, snap.event.config.reset_target_ms) ? 'text-ember' : 'text-snow'} />
-              <Row k="NPC 1 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
+              <Row k="Nhân sự 03 chốt khu vực" v={formatSeconds(m.gate_clear_ms)} />
               {/* V3.4.1: the official score and the outcome word are the round card's
                   own headline, visible without opening it. Repeating them as rows
                   inside the body was the same two facts twice per team, and eleven
@@ -970,7 +970,7 @@ function ReportTab({ store, snap, now, rows, stats }: {
               ĐỘI #{pad(best.team_number)}{best.team_name ? ` · ${best.team_name}` : ''}
             </p>
             <p className="report-best-rule">
-              Chỉ tính đội được NPC 2 chốt trong thời lượng lượt chơi.
+              Chỉ tính đội được Nhân sự 04 chốt trong thời lượng lượt chơi.
             </p>
           </div>
         )}
@@ -1214,7 +1214,7 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
           </div>
         ) : !started ? (
           <p className="rounded-panel border border-hair bg-ink px-3 py-3 text-[0.7rem] leading-snug text-mute" data-testid="admin-start-hint">
-            Chờ Nhân sự 01 nhận đội, NPC 1 bắt đầu lượt.
+            Chờ Nhân sự 01 nhận đội, Nhân sự 03 bắt đầu lượt.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -1293,8 +1293,8 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
         <label className="text-[0.68rem] text-mute">
           Người đặt lại vật ẩn
           <select value={owner} onChange={(e) => setOwner(e.target.value as Role & typeof owner)} className="mt-1 w-full rounded border border-hair bg-ink px-2 py-2 text-[0.75rem] text-snow" data-testid="cfg-owner">
-            <option value="ROOM305">NPC 2 · PHÒNG 305</option>
-            <option value="GATE">NPC 1 · CỬA VÀO</option>
+            <option value="ROOM305">NHÂN SỰ 04 · PHÒNG 305</option>
+            <option value="GATE">NHÂN SỰ 03 · CỬA VÀO</option>
           </select>
         </label>
         <button
@@ -1363,8 +1363,8 @@ function Management({ store, snap }: { store: LiveStore; snap: NonNullable<Retur
             <p className="text-[0.66rem] leading-snug text-mute" data-testid="admin-abort-note">
               {abortKind === 'misconduct'
                 ? 'Hủy vì kỷ luật: loại kết quả, kể cả lần báo đã ghi trước hạn — chỉ Quản trị viên xét lại mới mở lại được.'
-                : 'Hủy vì sự cố hoặc an toàn: lần báo đã ghi trước hạn vẫn còn nguyên và NPC 2 có thể xác minh.'}
-              {' '}Hủy lượt không thay thế xác nhận rời khu vực: NPC 1 vẫn phải bấm XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3.
+                : 'Hủy vì sự cố hoặc an toàn: lần báo đã ghi trước hạn vẫn còn nguyên và Nhân sự 04 có thể xác minh.'}
+              {' '}Hủy lượt không thay thế xác nhận rời khu vực: Nhân sự 03 vẫn phải bấm XÁC NHẬN ĐỘI ĐÃ RỜI TẦNG 3.
             </p>
             <button
               type="button"

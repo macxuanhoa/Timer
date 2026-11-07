@@ -29,8 +29,8 @@ type Phone = 'lobby' | 'corridor' | 'gate' | 'room305' | 'supervisor';
 const ROLE_TAG: Record<Phone, string> = {
   lobby: '01',
   corridor: '02',
-  gate: 'NPC 1',
-  room305: 'NPC 2',
+  gate: '03',
+  room305: '04',
   supervisor: 'TRỊ',
 };
 
@@ -139,7 +139,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     expect((await snapshot()).active_round?.floor2_confirmed_by_role).toBe('CORRIDOR');
     await expect(corridor.page.getByTestId('r02-handoff-summary')).toBeVisible();
     await expect(corridor.page.getByTestId('r02-confirmed')).toHaveText('ĐÃ XÁC NHẬN ĐỘI ĐẾN TẦNG 2');
-    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NPC 1');
+    await expect(corridor.page.getByTestId('r02-hand-who')).toHaveText('CHỜ NHÂN SỰ 03');
     await expect(corridor.page.getByTestId('r02-confirmed-at')).toContainText('Máy chủ ghi nhận lúc');
     // The arrival CTA is gone, not greyed: there is nothing left to press here.
     await expect(corridor.page.getByTestId('primary-action')).toHaveCount(0);
@@ -220,7 +220,7 @@ test.describe.serial('V3.4 §2 — NHÂN SỰ 02 handoff, confirmation and the r
     await room.page.getByTestId('primary-action').click();
     await expect(gate.page.getByTestId('primary-action')).toHaveText('XÁC NHẬN SẴN SÀNG', { timeout: 20_000 });
     await gate.page.getByTestId('primary-action').click();
-    await sup.page.getByTestId('open-details').click();
+    await sup.page.getByTestId('open-settings').click();
     await sup.page.getByTestId('sheet-tab-admin').click();
     await sup.page.getByTestId('close-reason').fill('Kết ca');
     await sup.page.getByTestId('admin-end').click();

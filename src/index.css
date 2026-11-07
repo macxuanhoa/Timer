@@ -128,7 +128,14 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sc-space-2);
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
   padding: var(--sc-space-3);
+}
+
+.home-overview[data-busy='1'] {
+  width: 100%;
 }
 
 .home-roster {

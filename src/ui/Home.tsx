@@ -215,7 +215,7 @@ export function Home({ onEnter, canSelect = true, error }: {
           </div>
         </header>
 
-        <section className="home-overview card" aria-label="Tổng quan bảng vị trí" data-testid="home-overview" data-fresh={fresh ? '1' : '0'}>
+        <section className="home-overview card" aria-label="Tổng quan bảng vị trí" data-testid="home-overview" data-fresh={fresh ? '1' : '0'} data-busy={floorBusy ? '1' : '0'}>
           <div
             className="home-roster"
             role="img"

@@ -25,6 +25,8 @@ for (const width of WIDTHS) {
   test(`picker renders the full board with no overflow at ${width}px`, async ({ page }) => {
     await openPicker(page, width);
     await expect(page.getByTestId('home-overview')).toBeVisible();
+    const overviewWidth = await page.getByTestId('home-overview').evaluate(el => el.getBoundingClientRect().width);
+    expect(overviewWidth, `overview width at ${width}px`).toBeLessThanOrEqual(128);
     await expect(page.locator('.home-station')).toHaveCount(4);
     await expect(page.locator('.home-observer-card')).toHaveCount(1);
     // The redesign removed the repeated numbering and the decorative arrows:
@@ -56,6 +58,8 @@ for (const width of WIDTHS) {
 
 test('desktop uses a purposeful two-column board, not stretched mobile cards', async ({ page }) => {
   await openPicker(page, 1280, 800);
+  const overviewWidth = await page.getByTestId('home-overview').evaluate(el => el.getBoundingClientRect().width);
+  expect(overviewWidth, 'desktop overview stays content-sized').toBeLessThanOrEqual(128);
   const columns = await page.locator('.home-stations')
     .evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length);
   expect(columns, 'duty grid columns').toBe(2);
